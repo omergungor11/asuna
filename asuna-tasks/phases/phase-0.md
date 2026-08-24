@@ -16,7 +16,7 @@
 
 ## ASU-001: Repo Iskeleti + pnpm Workspace
 
-**Scope**: devops | **Boyut**: S | **Durum**: PENDING | **Bagimlilik**: -
+**Scope**: devops | **Boyut**: S | **Durum**: COMPLETED (2026-08-24, commit 1da15fa) | **Bagimlilik**: -
 
 ### Aciklama
 Greenfield repo iskeleti. PROJECT.md Bolum 22'deki onerilen yapiyi baz al, ama Phase 0'da sadece
@@ -36,7 +36,7 @@ gercekten kullanilacak dizinleri ac — bos klasor agaci acma.
 
 ## ASU-002: Tauri 2 + React + TS + Vite Scaffold
 
-**Scope**: devops | **Boyut**: L | **Durum**: PENDING | **Bagimlilik**: ASU-001
+**Scope**: devops | **Boyut**: L | **Durum**: COMPLETED (2026-08-24, commit 257eb22) | **Bagimlilik**: ASU-001
 
 ### Aciklama
 Tauri 2 desktop kabugunu React + TypeScript + Vite frontend ile ayaga kaldir. Bu task'ta **hicbir
@@ -58,7 +58,7 @@ Ihtiyac dogdukca izin ac, bastan hepsini acma.
 
 ## ASU-003: TypeScript Strict + ESLint + Prettier
 
-**Scope**: devops | **Boyut**: S | **Durum**: PENDING | **Bagimlilik**: ASU-002
+**Scope**: devops | **Boyut**: S | **Durum**: COMPLETED (2026-08-24, commit ccf176f) | **Bagimlilik**: ASU-002
 
 ### Acceptance Criteria
 - [ ] `tsconfig.json` strict mode acik (`strict`, `noUncheckedIndexedAccess`, `noImplicitOverride`)
