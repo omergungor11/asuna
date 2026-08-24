@@ -32,8 +32,8 @@ export default defineConfig({
     target: 'safari16',
   },
 
-  // GUVENLIK: burada `define` ile hicbir secret gomulmez. `OPENAI_API_KEY` ve
-  // `PICOVOICE_ACCESS_KEY` yalnizca Tauri Rust tarafinda okunur; renderer bundle'ina
+  // GUVENLIK: burada `define` ile hicbir secret gomulmez. `OPENAI_API_KEY`
+  // yalnizca Tauri Rust tarafinda okunur; renderer bundle'ina
   // hicbir kosulda girmez (PROJECT.md Bolum 19, ASU-009).
   envPrefix: ['VITE_'],
 
