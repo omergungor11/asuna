@@ -58,23 +58,42 @@ sadece DB acilir, migration calisir, saglik kontrolu yapilir.
 
 ## ASU-030: `memories` + `sessions` Schema
 
-**Scope**: db | **Boyut**: M | **Durum**: PENDING | **Bagimlilik**: ASU-029
+**Scope**: db | **Boyut**: M | **Durum**: DONE (2026-08-25) | **Bagimlilik**: ASU-029
 
 ### Aciklama
 PROJECT.md Bolum 12.2'deki iki tablo. `projects`, `tasks`, `tool_events` sonraki phase'lerde.
 
 ### Acceptance Criteria
-- [ ] `memories`: id, kind, title, content, summary, project_id (nullable), importance, confidence,
+- [x] `memories`: id, kind, title, content, summary, project_id (nullable), importance, confidence,
       source_session_id (nullable), created_at, updated_at, last_accessed_at, expires_at (nullable),
       is_archived, embedding (nullable, simdilik kullanilmiyor), metadata_json
-- [ ] `sessions`: id, started_at, ended_at, project_id (nullable), summary, transcript_path (nullable),
+      — migration 1, `STRICT` tablo; kolon kumesi `db::model` testinde `PRAGMA table_info` ile dogrulaniyor
+- [x] `sessions`: id, started_at, ended_at, project_id (nullable), summary, transcript_path (nullable),
       model, token/cost metadata, created_at
-- [ ] `kind` degerleri PROJECT.md Bolum 5.3 listesiyle uyumlu ve tip olarak da tanimli
+      — token/maliyet: `input_tokens`, `output_tokens`, `total_tokens`, `estimated_cost_usd` skalerleri
+        + ham kirilim icin `usage_json` (memory.md T5 anahtarlari netlesince ASU-032 kolon acabilir)
+- [x] `kind` degerleri PROJECT.md Bolum 5.3 listesiyle uyumlu ve tip olarak da tanimli
       (profile, preference, project, decision, task, working_context, relationship, idea, routine, tool_state)
-- [ ] `project_id` alanlari simdilik nullable ve serbest; Phase 4'te foreign key ile baglanacak
-      (migration plani not edilmis)
-- [ ] Sorgu icin gerekli index'ler: kind, project_id, importance, is_archived, created_at
-- [ ] TypeScript tipleri schema ile tek kaynaktan turetiliyor (elle senkronize edilen ikinci tanim yok)
+      — semada CHECK kisiti, Rust'ta `MemoryKind`, TS'te `MEMORY_KINDS`; ucu de testlerle bagli
+- [x] `project_id` alanlari simdilik nullable ve serbest; Phase 4'te foreign key ile baglanacak
+      (migration plani not edilmis) — plan `001_memories_sessions.up.sql` icinde, `schema-mirror.spec.ts`
+        ASU-039 notunun varligini ve FK'nin **olmadigini** dogruluyor
+- [x] Sorgu icin gerekli index'ler: kind, project_id, importance, is_archived, created_at
+      — ayrica `source_session_id`, Stage A bilesik index'i ve `expires_at` kismi index'i
+- [x] TypeScript tipleri schema ile tek kaynaktan turetiliyor (elle senkronize edilen ikinci tanim yok)
+
+### Notlar
+- **"Tek kaynak" nasil yorumlandi.** Kod uretimi secilmedi: uretilmis bir `.ts` commit edilseydi,
+  uretici calistirilmadan yapilan bir sema degisikligi yine sessizce kayardi. Yerine **tek kaynak
+  dogrudan `.sql` dosyasidir** ve uc tuketici de ona testle baglanir:
+  SQLite (DDL'in kendisi) · Rust (`PRAGMA table_info` + CHECK kisitindan okunan kind listesi) ·
+  TypeScript (`src/shared/schema-mirror.spec.ts` ayni `.sql` dosyasini okur).
+  Dogrulandi: semaya bir kolon ve bir `kind` degeri eklendiginde 3 Rust + 2 TS testi kirmiziya dondu.
+- **Geri alinabilirlik.** Her migration icin `down` var ve gercekten kosuyor
+  (`migrations_can_be_rolled_back_and_reapplied`). `down` uygulama acilisinda **asla** cagrilmaz.
+- **Sema butunlugu testleri**: kind CHECK, importance/confidence araligi, UTC ISO-8601 zaman damgasi,
+  `json_valid(metadata_json)`, `STRICT` tip zorlamasi, FK ihlali, `ON DELETE SET NULL` davranisi,
+  `ended_at >= started_at`.
 
 ---
 

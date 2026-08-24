@@ -10,6 +10,8 @@
  * IPC sinirindan gelen her sey harici veridir.
  */
 
+import { ContractError, assertNoUnexpectedKeys, isRecord, readers } from './contract';
+
 /**
  * Hafizanin uc olasi durumu. `disabled` ile `unavailable` bilerek ayri:
  *
@@ -46,12 +48,16 @@ export const DB_STATUS_KEYS = [
  * Mesaj yalnizca **alan adini** ve beklenen bicimi tasir, gelen degeri asla —
  * hata mesajlari log'a ve UI'a duser.
  */
-export class DbStatusError extends Error {
+export class DbStatusError extends ContractError {
   public override readonly name = 'DbStatusError';
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+function fail(field: string, expected: string): never {
+  throw new DbStatusError(`\`${field}\` ${expected} olmali.`);
+}
+
+function failWith(message: string): never {
+  throw new DbStatusError(message);
 }
 
 /**
@@ -65,48 +71,16 @@ export function parseDbStatus(value: unknown): DbStatus {
   if (!isRecord(value)) {
     throw new DbStatusError('Durum payload bir nesne olmali.');
   }
+  assertNoUnexpectedKeys(value, DB_STATUS_KEYS, failWith);
 
-  const allowed: readonly string[] = DB_STATUS_KEYS;
-  const unexpected = Object.keys(value).filter((key) => !allowed.includes(key));
-  if (unexpected.length > 0) {
-    throw new DbStatusError(
-      `Durum payload beklenmeyen alan(lar) iceriyor: ${unexpected.join(', ')}.`,
-    );
-  }
-
-  const availability = value['availability'];
-  if (
-    typeof availability !== 'string' ||
-    !(DB_AVAILABILITY_STATES as readonly string[]).includes(availability)
-  ) {
-    throw new DbStatusError(
-      `\`availability\` su degerlerden biri olmali: ${DB_AVAILABILITY_STATES.join(', ')}.`,
-    );
-  }
-
-  const schemaVersion = value['schemaVersion'];
-  if (
-    schemaVersion !== null &&
-    (typeof schemaVersion !== 'number' || !Number.isInteger(schemaVersion) || schemaVersion < 0)
-  ) {
-    throw new DbStatusError('`schemaVersion` negatif olmayan tam sayi ya da null olmali.');
-  }
-
-  const sqliteVersion = value['sqliteVersion'];
-  if (typeof sqliteVersion !== 'string' || sqliteVersion.length === 0) {
-    throw new DbStatusError('`sqliteVersion` bos olmayan bir string olmali.');
-  }
-
-  const reason = value['reason'];
-  if (reason !== null && (typeof reason !== 'string' || reason.length === 0)) {
-    throw new DbStatusError('`reason` bos olmayan bir string ya da null olmali.');
-  }
+  const read = readers(value, fail);
 
   return {
-    availability: availability as DbAvailability,
-    schemaVersion,
-    sqliteVersion,
-    reason,
+    availability: read.enumeration('availability', DB_AVAILABILITY_STATES),
+    // `0` gecerli bir sema surumu — `count`, `id`den farkli olarak sifira izin verir.
+    schemaVersion: read.nullableCount('schemaVersion'),
+    sqliteVersion: read.text('sqliteVersion'),
+    reason: read.nullableText('reason'),
   };
 }
 

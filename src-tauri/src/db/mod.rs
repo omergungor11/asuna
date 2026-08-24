@@ -23,8 +23,11 @@
 //! yazmaz.
 
 pub mod migrations;
+pub mod model;
 pub mod state;
 
+pub use migrations::EXPECTED_SCHEMA_VERSION;
+pub use model::{MemoryKind, MemoryRecord, SessionRecord};
 pub use state::{db_status, DbAvailability, DbState, DbStatus};
 
 use std::path::{Path, PathBuf};
@@ -312,7 +315,10 @@ mod tests {
     fn opens_an_in_memory_database_without_touching_the_filesystem() {
         let db = AsunaDb::open_in_memory().expect("bellek ici DB acilmali");
         assert_eq!(db.location(), &DbLocation::Memory);
-        assert_eq!(db.schema_version().expect("sema surumu okunmali"), 0);
+        assert_eq!(
+            db.schema_version().expect("sema surumu okunmali"),
+            EXPECTED_SCHEMA_VERSION
+        );
     }
 
     /// Acilis, dosya yoksa dizini ve dosyayi olusturur (ADR-005 acilis sirasi).

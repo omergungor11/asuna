@@ -38,6 +38,33 @@ Kurallar:
   sonradan migration açmamak için.
 - Şema değişikliği ve `src/shared/` TypeScript tip aynası **aynı commit'te** gider (ADR-005).
 
+### 2.1 `memories.kind` (T2 kapandı — ASU-030)
+
+Kesin ve kapalı liste, PROJECT.md 5.3 ile birebir:
+
+`profile` · `preference` · `project` · `decision` · `task` · `working_context` ·
+`relationship` · `idea` · `routine` · `tool_state`
+
+`working_context` listede ama durable tabloya **kural olarak terfi etmez** (PROJECT.md 14);
+extraction bir adayı bu sınıfta işaretleyip eleyebilsin diye tanımlı.
+
+**Tek kaynak**: değerler `001_memories_sessions.up.sql` içindeki `kind` CHECK kısıtındadır.
+Rust `MemoryKind` ve TS `MEMORY_KINDS` o satıra **testlerle** bağlıdır; üçünden birine
+dokunmadan yapılan değişiklik kırmızı test üretir (`db/model.rs`, `src/shared/schema-mirror.spec.ts`).
+
+### 2.2 Şema kararları (ASU-030)
+
+| Karar | Gerekçe |
+|---|---|
+| `STRICT` tablolar | Tip zorlaması INSERT anında; `importance = 'çok'` aylar sonra okuma hatası olarak çıkmaz |
+| `id INTEGER PRIMARY KEY` | rowid alias; UUID için yeni bir crate gerekirdi, tek kullanıcılı yerel DB'de karşılığı yok |
+| Zaman alanları `TEXT` + `GLOB` CHECK | UTC ISO-8601 zorunlu. Stage A sıralaması metin sıralamasıdır; karışık format sessizce yanlış sonuç verir |
+| `source_session_id` → `sessions(id) ON DELETE SET NULL` | Oturum silinince hafıza **silinmez**, yalnızca izi kopar |
+| `project_id` nullable, FK'siz | `projects` Phase 4 (ASU-039). Migration planı şema dosyasında not edilmiş |
+| `metadata_json` NOT NULL DEFAULT `'{}'` + `json_valid` | Okuyucu tarafta `null` dalı yok; bozuk JSON DB'ye giremez |
+| Token/maliyet: skaler kolonlar + `usage_json` | Ayrıntılı kırılımın anahtarları doğrulanmadı (T5); netleşince ASU-032 yeni migration ile kolon açar |
+| Stage A için bileşik index | `(is_archived, project_id, importance DESC, created_at DESC)` — tek tek kolon index'leri bu sorguya yetmez |
+
 ## 3. Erişim mimarisi (ADR-005 sonucu)
 
 **Renderer SQL yazmaz.** SQLite'a yalnızca Tauri'nin Rust process'inden erişilir.
@@ -74,10 +101,12 @@ testte koşar (CI gate).
 | Parça | Dosya |
 |---|---|
 | Bağlantı, PRAGMA'lar, yol çözümü, hata tipi | `src-tauri/src/db/mod.rs` |
-| Migration listesi (sıralı, değişmez) | `src-tauri/src/db/migrations/` |
+| Migration listesi (sıralı, değişmez) + DDL | `src-tauri/src/db/migrations/` |
+| Satır tipleri (`MemoryKind`, `MemoryRecord`, `SessionRecord`) | `src-tauri/src/db/model.rs` |
 | Durum + `db_status` komutu | `src-tauri/src/db/state.rs` |
 | ACL regresyon testi (gerçek capability'ler) | `src-tauri/src/acl_regression.rs` |
-| TS tip aynası | `src/shared/db-status.ts` |
+| TS tip aynası | `src/shared/db-status.ts`, `memory.ts`, `session.ts` |
+| Şema ↔ TS senkron testi | `src/shared/schema-mirror.spec.ts` |
 | Renderer servis katmanı | `src/asuna/memory/db-status-service.ts` |
 
 **Hafızasız degrade mod.** DB açılışı `Result` döndürür ve açılış hatası uygulamayı
@@ -142,11 +171,11 @@ Detaylı checklist: [`asuna-config/security.md`](../../asuna-config/security.md)
 
 | # | Açık | Nerede |
 |---|---|---|
-| T1 | Gerçek `CREATE TABLE` DDL'leri (kolon tipleri, index'ler, FK'ler) | ASU-029/030 |
-| T2 | `memories.kind` enum değerleri — spec'te serbest metin | ASU-030 |
+| ~~T1~~ | ~~Gerçek `CREATE TABLE` DDL'leri~~ — **kapandı (ASU-030)**: `src-tauri/src/db/migrations/001_memories_sessions.up.sql` | ASU-029/030 |
+| ~~T2~~ | ~~`memories.kind` enum değerleri~~ — **kapandı (ASU-030)**: Bölüm 2.1 | ASU-030 |
 | T3 | Stage A sıralama formülü + context boyut tavanı | ASU-035 |
 | T4 | Memory extraction promptu ve kaydetme eşikleri (PROJECT.md 26) | ASU-034 |
-| T5 | `sessions` token/maliyet alanlarının şekli — `Usage.inputTokensDetails` anahtarları runtime'da doğrulanacak (`voice.md` V9) | ASU-032 |
+| T5 | `sessions` token/maliyet alanlarının şekli — skaler kolonlar + `usage_json` ile geçici olarak karşılandı; `Usage.inputTokensDetails` anahtarları runtime'da doğrulanınca kolon açılacak (`voice.md` V9) | ASU-032 |
 | T6 | Export/yedekleme: WAL yüzünden 3 dosya var → `VACUUM INTO` yolu | Phase 3 export |
 | T7 | `expires_at` / `is_archived` yaşam döngüsü politikası (kim ne zaman temizler) | Phase 3 |
 | T8 | Stage B tetikleme kriteri — "yeterli memory" kaç kayıt, hangi metrik | Post-MVP |

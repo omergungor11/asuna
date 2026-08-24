@@ -178,6 +178,7 @@ pub fn db_status(state: State<'_, DbState>) -> DbStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::EXPECTED_SCHEMA_VERSION;
 
     #[test]
     fn ready_state_reports_the_schema_version() {
@@ -185,7 +186,7 @@ mod tests {
         let status = DbState::Ready(db).status();
 
         assert_eq!(status.availability, DbAvailability::Ready);
-        assert_eq!(status.schema_version, Some(0));
+        assert_eq!(status.schema_version, Some(EXPECTED_SCHEMA_VERSION));
         assert_eq!(status.reason, None);
         assert!(!status.sqlite_version.is_empty());
     }
