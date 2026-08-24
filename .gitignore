@@ -10,6 +10,15 @@ node_modules/
 dist/
 build/
 src-tauri/target/
+target/
+.vite/
+
+# Test / coverage
+coverage/
+.vitest-cache/
+
+# Tool caches
+.eslintcache
 
 # Local data
 *.sqlite

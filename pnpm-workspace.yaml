@@ -1,0 +1,13 @@
+# Asuna pnpm workspace
+#
+# Su an tek paket var ve o da repo kokunde (`package.json`) — Tauri uygulamasinin
+# kendisi. pnpm kok paketi her zaman workspace'e dahil eder, bu yuzden `packages`
+# listesi bilerek bos. Ileride ayri bir paket cikarsa (or. paylasilan tool
+# tanimlari) buraya `packages/*` eklenir; bos klasor agaci bastan acilmaz.
+packages: []
+
+# Tauri CLI ve esbuild gibi paketler kurulum sirasinda platform binary'si indirir /
+# derler. pnpm 10 varsayilan olarak lifecycle script'lerini bloklar; sadece
+# gercekten ihtiyaci olanlar tek tek izinli.
+onlyBuiltDependencies:
+  - esbuild
