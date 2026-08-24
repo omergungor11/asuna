@@ -222,19 +222,39 @@ Kotu kapanma bu urunde maliyet demek — acik kalan bir oturum fatura yazar (R1)
 
 ## ASU-019: Hata Yonetimi + Observability
 
-**Scope**: backend | **Boyut**: M | **Durum**: PENDING | **Bagimlilik**: ASU-014
+**Scope**: backend | **Boyut**: M | **Durum**: COMPLETED (2026-08-24) | **Bagimlilik**: ASU-014
 
 ### Aciklama
 PROJECT.md Bolum 29 (state transition log) + Bolum 30 (durust hata yonetimi).
 
 ### Acceptance Criteria
-- [ ] State gecisleri zaman damgasiyla loglaniyor (Bolum 29'daki ornek formata yakin)
-- [ ] Dev modda gorunur bir debug konsolu / log paneli var
-- [ ] `ASUNA_LOG_LEVEL` config'i etkili
-- [ ] Hicbir log satirinda API key, token veya ham secret yok — redaction testi mevcut
-- [ ] Kullaniciya gosterilen hata mesajlari durust: baglanti yoksa "Su an ses baglantisini kuramadim"
-      diyor, basarili gibi davranmiyor
-- [ ] Beklenmeyen hata UI'yi cokertmiyor; `ERROR` durumundan tekrar baglanma yolu var
+- [x] State gecisleri zaman damgasiyla loglaniyor (Bolum 29'daki ornek formata yakin):
+      `12:10:01 INFO  [voice-state] WAKING -> CONNECTING (ACTIVATION_REQUESTED)`;
+      kanonik bicim `formatStateTransitionLine()` ile ayrica disari veriliyor
+      (`src/asuna/observability/state-logger.ts`)
+- [x] Dev modda gorunur bir debug konsolu / log paneli var — `src/components/debug-panel.tsx`,
+      `app.tsx` icinde `import.meta.env.DEV` + `lazy()` ile kosullu mount (uretim bundle'ina girmez);
+      seviye filtresi + otomatik kaydirma + temizleme
+- [x] `ASUNA_LOG_LEVEL` config'i etkili — `applyConfigLogLevel(config)` ile FrontendConfig'e baglanir;
+      seviye calisma aninda degisir ve tum `child` logger'lari etkiler
+- [x] Hicbir log satirinda API key, token veya ham secret yok — iki katmanli redaksiyon
+      (deger prefix'i `sk-` / `ek_` + hassas alan adi `apiKey`/`token`/`value`/...),
+      `logger.spec.ts` icinde tampon dokumu taranarak kanitlaniyor
+- [x] Kullaniciya gosterilen hata mesajlari durust: `error-messages.ts` her Rust `kind`'i
+      ("Su an ses baglantisini kuramadim: ...") ve servis hatasini ayri cumleye esliyor;
+      bilinmeyen etiket jenerik ama durust mesaja dusuyor, basari taklidi yok
+- [x] Beklenmeyen hata UI'yi cokertmiyor; `ERROR` durumundan tekrar baglanma yolu var —
+      her `UserFacingError` `retryable` bayragi tasiyor; bozuk log abonesi log zincirini dusurmuyor
+
+### Notlar
+Modul sinirlari: `logger.ts` (seviye + redaksiyon + 500 satirlik ring buffer),
+`state-logger.ts` (FSM `subscribe` + `onInvalidTransition` kablolamasi),
+`error-messages.ts` (kind -> durust Turkce mesaj), `index.ts` (genel API).
+Redaksiyon **varsayilan acik**: cagiran tarafin "bunu maskele" demesi gerekmez.
+`value` alan adi bilerek hassas kabul edildi — Rust `EphemeralToken`'in alan adi budur.
+Log yalnizca bellekte; diske yazma bilincli olarak kapsam disi (PROJECT.md Bolum 20).
+Realtime servisi entegrasyonu (ASU-013) bu API'yi `logger.child('realtime')` +
+`toUserFacingError(error)` uzerinden kullanir.
 
 ---
 
