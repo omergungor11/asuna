@@ -48,7 +48,7 @@ Kurallar:
 | Tauri build config, pnpm scriptleri, Vite, tsconfig strict, ESLint, `ci.yml`, `.env.example` | devops |
 | Guvenlik/permission/path-sandbox testleri, unit + integration testleri, Rust testleri | tester |
 | PROJECT.md/TRANSCRIPT.md disi dokuman, DECISIONS, CHANGELOG, task tracking | docs |
-| "Hangi SDK surumu? Fiyat ne? Porcupine lisansi? `tauri-plugin-sql` yeterli mi?" | researcher |
+| "Hangi SDK surumu? Fiyat ne? KWS model lisansi? `tauri-plugin-sql` yeterli mi?" | researcher |
 | Diff incelemesi, guvenlik denetimi, Gate 3 | reviewer |
 
 **Audio sinir kurali:** `src/asuna/audio/` backend'in (motor + servis state'i);

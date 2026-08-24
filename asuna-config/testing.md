@@ -103,7 +103,8 @@ Her task icin:
 
 ## Kurallar
 
-- OpenAI Realtime, Porcupine, filesystem ve shell **her zaman** mock'lanir — test gercek servise/mikrofona vurmaz
+- OpenAI Realtime, wake word motoru (sherpa-onnx KWS), filesystem ve shell **her zaman** mock'lanir —
+  test gercek servise/mikrofona vurmaz
 - Path testleri gercek dosya sistemi yerine fixture/temp dizin kullanir; test sonunda temizler
 - Test DB izole: her run temiz SQLite (in-memory veya temp dosya), truncate/rollback
 - Zaman ve rastgelelik sabitlenir (fake timer, sabit seed) — flaky test kabul edilmez;

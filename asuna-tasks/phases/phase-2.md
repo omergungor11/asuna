@@ -18,7 +18,7 @@
 
 ### Aciklama
 PROJECT.md Bolum 8'deki adapter interface'i once tanimla, sonra vendor bagla. Boylece Phase 2'nin
-geri kalani Porcupine'in hazir olmasini beklemez ve testler vendor'suz calisir.
+geri kalani gercek KWS motorunun hazir olmasini beklemez ve testler vendor'suz calisir.
 
 ### Acceptance Criteria
 - [ ] Interface tanimli: `initialize()`, `start()`, `stop()`, `onDetected(cb): () => void`
@@ -30,25 +30,40 @@ geri kalani Porcupine'in hazir olmasini beklemez ve testler vendor'suz calisir.
 
 ---
 
-## ASU-022: Porcupine Provider ("Hey Asuna" Custom Keyword)
+## ASU-022: `SherpaKwsProvider` (sherpa-onnx KWS, "Hey Asuna")
 
-**Scope**: backend | **Boyut**: L | **Durum**: PENDING | **Bagimlilik**: ASU-021, ASU-008
+**Scope**: backend | **Boyut**: L | **Durum**: PENDING | **Bagimlilik**: ASU-021, ASU-008, ASU-008b
 
 ### Aciklama
-ASU-008 arastirmasinin karari uygulanir. Yerel, surekli calisan "Hey Asuna" algilamasi.
+ADR-004'un karari uygulanir: yerel, surekli calisan "Hey Asuna" algilamasi **Tauri'nin Rust
+process'inde** (`src-tauri`) — `cpal` input stream + sherpa-onnx `KeywordSpotter`. Tespit, Tauri
+event'i olarak renderer'a bildirilir; renderer tarafindaki `SherpaKwsProvider` bu event'i
+`WakeWordProvider.onDetected` callback'ine cevirir.
 
 ### Acceptance Criteria
-- [ ] "Hey Asuna" custom `.ppn` modeli uretilmis ve repoya/asset dizinine yerlesmis (lisans notuyla)
-- [ ] Picovoice AccessKey config'ten okunuyor, koda gomulu degil, log'a dusmuyor
-- [ ] Apple Silicon macOS'te calisiyor
-- [ ] Detection hassasiyeti (sensitivity) konfigurabilir
+- [ ] KWS model dosyalari (encoder/decoder/joiner/tokens) Tauri resource olarak paketlenmis, lisans notuyla
+- [ ] "HEY ASUNA" keyword'u `sherpa-onnx-cli text2token` ile BPE `keywords.txt`'ye uretilmis ve versiyonlanmis
+- [ ] KWS model yolu ve threshold config'ten okunuyor (`ASUNA_WAKE_WORD_MODEL_DIR`,
+      `ASUNA_WAKE_WORD_THRESHOLD`), koda gomulu degil
+- [ ] Apple Silicon macOS'te calisiyor; idle'da hicbir ag trafigi yok (ne OpenAI ne lisans sunucusu)
+- [ ] Detection hassasiyeti konfigurabilir (keyword boosting score + trigger threshold)
 - [ ] Yanlis pozitif orani makul: 10 dakikalik normal konusma/muzik ortaminda kabul edilebilir sinirda
       (olculmus ve not edilmis)
 - [ ] Detection gecikmesi olculmus (soz bitimi -> callback)
 - [ ] Mikrofon baska bir uygulama tarafindan kullaniliyorsa uygulama cokmuyor, durumu gosteriyor
-- [ ] Idle CPU kullanimi olculup not edilmis
+- [ ] Idle CPU/RAM kullanimi olculup not edilmis
+- [ ] Uygulamanin geri kalani `sherpa-onnx`'i dogrudan gormuyor — yalnizca `WakeWordProvider`
 
 ### Notlar
+**Mimari:** idle'da mikrofon renderer'a **hic acilmaz** (ADR-004, "Mimari yerlesim" akisi):
+`IDLE_WAKE_WORD`'de cpal stream Rust'ta acik / `getUserMedia` cagrilmamis; `WAKING`'de Rust cpal
+stream'i durdurur ve event yayinlar, renderer `getUserMedia` + WebRTC acar; oturum kapanisinda
+(explicit / idle timeout / `ERROR` dahil) renderer track'leri durdurur, Rust cpal stream'i yeniden
+acar. Bu sira ASU-023 ve ASU-026 ile birlikte dogrulanir.
+
+ASU-008b spike'inin bulgulari (threshold degerleri, VAD kapisi gerekip gerekmedigi) burada uygulanir;
+spike kodu bu task'a kopyalanmaz, sifirdan yazilir.
+
 TRANSCRIPT.md Bolum 5: kullanici sarki soyleyebilir, alakasiz sesler cikarabilir — bunlar istek
 olarak islenmemeli. Yanlis pozitif burada sadece bir bug degil, urun guveni meselesi.
 

@@ -79,8 +79,9 @@ Risk seviyeleri (PROJECT.md Bolum 5.4):
 
 ## 4. Ses Gizliligi
 
-- [ ] Wake word (`Hey Asuna`) tespiti **tamamen lokal** — Porcupine on-device, `WakeWordProvider`
-      adapter arkasinda
+- [ ] Wake word (`Hey Asuna`) tespiti **tamamen lokal** — sherpa-onnx KWS on-device (Rust
+      tarafinda, `cpal` + `KeywordSpotter`), `WakeWordProvider` adapter arkasinda; motor init'inde
+      ag dogrulamasi/phone-home yok
 - [ ] Idle durumda: Realtime session **kapali/disconnected**, buluta giden ses **YOK**
 - [ ] Idle mikrofon frame'leri persist edilmez — diske yazilmaz, buffer session sonrasi temizlenir
 - [ ] Wake sonrasi wake-word engine durdurulur/askiya alinir, sonra Realtime session acilir

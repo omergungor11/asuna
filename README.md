@@ -20,14 +20,14 @@ katmanı**dır.
 ## Stack
 
 Tauri 2 · React · TypeScript (strict) · Vite · pnpm · SQLite · OpenAI Agents SDK
-(`RealtimeAgent`/`RealtimeSession`, WebRTC) · Picovoice Porcupine (adapter arkasında)
+(`RealtimeAgent`/`RealtimeSession`, WebRTC) · sherpa-onnx KWS (adapter arkasında)
 
 ## Durum
 
 🚧 **Phase 0 — araştırma + scaffold.** Henüz çalışan uygulama yok.
 
 Yol haritası: [`asuna-tasks/task-index.md`](asuna-tasks/task-index.md) —
-7 faz, 63 task, 5 milestone. MVP hedefi: *wake → talk → remember → one safe tool → idle*.
+7 faz, 64 task, 5 milestone. MVP hedefi: *wake → talk → remember → one safe tool → idle*.
 
 ## Dokümantasyon
 

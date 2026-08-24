@@ -16,7 +16,7 @@ AI companion — chatbot degil. Urun dongusu:
 | `src-tauri/` | Rust tarafi: ephemeral Realtime token minting, native servisler, IPC command'lari, Tauri capability/permission config |
 | `src/asuna/agent/` | `realtime-agent.ts`, `session-manager.ts` — RealtimeAgent/RealtimeSession yasam dongusu |
 | `src/asuna/prompts/` | Versiyonlu sistem prompt'lari (`core.v1.ts`, `memory-extraction.v1.ts`) + `buildAsunaInstructions(context)` |
-| `src/asuna/audio/` | `wake-word-provider.ts` (adapter interface), `porcupine-provider.ts`, `audio-state.ts` — motor/servis katmani |
+| `src/asuna/audio/` | `wake-word-provider.ts` (adapter interface), `sherpa-kws-provider.ts` (Rust tarafindaki KWS motoruna Tauri event koprusu), `audio-state.ts` — motor/servis katmani |
 | `src/asuna/memory/` | `memory-service.ts`, `memory-retrieval.ts`, `memory-extraction.ts` |
 | `src/asuna/projects/` | `project-registry.ts`, `project-context.ts` |
 | `src/asuna/tools/` | `registry.ts`, `permissions.ts`, `implementations/` |
@@ -37,7 +37,7 @@ React'i sen boyamazsin.
   guvenilir process (Tauri Rust tarafi) uretir; renderer yalnizca kisa omurlu token'i alir.
 - **Model ID hard-code edilmez.** `ASUNA_REALTIME_MODEL` (varsayilan `gpt-realtime-2.1`,
   dev/ekonomi `gpt-realtime-2.1-mini`) tek bir config modulunden okunur.
-- **Vendor lock yok.** Porcupine dogrudan cagrilmaz — her zaman `WakeWordProvider` interface'i
+- **Vendor lock yok.** sherpa-onnx KWS dogrudan cagrilmaz — her zaman `WakeWordProvider` interface'i
   arkasindan. Motor degistirilebilir kalmali.
 - **Idle'da bulut yok.** Wake word tespiti tamamen local; idle mikrofon audio'su OpenAI'ye
   gonderilmez. Bu kurali bozan kod yazma.

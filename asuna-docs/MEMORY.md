@@ -22,7 +22,8 @@
 - **Modul sinirlari ayri kalir**: audio / agent / memory / projects / tools / permissions / security / database / ui.
   React componentleri dogrudan shell komutu calistirmaz veya DB sorgusu atmaz.
 - **Stack**: Tauri 2 + React + TypeScript (strict) + Vite, pnpm, SQLite, OpenAI Agents SDK
-  (`RealtimeAgent` / `RealtimeSession`), WebRTC transport, Picovoice Porcupine (adapter arkasinda).
+  (`RealtimeAgent` / `RealtimeSession`), WebRTC transport, sherpa-onnx KWS (Rust tarafinda,
+  `WakeWordProvider` adapter arkasinda).
 - **Task/commit**: Task ID `ASU-XXX`. Commit `feat(ASU-XXX): aciklama`. Claude attribution satiri YOK.
 - **Agent modeli**: ana oturum Fable = orchestrator; subagent'lar `model: opus`.
 
@@ -42,7 +43,9 @@
   command'lari ile mi? Phase 0 arastirma task'inda netlesecek. Karar verilmeden DB kodu yazilmaz.
 - ChatGPT aboneligi ile OpenAI API kredisi ayri faturalanir — Realtime kullanimi ayrica ucretlendirilir.
   Gelistirmede `gpt-realtime-2.1-mini` kullan.
-- Porcupine icin `PICOVOICE_ACCESS_KEY` gerekiyor (Phase 2'den once temin edilmeli).
+- Wake word icin API anahtari/ucret yok (sherpa-onnx, Apache-2.0). KWS model dosyalari indirilir;
+  yol/esik `ASUNA_WAKE_WORD_MODEL_DIR` + `ASUNA_WAKE_WORD_THRESHOLD` ile verilir. Model
+  agirliklarinin lisansi ASU-008b'de dogrulanacak.
 
 ## Working Credentials (Dev)
 - Yok. Gercek secret ASLA buraya yazilmaz — `.env.example` sablon, `.env` commit edilmez.

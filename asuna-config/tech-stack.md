@@ -13,10 +13,10 @@
 | Desktop shell | Tauri 2 (Rust host + system webview) | Karar |
 | Paket yoneticisi | pnpm | Karar |
 | Frontend | React + TypeScript (strict) + Vite | Karar |
-| AI / orchestration | OpenAI Agents SDK for TypeScript (RealtimeAgent / RealtimeSession) | Karar |
-| Ses transport | WebRTC | Karar |
-| Realtime model | `gpt-realtime-2.1` (dev: `gpt-realtime-2.1-mini`) — env ile | Karar |
-| Wake word | Picovoice Porcupine, `WakeWordProvider` adapter arkasinda | Karar |
+| AI / orchestration | `@openai/agents-realtime` **0.17.0** (exact pin) — RealtimeAgent / RealtimeSession | Karar (ASU-006) |
+| Ses transport | WebRTC (`transport: 'webrtc'` acikca) | Karar |
+| Realtime model | `gpt-realtime-2.1` (dev: `gpt-realtime-2.1-mini`) — env ile | Karar — dogrulandi (ASU-006) |
+| Wake word | **sherpa-onnx `KeywordSpotter`** (Rust, `cpal`), `WakeWordProvider` adapter arkasinda | Karar (proposed — spike bekliyor, `docs/decisions/ADR-004`) |
 | Veritabani | SQLite | Karar — **erisim yolu acik** (OQ-1) |
 | Secret / auth | Ephemeral Realtime token, key Rust tarafinda | Karar |
 | Test | Vitest (unit/integration) + Rust `cargo test` | Karar |
@@ -37,7 +37,7 @@ zorunlu kilar, boylece "kisitsiz main process" riski bastan yok.
 **Neden Electron degil:** Electron'un main process'i varsayilan olarak tam Node yetkisine sahip;
 Asuna'nin risk seviyeli tool mimarisi (PROJECT.md 5.4, 17, 18) icin bu yanlis varsayilan.
 Ayrica chromium bundle'i ~120MB+ ve surekli calisan bir companion icin bellek maliyeti yuksek.
-Rust tarafi ayrica Porcupine ve SQLite icin native erisimi zaten gerektiriyor.
+Rust tarafi ayrica wake-word motoru (sherpa-onnx KWS) ve SQLite icin native erisimi zaten gerektiriyor.
 
 **Not:** PROJECT.md 6.1 "mevcut template'i koru" diyor; template audit yapildi — repoda uygulama
 kodu yok, sadece Claude Code workflow meta-template'i var. Dolayisiyla scaffold greenfield.
@@ -85,13 +85,33 @@ Kurallar:
 
 ## 3. AI / Orchestration
 
-- **OpenAI Agents SDK for TypeScript** — `RealtimeAgent` + `RealtimeSession`
-- Transport: **WebRTC** (dusuk gecikme, dogal interruption, webview'de native destek)
-- WebSocket transport sonraki faz — sunucu merkezli bir ihtiyac dogarsa
+> Dogrulama: ASU-006 arastirmasi, 2026-08-24. Detayli API imzalari, event listesi ve
+> dogrulanamayan maddeler: `docs/architecture/voice.md`.
+
+- **`@openai/agents-realtime` `0.17.0`** (exact pin, caret yok) — `RealtimeAgent` + `RealtimeSession`
+  - Peer: **`zod` `4.4.3`** (`^4.0.0` zorunlu — Zod 3 calismaz)
+  - Runtime: **Node.js 22+** (paketlerde `engines` alani yok, CI'da kontrol edilir)
+  - Lisans: MIT. Bagimlilik zinciri: `@openai/agents-core@0.17.0` (exact) → `openai@^7.2.0`
+  - **`@openai/agents` degil**: Asuna renderer'i sadece realtime kullaniyor; meta-paket ayrica
+    `@openai/agents-openai`'i da cekiyor. Resmi docs standalone realtime paketini destekliyor.
+- **Surum hizi riski**: 3 haftada 3 minor (0.14 → 0.17); minor'larda realtime davranisi degisiyor
+  (0.15.0: `mediaStream` sahiplik degisikligi). Yukseltme ayri task, release notes okunarak.
+- Transport: **WebRTC** — `transport: 'webrtc'` **acikca** verilir; otomatik secim
+  `window.RTCPeerConnection` yoksa sessizce WebSocket'e duser (calismaz ses = sinsi hata)
+- **Ephemeral key zorunlu**: SDK, browser ortaminda `ek_` prefix'i olmayan key ile WebRTC
+  baglantisini `UserError` ile reddediyor. `useInsecureApiKey` **yasak**.
+- Ephemeral token endpoint: `POST https://api.openai.com/v1/realtime/client_secrets`
+  (`expires_after.seconds` 10–7200, varsayilan 600) — Rust tarafinda `#[tauri::command]`
+- Interruption/barge-in **SDK + sunucu VAD** yonetiyor (`semantic_vad` varsayilan); WebRTC'de
+  ses buffer'ini SDK temizler. Uygulama sadece `audio_interrupted` ile UI/state gunceller.
 - SDK detaylari **`AsunaRealtimeService`** wrapper'i arkasinda kalir; React bilesenleri
   ve tool katmani SDK tipleriyle dogrudan konusmaz (PROJECT.md 24)
-- Tool tanimlari SDK formatina `AsunaToolDefinition` registry'sinden adapte edilir —
-  ters yon degil
+- Tool tanimlari SDK formatina `AsunaToolDefinition` registry'sinden adapte edilir — ters yon degil
+- **Function tool'lar renderer'da calisir** — gercek is `#[tauri::command]` uzerinden Rust'a
+  delege edilir (ince backchannel deseni)
+- SDK varsayilani kullanici transkripsiyonunu **acik** getiriyor (`gpt-4o-mini-transcribe`) —
+  `ASUNA_TRANSCRIPT_STORAGE=false` ise `audio.input.transcription: null` verilmeli
+  (gizlilik + maliyet sizintisi onlemi)
 
 **Neden:** Realtime API'yi elle surmek (ses chunk'lari, interruption, VAD, tool call protokolu)
 Phase 1'i haftalara yayar. Agents SDK bu dongunun tamamini kapsar; wrapper sayesinde ileride
@@ -104,17 +124,36 @@ Model ID'leri **asla hard-code edilmez**. Tek okuma noktasi config servisi:
 ```env
 ASUNA_REALTIME_MODEL=gpt-realtime-2.1        # quality
 # ASUNA_REALTIME_MODEL=gpt-realtime-2.1-mini # economy / development
-ASUNA_REALTIME_VOICE=
+ASUNA_REALTIME_VOICE=marin
 ```
 
-Ayarlar UI'inda model secilebilir olmali (PROJECT.md 21, 28).
+- Her iki model ID de SDK `OpenAIRealtimeModels` union'inda mevcut; `gpt-realtime-2.1` ayrica
+  SDK'nin `DEFAULT_OPENAI_REALTIME_MODEL` degeri. Ilan edilmis deprecation yok.
+- `gpt-realtime` / `gpt-realtime-mini` (2.1'siz) **2027-01-20'de kapaniyor** — kullanilmaz.
+- `ASUNA_REALTIME_VOICE` → `config.audio.output.voice`. Gecerli degerler:
+  `alloy, ash, ballad, coral, echo, sage, shimmer, verse, marin, cedar`.
+  Ses, oturum ses uretmeye basladiktan sonra **degistirilemez**.
+- Token basarken kullanilan model ile `RealtimeSession({ model })` **ayni olmali**;
+  model oturum ortasinda degistirilemez.
+- Realtime oturumu **max 60 dakika** (API limiti) — oturum suresi siniri altinda kalmali.
+- Ayarlar UI'inda model secilebilir olmali (PROJECT.md 21, 28).
 
 ---
 
 ## 4. Wake Word
 
-- **Picovoice Porcupine** — on-device, macOS + Apple Silicon destegi, custom wake word
-- Tetikleyici ifade: **"Hey Asuna"** (MVP'de tek, iyi egitilmis trigger — false positive dusuk kalsin)
+> Karar `docs/decisions/ADR-004-wake-word-provider.md`'de (proposed — detection spike bekliyor).
+> Onceki Porcupine karari ASU-008 arastirmasiyla gecersiz kaldi: Picovoice Free Tier 2026-06-30'da
+> kapatildi ("no non-commercial tier planned"), Rust binding'i yanked, AccessKey init'te **online**
+> dogrulaniyor (local-first ihlali).
+
+- **sherpa-onnx `KeywordSpotter`** — `sherpa-onnx` crate 1.13.5 (Apache-2.0), Tauri **Rust
+  process'inde**; mikrofon idle'da `cpal` 0.16 ile Rust tarafindan acilir
+- Open-vocabulary KWS: model egitimi/vendor console **yok** — "HEY ASUNA" BPE token'a cevrilip
+  `keywords.txt`'ye yazilir (`sherpa-onnx-cli text2token`); AccessKey yok, kota yok, phone-home yok
+- Model: `sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01` (int8 ~5MB) — model agirliklarinin
+  lisansi spike'ta dogrulanacak
+- Tetikleyici ifade: **"Hey Asuna"** (MVP'de tek trigger — false positive dusuk kalsin)
 - Zorunlu soyutlama:
 
 ```ts
@@ -126,15 +165,17 @@ interface WakeWordProvider {
 }
 ```
 
-- Porcupine implementasyonu bu interface'in **tek** somut ornegidir; uygulamanin geri kalani
-  `WakeWordProvider` tipini gorur, vendor adini gormez
-- Wake sonrasi wake-word motoru durdurulur/askiya alinir; oturum kapaninca yeniden baslar
-- Konfigurasyon degiskenleri (`.env.example`, ASU-009): `PICOVOICE_ACCESS_KEY` (Porcupine access
-  key — sadece Rust/guvenilir process okur) ve `ASUNA_WAKE_WORD_PROVIDER` (varsayilan `porcupine`;
-  adapter'in hangi implementasyonunun secilecegi). Tetikleyici ifade ayrica `ASUNA_WAKE_WORD`.
+- `SherpaKwsProvider` bu interface'in **tek** somut ornegidir; uygulamanin geri kalani
+  `WakeWordProvider` tipini gorur, vendor adini gormez. Yedekler: `oww-rs` (MIT), `rustpotter`.
+- Idle'da mikrofon **renderer'a hic acilmaz** (cpal Rust'ta) — wake aninda cpal stream durur,
+  Tauri event'i ile renderer `getUserMedia` + WebRTC acar; oturum kapaninca tersine doner
+- Konfigurasyon (`.env.example`, ASU-009): `ASUNA_WAKE_WORD_PROVIDER` (varsayilan `sherpa-kws`),
+  `ASUNA_WAKE_WORD_MODEL_DIR`, `ASUNA_WAKE_WORD_THRESHOLD`, `ASUNA_WAKE_WORD`
 
-**Neden:** Porcupine bugun macOS'ta calisan, custom kelime destekleyen en olgun on-device secenek.
-Ancak lisans/fiyat modeli degisebilir (OQ-3) — bu yuzden vendor lock kabul edilmiyor.
+**Neden:** Lisans/erisim riski sifir (Apache-2.0, offline), gizlilik mimarisi daha guclu
+(idle'da webview mikrofona dokunmaz) ve Apple Silicon birinci sinif destekli. Detection kalitesi
+tek acik risk — spike (ASU-008b) ile dogrulanacak; kalirsa Silero VAD kapisi / ifade uzatma /
+yedek motorlar devrede (ADR-004 exit plani).
 
 **Gizlilik (pazarlik disi):** Idle mikrofon frame'leri sadece wake-word motoruna gider,
 OpenAI'a gonderilmez, diske yazilmaz (PROJECT.md 8, 20).
@@ -203,6 +244,16 @@ Sesli agent surekli API tuketimi uretebilir. Mimariye gomulu kontroller:
   economy `gpt-realtime-2.1-mini`
 - Gelistirme varsayilani `-mini`
 
+Dogrulanmis fiyatlar (developers.openai.com/api/docs/pricing, 2026-08-24, USD / 1M token):
+
+| Model | Audio in | Cached audio in | Audio out | Text in | Cached text in | Text out |
+|---|---|---|---|---|---|---|
+| `gpt-realtime-2.1` | $32.00 | $0.40 | $64.00 | $4.00 | $0.40 | $24.00 |
+| `gpt-realtime-2.1-mini` | $10.00 | $0.30 | $20.00 | $0.60 | $0.06 | $2.40 |
+
+Kaba dakika maliyeti **TAHMIN** (600 tok/dk giris, 1200 tok/dk cikis varsayimi — resmi kaynaktan
+dogrulanamadi): 2.1 ≈ $0.10/dk, mini ≈ $0.03/dk. Gercek deger Phase 1'de `session.usage` ile olculur.
+
 **Faturalama notu:** ChatGPT aboneligi ile OpenAI API faturalandirmasi ayri sistemlerdir.
 ChatGPT Plus/Pro Realtime API kredisi saglamaz — API erisimi ayrica konfigure edilir.
 
@@ -231,11 +282,11 @@ Phase 0'da (teknik arastirma + scaffold) kapatilir. Karar cikan her madde
 |----|------|------------------|-----|
 | OQ-1 | SQLite'a hangi yoldan erisilecek? | A: `tauri-plugin-sql` · B: Rust servis + `#[tauri::command]` (on egilim) · C: Node sidecar + better-sqlite3 | Phase 0 |
 | OQ-2 | Migration araci ne olacak? | Plugin'in kendi migration'lari / elle versiyonlu SQL / Rust tarafinda `refinery` — OQ-1'e bagli | Phase 0 |
-| OQ-3 | Porcupine lisans modeli ve maliyeti kisisel kullanimda ne? | Ucretsiz kota yeterli mi, custom wake word egitimi neyi gerektiriyor | Phase 0 |
-| OQ-4 | Porcupine hangi tarafta calisacak? | Rust binding (mikrofon Rust'ta) vs Web SDK (mikrofon webview'de) — mikrofon izni ve idle ses akisi buna bagli | Phase 0 |
-| OQ-5 | Agents SDK'nin WebRTC transport'u Tauri WKWebView'inde sorunsuz calisiyor mu? | `getUserMedia` izinleri, WKWebView WebRTC destegi — Phase 1'in en buyuk teknik riski | Phase 0 |
-| OQ-6 | Mikrofon iki tuketici arasinda nasil paylasilacak? | Wake word motoru ve Realtime session ayni cihazi ayni anda tutabilir mi; devir teslim protokolu | Phase 0/2 |
-| OQ-7 | Ephemeral token OpenAI'dan hangi endpoint/akisla alinacak? | Guncel resmi dokumana gore dogrulanacak; SDK'nin onerdigi akis tercih edilir | Phase 0/1 |
+| OQ-3 | ~~Porcupine lisans modeli~~ **KAPANDI** (ASU-008): Free Tier kapatildi, non-commercial tier yok → Porcupine elendi, sherpa-onnx secildi (`docs/decisions/ADR-004`). Kalan tek lisans sorusu KWS model agirliklari — spike'ta (ASU-008b) | — | Kapandi |
+| OQ-4 | ~~Wake word hangi tarafta?~~ **KAPANDI** (ASU-008): Rust tarafinda (sherpa-onnx + cpal); idle'da mikrofon renderer'a hic acilmiyor | — | Kapandi |
+| OQ-5 | Agents SDK'nin WebRTC transport'u Tauri WKWebView'inde sorunsuz calisiyor mu? | `getUserMedia` izinleri, WKWebView WebRTC destegi — Phase 1'in en buyuk teknik riski (ASU-007 spike). Not: SDK `window.RTCPeerConnection` yoksa sessizce WebSocket'e duser — spike ham WebRTC ile yapilmali | Phase 0 |
+| OQ-6 | Mikrofon devir teslimi: Rust cpal (idle) ↔ renderer getUserMedia (aktif) | Gecis suresi, macOS TCC izin sayisi, turuncu gosterge davranisi — ASU-008b spike'inda olculur | Phase 0/2 |
+| OQ-7 | ~~Ephemeral token endpoint~~ **KAPANDI** (ASU-006): `POST /v1/realtime/client_secrets`, `expires_after.seconds` 10–7200 (varsayilan 600), yanit `ek_` prefix'li `value` — detay `docs/architecture/voice.md` Bolum 5 | — | Kapandi |
 | OQ-8 | Styling katmani ne olacak? | CSS Modules / Tailwind / minimal custom — UI ana urun degil, en az bakim gerektiren secilir | Phase 1 |
 | OQ-9 | DB sifreleme (SQLCipher) ne zaman? | MVP'de duz dosya kabul; sifreleme Phase 3 sonrasi — OQ-1 secimi bunu bloklamamali | Phase 3+ |
 | OQ-10 | Uygulama imzalama/notarization gerekli mi? | Mikrofon izni ve kalici kurulum icin macOS gereksinimleri | Phase 2+ |

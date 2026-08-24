@@ -47,7 +47,8 @@ memory extraction, session finalization, ephemeral token endpoint entegrasyonu.
 ## Kurallar
 
 - Strateji: `asuna-config/testing.md` — happy path + error case minimum.
-- **Harici servisler HER ZAMAN mock'lanir**: OpenAI Realtime, WebRTC transport, Porcupine,
+- **Harici servisler HER ZAMAN mock'lanir**: OpenAI Realtime, WebRTC transport, wake word motoru
+  (sherpa-onnx KWS — `FakeWakeWordProvider` kullan),
   filesystem'in gercek gizli dizinleri. Test **gercek OpenAI'ye baglanmaz** (para harcar,
   flaky yapar). Kayitli fixture veya fake transport kullan.
 - **Gercek `~/.ssh`, gercek keychain ile test yazma.** Sandbox testleri gecici bir tmp dizininde

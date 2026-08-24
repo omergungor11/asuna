@@ -25,13 +25,21 @@ All notable changes to this project will be documented in this file.
   modeli, `ASU-XXX` task ID formati, `feat(ASU-XXX): aciklama` commit formati.
 - `asuna-docs/DECISIONS.md`: ADR-001..ADR-007 kaydedildi — Tauri 2 desktop shell, OpenAI Agents SDK
   (`RealtimeAgent`/`RealtimeSession`) + WebRTC ses mimarisi, `ASUNA_REALTIME_MODEL` ile model
-  konfigurasyonu, `WakeWordProvider` arkasinda Picovoice Porcupine, SQLite persistence
+  konfigurasyonu, `WakeWordProvider` arkasinda wake word motoru, SQLite persistence
   (erisim katmani ACIK — proposed), Tauri Rust tarafinda ephemeral token minting,
   ve Claude Code gelistirme modeli.
 - `asuna-docs/MEMORY.md`: proje ozeti, spec dosyalarinin yeri, Phase 0 durumu ve ihlal edilemez
   kurallar (idle ses buluta gitmez, API key renderer'a girmez, model ID config'de) yazildi.
-- `.env.example`: PROJECT.md Bolum 23'teki yapilandirma degiskenleri + Porcupine icin
-  `PICOVOICE_ACCESS_KEY`, her degisken icin aciklama satiri ile eklendi.
+- `.env.example`: PROJECT.md Bolum 23'teki yapilandirma degiskenleri + wake word ayarlari
+  (`ASUNA_WAKE_WORD_PROVIDER`, `ASUNA_WAKE_WORD_MODEL_DIR`, `ASUNA_WAKE_WORD_THRESHOLD`),
+  her degisken icin aciklama satiri ile eklendi.
+
+### Changed
+- ASU-008: **Wake word: Porcupine → sherpa-onnx KWS** (ADR-004 revize; Picovoice Free Tier
+  2026-06-30'da kapandi, non-commercial tier yok, `pv_porcupine` crate yanked, AccessKey init'te
+  online dogrulaniyor). Motor artik Tauri'nin **Rust** process'inde (`cpal` + `KeywordSpotter`);
+  implementasyon adi `SherpaKwsProvider`, `WakeWordProvider` arayuzu degismedi.
+  `PICOVOICE_ACCESS_KEY` kaldirildi. Calisan detection spike'i ASU-008b'ye ayrildi.
 
 ### Notes
 - Uygulama kodu henuz YOK. Repo su an sadece Claude Code workflow meta-template'i iceriyor;

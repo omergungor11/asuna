@@ -102,7 +102,15 @@ bu ADR **accepted**'a cekilir veya yeni bir ADR ile supersede edilir.
 
 ## ADR-004: Wake word = Picovoice Porcupine, WakeWordProvider adapter arkasinda — 2026-08-24
 
-**Durum**: accepted
+**Durum**: superseded by `docs/decisions/ADR-004-wake-word-provider.md` (2026-08-24)
+
+> **GUNCELLEME (ASU-008 arastirmasi):** Picovoice Free Tier 2026-06-30'da kapatildi,
+> non-commercial tier planlanmiyor, Rust binding'i kaldirildi (crates.io'da yanked) ve
+> AccessKey motor init'inde **online** dogrulaniyor (local-first ihlali). Yeni karar:
+> **sherpa-onnx `KeywordSpotter`** (Apache-2.0, tamamen offline, Tauri Rust process'inde,
+> mikrofon idle'da `cpal` ile Rust tarafinda). `WakeWordProvider` adapter'i degismedi —
+> bu ADR'nin ongordugu vendor-degisim senaryosu aynen islemistir.
+> Detay ve kaynaklar: `docs/decisions/ADR-004-wake-word-provider.md`.
 
 **Karar**: "Hey Asuna" wake word tespiti icin ilk implementasyon **Picovoice Porcupine**.
 Ancak uygulamanin geri kalani Porcupine'i dogrudan tanimaz; her sey PROJECT.md Bolum 8'deki

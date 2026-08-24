@@ -121,7 +121,8 @@ asuna/
 │   ├── asuna/
 │   │   ├── agent/              # realtime-agent, session-manager
 │   │   ├── prompts/            # versiyonlu sistem prompt'ları (core.v1.ts)
-│   │   ├── audio/              # wake-word-provider (adapter), porcupine-provider, audio-state
+│   │   ├── audio/              # wake-word-provider (adapter), sherpa-kws-provider
+│   │   │                       # (motor Rust tarafında — src-tauri), audio-state
 │   │   ├── memory/             # memory-service, retrieval, extraction
 │   │   ├── projects/           # project-registry, project-context
 │   │   ├── tools/              # registry, permissions, implementations/
@@ -136,8 +137,8 @@ asuna/
 
 **Stack (PROJECT.md tercihi):** Tauri 2 + React + TypeScript (strict) + Vite, pnpm,
 SQLite, OpenAI Agents SDK for TypeScript (`RealtimeAgent` / `RealtimeSession`),
-WebRTC transport, wake word: Picovoice Porcupine — `WakeWordProvider` adapter arkasında
-(vendor lock yok).
+WebRTC transport, wake word: sherpa-onnx KWS (Rust tarafında, `WakeWordProvider` adapter
+arkasında — vendor lock yok).
 
 > **AÇIK SORU (Phase 0):** SQLite erişim yolu — `tauri-plugin-sql` mi, Rust tarafında
 > servis mi? Araştırılıp `asuna-docs/DECISIONS.md`'ye ADR olarak yazılacak.
@@ -160,7 +161,8 @@ pnpm test           # Vitest
 
 - **TypeScript**: strict, `any` yasak
 - **Dosya**: `kebab-case`
-- **API**: RESTful, response `{ data, meta? }`, error `{ error: { statusCode, code, message } }`
+- **Servis sınırları**: SDK'lar wrapper arkasında (`AsunaRealtimeService`, `WakeWordProvider`);
+  tool'lar `AsunaToolDefinition` (name/risk 0-3/approval/timeout)
 - **Commit**: `feat(ASU-XXX): açıklama` — attribution satırı YOK
 - İlk vertical slice'ı over-abstract etme; gerekçesiz bağımlılık ekleme; hatayı sessizce yutma
 - Security/permission/path mantığı **test edilmeden** merge edilmez

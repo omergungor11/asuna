@@ -171,7 +171,7 @@ Kismi gecis MVP sayilmaz.
 
 ### Acceptance Criteria
 - [ ] `README.md`: ne oldugu, kurulum, calistirma, gerekli harici setup (OpenAI billing,
-      Picovoice AccessKey, macOS mikrofon izni)
+      KWS model dosyalarini indirme, macOS mikrofon izni)
 - [ ] `asuna-docs/RUNBOOK.md`: sik karsilasilan sorunlar (mikrofon izni, token hatasi, wake word
       algilamiyor, DB migration hatasi) ve cozumleri
 - [ ] `asuna-docs/DECISIONS.md` tum ADR'lerle guncel

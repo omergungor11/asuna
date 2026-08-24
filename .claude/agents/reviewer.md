@@ -28,7 +28,8 @@ Surec:
 - `tool_events`'e ham (redacted olmayan) arguman yazilmasi.
 - Idle durumda mikrofon audio'sunun buluta gidebilecegi kod yolu.
 - Destructive migration veya kullanici memory'sini geri donusu olmadan silen kod.
-- Porcupine'in `WakeWordProvider` interface'i atlanarak dogrudan cagrilmasi (vendor lock).
+- Wake word motorunun (sherpa-onnx KWS) `WakeWordProvider` interface'i atlanarak dogrudan
+  cagrilmasi (vendor lock).
 
 ## Kurallar
 

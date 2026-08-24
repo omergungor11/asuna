@@ -8,16 +8,19 @@
 
 | Phase | Ad | Total | Done | In Progress | Review | Pending | Blocked |
 |-------|----|-------|------|-------------|--------|---------|---------|
-| 0 | Arastirma + Scaffold | 10 | 0 | 0 | 0 | 10 | 0 |
+| 0 | Arastirma + Scaffold | 11 | 2 | 0 | 0 | 9 | 0 |
 | 1 | Realtime Voice (dikey dilim) | 10 | 0 | 0 | 0 | 10 | 0 |
 | 2 | Wake Word | 8 | 0 | 0 | 0 | 8 | 0 |
 | 3 | Memory | 10 | 0 | 0 | 0 | 10 | 0 |
 | 4 | Project Context | 8 | 0 | 0 | 0 | 8 | 0 |
 | 5 | One Useful Action (Tools) | 9 | 0 | 0 | 0 | 9 | 0 |
 | 6 | Focus Recovery (MVP) | 8 | 0 | 0 | 0 | 8 | 0 |
-| **Total** | | **63** | **0** | **0** | **0** | **63** | **0** |
+| **Total** | | **64** | **2** | **0** | **0** | **62** | **0** |
 
-**Progress**: 0/63 (0%)
+**Progress**: 2/64 (3%)
+
+> ASU-008 "RESEARCH DONE" olarak Done sayilir: arastirma ve ADR-004 tamam, calisan detection spike'i
+> ayri task (**ASU-008b**, PENDING).
 
 > Not: PROJECT.md Bolum 32'deki "Phase 0 — Template audit" tamamlanmis sayilir. Repo'da uygulama kodu
 > yok, sadece Claude Code workflow meta-template'i var (`asuna-tasks/`, `asuna-docs/`, `asuna-config/`,
@@ -38,7 +41,7 @@
 | ID | Risk | Olasilik | Etki | Azaltma | Durum |
 |----|------|----------|------|---------|-------|
 | R1 | **Realtime API maliyeti** — surekli acik ses oturumu faturayi hizla buyutur; ChatGPT aboneligi API kredisi vermez (PROJECT.md Bolum 28) | H | H | Idle'da oturum yok (Phase 2), inactivity timeout + max session duration (ASU-025), dev'de `gpt-realtime-2.1-mini`, oturum suresi/maliyet metadata takibi | OPEN |
-| R2 | **Porcupine macOS/Apple Silicon uyumu + lisans** — custom "Hey Asuna" `.ppn` uretimi, Node/Rust binding'i, ucretsiz katman limitleri belirsiz | M | H | ASU-008 arastirma task'i Phase 0'da; `WakeWordProvider` adapter arkasinda tutulur (ASU-021), fake provider ile Phase 2 gelistirmesi vendor'dan bagimsiz ilerler | OPEN |
+| R2 | **sherpa-onnx KWS tespit kalitesi + model lisansi** — "Hey Asuna" detection rate / false-accept orani ve KWS model agirliklarinin dagitim lisansi henuz dogrulanmadi. (Porcupine lisans riski **KAPANDI**: saglayici elendi — Free Tier 2026-06-30'da kapatildi, Rust binding yanked, AccessKey online dogrulaniyor; ADR-004) | M | M | ASU-008b spike'i (>%95 detection, <1 FP/8 saat, model lisansi netlestirme); `WakeWordProvider` adapter arkasinda tutulur (ASU-021), fake provider ile Phase 2 gelistirmesi vendor'dan bagimsiz ilerler. Exit: Silero VAD kapisi → tetikleyici ifadeyi uzatma → `oww-rs` / `rustpotter` yedekleri | OPEN |
 | R3 | **Tauri webview'da WebRTC / mikrofon izni** — WKWebView'da `getUserMedia` ve macOS mikrofon entitlement'i calismayabilir; bu Phase 1'i tumden bloklar | M | H | ASU-007 spike'i Phase 0'da, feature kodundan once; calismazsa fallback: Rust tarafinda WebSocket transport veya ayri yerel audio process (ADR ile karar) | OPEN |
 | R4 | **SQLite erisim mimarisi belirsiz (ACIK SORU)** — `tauri-plugin-sql` mi, Rust tarafinda servis mi; secim memory/tool/audit katmanlarinin tamamini etkiler | H | M | ASU-005 arastirma + ADR-005; karar verilene kadar Phase 3'e baslanmaz; MemoryService interface arkasinda kalir | OPEN |
 | R5 | **Tek gelistirici odak riski** — TRANSCRIPT.md Bolum 1/6: projeyi bitirememe, dikkat dagilmasi urun probleminin ta kendisi | H | H | Dikey dilim disiplini (bir phase bitmeden digerine gecme), her phase sonunda calisir demo, kucuk task boyutlari, `asuna-tasks/active/session-notes.md` ile oturum devamliligi | OPEN |
@@ -58,9 +61,10 @@
 | ASU-003 | TypeScript strict + ESLint + Prettier | 0 | S | devops | PENDING |
 | ASU-004 | CI pipeline yesil | 0 | M | devops | PENDING |
 | ASU-005 | [ARASTIRMA] SQLite erisim mimarisi karari + ADR-005 | 0 | M | research | PENDING |
-| ASU-006 | [ARASTIRMA] OpenAI Agents SDK realtime dogrulamasi + surum pinleme | 0 | M | research | PENDING |
+| ASU-006 | [ARASTIRMA] OpenAI Agents SDK realtime dogrulamasi + surum pinleme | 0 | M | research | COMPLETED |
 | ASU-007 | [ARASTIRMA] Tauri webview mikrofon + WebRTC spike | 0 | M | research | PENDING |
-| ASU-008 | [ARASTIRMA] Picovoice Porcupine macOS/Apple Silicon + lisans | 0 | M | research | PENDING |
+| ASU-008 | [ARASTIRMA] Wake word saglayicisi (sherpa-onnx KWS) + lisans | 0 | M | research | RESEARCH DONE |
+| ASU-008b | [SPIKE] sherpa-onnx KWS detection spike (macOS arm64) | 0 | L | research | PENDING |
 | ASU-009 | Konfigurasyon katmani + `.env.example` | 0 | S | backend | PENDING |
 | ASU-010 | `docs/architecture` + ADR dizini + README local run | 0 | S | docs | PENDING |
 | ASU-011 | Ephemeral Realtime token minting (Rust) | 1 | L | backend | PENDING |
@@ -74,7 +78,7 @@
 | ASU-019 | Hata yonetimi + observability (state transition log) | 1 | M | backend | PENDING |
 | ASU-020 | **M1 kabul testi** — PROJECT.md Bolum 35, 8 madde | 1 | M | test | PENDING |
 | ASU-021 | `WakeWordProvider` interface + fake provider | 2 | M | backend | PENDING |
-| ASU-022 | Porcupine provider ("Hey Asuna" custom keyword) | 2 | L | backend | PENDING |
+| ASU-022 | `SherpaKwsProvider` (sherpa-onnx KWS, "Hey Asuna") | 2 | L | backend | PENDING |
 | ASU-023 | IDLE_WAKE_WORD -> WAKING -> CONNECTING gecisi | 2 | M | frontend | PENDING |
 | ASU-024 | Idle'da buluta ses gitmedigi dogrulamasi | 2 | M | test | PENDING |
 | ASU-025 | Inactivity timeout + max session duration | 2 | M | backend | PENDING |

@@ -452,7 +452,14 @@ First implementation candidate:
 
 **Picovoice Porcupine**
 
-Rationale:
+> **REVISION (2026-08-24, ASU-008):** This candidate is superseded. Picovoice shut down its
+> Free Tier on 2026-06-30 ("no non-commercial tier planned"), removed the Rust binding, and
+> validates the AccessKey online at engine init — violating the local-first principle.
+> The selected engine is **sherpa-onnx `KeywordSpotter`** (Apache-2.0, fully offline, running
+> in the Tauri Rust process). The `WakeWordProvider` interface below is unchanged — exactly the
+> replaceability this section required. See `docs/decisions/ADR-004-wake-word-provider.md`.
+
+Original rationale (kept for the record):
 
 - local/on-device detection;
 - macOS support including Apple Silicon;
@@ -1120,7 +1127,7 @@ asuna/
 │   │   │   └── instructions.ts
 │   │   ├── audio/
 │   │   │   ├── wake-word-provider.ts
-│   │   │   ├── porcupine-provider.ts
+│   │   │   ├── sherpa-kws-provider.ts   # (ADR-004 revision; engine in src-tauri)
 │   │   │   └── audio-state.ts
 │   │   ├── memory/
 │   │   │   ├── memory-service.ts

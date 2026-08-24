@@ -9,6 +9,8 @@
 >
 > **Phase cikisi:** `pnpm tauri dev` bos Asuna penceresini aciyor, `pnpm lint && pnpm typecheck &&
 > pnpm build` ve CI yesil, ASU-005..008 arastirmalarinin dordu de bir ADR ile kapatilmis.
+> ASU-008b (KWS detection spike) ADR-004'u accepted'a ceker; **Phase 1'i bloklamaz** ama
+> Phase 2 (wake word) baslamadan once bitmis olmali.
 
 ---
 
@@ -123,7 +125,7 @@ servis katmani konmali.
 
 ## ASU-006: [ARASTIRMA] OpenAI Agents SDK Realtime Dogrulamasi + Surum Pinleme
 
-**Scope**: research | **Boyut**: M | **Durum**: PENDING | **Bagimlilik**: ASU-002
+**Scope**: research | **Boyut**: M | **Durum**: COMPLETED (2026-08-24) — bulgular `docs/architecture/voice.md` | **Bagimlilik**: ASU-002
 
 ### Aciklama
 `@openai/agents` (TypeScript) `RealtimeAgent` / `RealtimeSession` API'sinin guncel halini dogrula.
@@ -168,26 +170,74 @@ yazilir — bu yuzden erken ogrenmek deger.
 
 ---
 
-## ASU-008: [ARASTIRMA] Picovoice Porcupine macOS/Apple Silicon + Lisans
+## ASU-008: [ARASTIRMA] Wake Word Saglayicisi (sherpa-onnx KWS) + Lisans
 
-**Scope**: research | **Boyut**: M | **Durum**: PENDING | **Bagimlilik**: ASU-002
+**Scope**: research | **Boyut**: M | **Durum**: RESEARCH DONE — calisan spike ASU-008b'de | **Bagimlilik**: ASU-002
 
 ### Aciklama
-Wake word saglayicisi olarak Porcupine'in macOS/Apple Silicon uygunlugunu ve "Hey Asuna" custom
-keyword uretme yolunu dogrula. (R2)
+Wake word saglayicisinin secimi, lisans durumu ve Tauri mimarisine yerlesimi. Sonuc: **Porcupine
+elendi**, **sherpa-onnx `KeywordSpotter`** secildi — motor Tauri'nin **Rust process'inde** calisir,
+mikrofon idle'da `cpal` ile Rust tarafindan acilir, tespit Tauri event'i ile renderer'a bildirilir.
+`docs/decisions/ADR-004-wake-word-provider.md` yazildi; durumu `proposed` — `accepted`'a cekilmesi
+ASU-008b spike'ina bagli. (R2)
 
 ### Acceptance Criteria
-- [ ] Porcupine'in hangi binding ile kullanilacagi netlesmis (Node/web/Rust) ve Tauri mimarisine uydugu dogrulanmis
-- [ ] Apple Silicon (arm64) uzerinde calisan minimal detection spike'i
-- [ ] "Hey Asuna" custom `.ppn` uretiminin nasil yapildigi ve maliyeti dokumante
-- [ ] AccessKey gereksinimi + ucretsiz katman limitleri + lisans kisitlari dokumante
-- [ ] Idle CPU/RAM tuketimi olculmus (surekli calisacak, onemli)
-- [ ] `docs/decisions/ADR-004-wake-word-provider.md` yazilmis
-- [ ] Alternatifler kisaca degerlendirilmis (openWakeWord / Snowboy tureviler) — vendor lock riski icin
+- [x] Secenekler lisans / platform / bakim acisindan degerlendirilmis (Porcupine binding'leri,
+      openWakeWord, `oww-rs`, `rustpotter`) — ADR-004 "Degerlendirilen Secenekler" tablosu
+- [x] Lisans ve maliyet dokumante: `sherpa-onnx` 1.13.5 + `cpal` Apache-2.0, AccessKey/kota/phone-home
+      **yok**; KWS model agirliklarinin lisansi **BELIRSIZ** → ASU-008b'ye devredildi
+- [x] Motorun nerede calisacagi netlesmis: Tauri **Rust** process'i (`src-tauri`), mikrofon `cpal` ile
+      Rust'ta; renderer idle'da mikrofona **hic** dokunmaz (OQ-4 kapandi)
+- [x] "Hey Asuna" uretim yolu dokumante: open-vocabulary KWS, `sherpa-onnx-cli text2token` ile BPE
+      `keywords.txt` — vendor console yok, platform-spesifik model dosyasi yok, indirme kotasi yok
+- [x] Aday model ve boyutu belirlenmis: `sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01` (int8 ~5MB)
+- [x] `docs/decisions/ADR-004-wake-word-provider.md` yazilmis (durum: proposed)
+- [x] `asuna-config/tech-stack.md` Bolum 4, `asuna-docs/DECISIONS.md` ve `.env.example` guncellenmis
+- [ ] Apple Silicon'da calisan detection spike'i + idle CPU/RAM olcumu → **ASU-008b**
 
 ### Notlar
-Karar ne olursa olsun `WakeWordProvider` adapter interface'i kalir (PROJECT.md Bolum 8). Asuna'nin
-geri kalani tek bir wake-word saglayicisina baglanmaz.
+**Porcupine neden elendi:** Picovoice Free Tier 2026-06-30'da kapatildi ve resmi cevapta "no
+non-commercial tier planned" denildi; ustune `pv_porcupine` crate'inin tum surumleri yanked ve
+AccessKey motor init'inde **online** dogrulaniyor — Asuna'nin local-first sozuyle bagdasmiyor.
+
+Karar ne olursa olsun `WakeWordProvider` adapter interface'i kalir (PROJECT.md Bolum 8); somut
+implementasyon adi `SherpaKwsProvider` (ASU-022). Asuna'nin geri kalani vendor adini gormez.
+
+---
+
+## ASU-008b: [SPIKE] sherpa-onnx KWS Detection Spike (macOS arm64)
+
+**Scope**: research | **Boyut**: L | **Durum**: PENDING | **Bagimlilik**: ASU-002, ASU-008
+
+### Aciklama
+ADR-004'u `proposed`'dan `accepted`'a cekmek icin gereken calisan kanit. Apple Silicon uzerinde
+`cpal` + `KeywordSpotter` ile "HEY ASUNA" tespiti kurulur ve olculur. ADR-004'un "Acik Kalanlar"
+bolumundeki 5 madde bu task'in kapsamidir.
+
+### Acceptance Criteria
+- [ ] **Tespit kalitesi**: 50 farkli soyleyiste **>%95 detection**, 8 saatlik gercek ortam idle'inda
+      **<1 false accept**; boosting score / threshold taramasi kayit altinda ("Asuna" OOV bir ozel
+      isim — BPE subword'lerinin tasiyip tasimadigi burada anlasilir)
+- [ ] **Idle CPU/RAM** olculmus (Apple Silicon): 16kHz mono, `num_threads=1`, int8 model, 30 dk olcum;
+      Silero VAD ile kapili varyant ayrica olculmus
+- [ ] **Mikrofon devir teslimi (OQ-6)**: Rust `cpal` → renderer `getUserMedia` gecis suresi; macOS TCC
+      bunu tek izin olarak mi iki ayri prompt olarak mi soruyor; turuncu mikrofon gostergesinin idle
+      davranisi UX olarak kabul edilebilir mi
+- [ ] **Build / bundle / imzalama**: build script'in GitHub'dan arsiv indirmesi CI'da ve offline
+      build'de nasil davraniyor; static link ile `.app` boyut delta'si; `codesign` + notarization
+      sorunsuz mu; ONNX model dosyalarinin Tauri resource olarak paketlenmesi
+- [ ] **Model agirliklarinin lisansi** netlestirilmis (k2-fsa release notu / HuggingFace model card /
+      issue) — dagitim ve ticari kullanim acisindan
+- [ ] `docs/decisions/ADR-004-wake-word-provider.md` **accepted**'a cekilmis (veya exit plani devreye
+      alinip ADR revize edilmis)
+
+### Notlar
+Spike kodu ana koda **karismaz** — ayri spike dizininde/branch'te kalir; uretim implementasyonu
+ASU-022'de sifirdan yazilir.
+
+Kriterler tutmazsa ADR-004 exit plani sirasiyla: (a) KWS'yi Silero VAD ile kapila, (b) tetikleyici
+ifadeyi uzat, (c) `oww-rs` (MIT) veya `rustpotter` (Apache-2.0) adapter arkasinda dene, (d) son care
+global kisayol/tray butonunu kalici sekonder aktivasyon olarak birak.
 
 ---
 
@@ -202,7 +252,8 @@ PROJECT.md Bolum 23'teki konfigurasyonu tek merkezden okuyan, tipli bir config k
 - [ ] `.env.example` tum degiskenlerle: `OPENAI_API_KEY`, `ASUNA_REALTIME_MODEL`,
       `ASUNA_REALTIME_VOICE`, `ASUNA_WAKE_WORD`, `ASUNA_MEMORY_ENABLED`,
       `ASUNA_TRANSCRIPT_STORAGE`, `ASUNA_TOOL_APPROVAL_MODE`, `ASUNA_IDLE_TIMEOUT_SECONDS`,
-      `ASUNA_LOG_LEVEL`, `PICOVOICE_ACCESS_KEY`, `ASUNA_WAKE_WORD_PROVIDER`
+      `ASUNA_LOG_LEVEL`, `ASUNA_WAKE_WORD_PROVIDER`, `ASUNA_WAKE_WORD_MODEL_DIR`,
+      `ASUNA_WAKE_WORD_THRESHOLD`
 - [ ] `.env.example`'da gercek secret yok, her degisken icin tek satir aciklama var
 - [ ] Tipli config okuyucu; eksik/gecersiz deger baslangicta net hata veriyor (sessizce default'lamiyor)
 - [ ] **`OPENAI_API_KEY` yalnizca Rust/guvenilir process tarafindan okunuyor** — renderer bundle'ina
@@ -224,7 +275,8 @@ Bu, guvenlik modelinin temeli (PROJECT.md Bolum 19). Yanlis yapilirsa MVP checkl
 - [ ] `docs/architecture/` altinda `voice.md`, `memory.md`, `tools.md`, `security.md` iskeletleri
       (Phase 0 bulgulariyla doldurulmus, geri kalani TODO isaretli)
 - [ ] `docs/decisions/` altinda ADR-005 (SQLite) ve ADR-004 (wake word) mevcut
-- [ ] `README.md`: kurulum, `pnpm tauri dev`, gerekli harici setup (OpenAI API billing, Picovoice AccessKey)
+- [ ] `README.md`: kurulum, `pnpm tauri dev`, gerekli harici setup (OpenAI API billing, KWS model
+      dosyalarini indir — sherpa-onnx `kws-models`)
 - [ ] `asuna-config/tech-stack.md` gercek surumlerle doldurulmus
 - [ ] `asuna-docs/RUNBOOK.md`'deki kalan CUSTOMIZE/template kalintilari temizlenmis
       (deploy/rollback komutlari gercek degerlerle dolduruldu)

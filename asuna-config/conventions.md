@@ -85,7 +85,8 @@ Komutlar: `pnpm lint` · `pnpm lint:fix` · `pnpm format` · `pnpm format:check`
   yalniz servis arayuzlerini cagirir
 - Ucuncu parti SDK detaylari wrapper arkasinda kalir. Ornek: OpenAI Agents SDK yalnizca
   `AsunaRealtimeService` icinde gorunur; `RealtimeAgent`/`RealtimeSession` tipleri disari sizmaz.
-  Ayni kural Porcupine icin `WakeWordProvider` ile gecerli.
+  Ayni kural sherpa-onnx KWS icin `WakeWordProvider` ile gecerli — motor Rust tarafinda calisir,
+  renderer yalnizca `WakeWordProvider` tipini gorur, vendor adini gormez.
 - Ilk vertical slice'ta asiri soyutlama yapma — ama saglayici sinirlarini (model, wake word, DB)
   bastan interface arkasina al (PROJECT.md 39/13)
 
@@ -171,7 +172,7 @@ Kurallar:
 - Guvenlik/izin/path mantigi icin test **zorunlu**: path sandbox, traversal reddi, risk seviyesi
   karari, approval gate, secret redaksiyon
 - Ayrica test edilir: memory ranking, project detection, tool schema dogrulama, state gecisleri
-- Harici servisler (OpenAI, Porcupine) mock'lanir — test gercek API'ye vurmaz, para harcamaz
+- Harici servisler (OpenAI, wake word motoru) mock'lanir — test gercek API'ye/mikrofona vurmaz
 - Bug fix'te once bug'i ureten test (kirmizi → yesil)
 
 ## Git & Commit
