@@ -13,7 +13,25 @@
     "noEmit": true,
     "skipLibCheck": true,
 
+    /* --- Tip guvenligi (ASU-003) — gevsetilmez ---
+       `strict` acik olmasi Asuna icin pazarlik disi: tool argumanlari, SDK
+       cevaplari ve DB satirlari harici veridir; `any`/implicit undefined
+       sizmasi guvenlik hatasina donusur (conventions.md "TypeScript"). */
     "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "exactOptionalPropertyTypes": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
+
+    /* Vitest `globals` KAPALI — `describe`/`expect` acikca import edilir.
+       jest-dom matcher tipleri src/test-setup.ts icindeki import ile gelir. */
+    "types": ["vite/client"],
 
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo"
   },

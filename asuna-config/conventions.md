@@ -4,13 +4,71 @@
 > Mimari gerekce: `PROJECT.md` (Bolum 17, 19, 24, 30, 39) ve `asuna-docs/AGENT-SPEC-ORIGINAL.md`.
 
 ## TypeScript
-- Strict mode her zaman acik (`strict: true`, `noUncheckedIndexedAccess` acik)
+
+> ASU-003 ile gercek konfigurasyona baglandi. Kaynak: `tsconfig.app.json` (uygulama,
+> `src/`) ve `tsconfig.node.json` (build/tooling, `vite.config.ts`). Kok `tsconfig.json`
+> yalnizca bu ikisine `references` veren bir solution dosyasidir; `pnpm typecheck`
+> = `tsc --build --force`.
+
+Acik olan tip guvenligi bayraklari (**gevsetilmez** — bir bayragi kapatmak gecici cozum
+degil, blocker olarak raporlanir):
+
+| Bayrak | Neden |
+|--------|-------|
+| `strict` | Tum temel strict ailesi (`strictNullChecks`, `noImplicitAny`, ...) |
+| `noUncheckedIndexedAccess` | Dizi/kayit erisimi `T \| undefined` doner — memory ranking, tool arg parse gibi yerlerde sessiz `undefined` kazasi olmaz |
+| `noImplicitOverride` | Yanlislikla base metod ezme yok |
+| `exactOptionalPropertyTypes` | `{ x?: string }` ile `{ x: string \| undefined }` ayrimi korunur; config/tool objelerinde "alan var ama undefined" belirsizligi kalkar |
+| `noPropertyAccessFromIndexSignature` | `process.env.FOO` yerine `process.env['FOO']` — env okuma noktalari grep'lenebilir kalir |
+| `noImplicitReturns`, `noFallthroughCasesInSwitch` | State machine `switch`'lerinde eksik dal sessiz gecmez |
+| `noUnusedLocals`, `noUnusedParameters` | Olu kod birikmez |
+| `verbatimModuleSyntax` | Tip importlari `import type` ile acik; bundle'a kaza ile runtime import sizmaz |
+| `allowUnreachableCode: false`, `allowUnusedLabels: false` | Erisilemez kod hata |
+
+Kural olarak:
+
 - `any` **yasak** — `unknown` + type guard kullan; `as any` ile susturma yok
+  (ESLint: `@typescript-eslint/no-explicit-any` + `no-unsafe-*` ailesi `error`)
 - `@ts-ignore` yasak; kacinilmazsa `@ts-expect-error` + tek satir gerekce yorumu
+  (ESLint: `ban-ts-comment` → `ts-expect-error: allow-with-description`)
 - Object shape'ler icin interface, union/intersection icin type
 - Export edilen fonksiyonlarda explicit return type
+  (ESLint: `@typescript-eslint/explicit-module-boundary-types`)
 - Durum/kind gibi sabit kumeler string union (`type ToolRisk = 0 | 1 | 2 | 3`), magic string yok
 - Harici veri (SDK response, DB satiri, tool argumani) tip *iddia* edilmez, schema ile **dogrulanir** (zod)
+
+## Lint & Bicimlendirme
+
+Tek otorite ayrimi: **anlam → ESLint, bicim → Prettier.** `eslint-config-prettier`
+flat config zincirinin en sonunda durur, bicim kurallarini kapatir; catisma yok
+(`npx eslint-config-prettier <dosya>` ile dogrulanir).
+
+- Config: `eslint.config.js` (flat config, ESM). `src/**/*.{ts,tsx}` icin
+  **tip-bilincli** lint acik (`projectService: true`) — `typescript-eslint`
+  `strictTypeChecked` + `stylisticTypeChecked` tabanli
+- React: `eslint-plugin-react-hooks` (flat `recommended-latest`) +
+  `eslint-plugin-react-refresh`
+- Ek sert kurallar: `no-floating-promises`, `no-misused-promises`,
+  `switch-exhaustiveness-check`, `consistent-type-imports`,
+  `no-empty` (bos `catch` dahil yasak — "sessiz yutma yok" kuralinin lint karsiligi)
+- Guvenlik siniri lint ile de zorlanir: `no-eval`, `no-implied-eval` ve renderer'da
+  `process` global'i `no-restricted-globals` ile yasak (env okuma config servisinden gecer)
+- Prettier: `.prettierrc.json` — `singleQuote: true`, `semi: true`,
+  `trailingComma: "all"`, `printWidth: 96`, `endOfLine: "lf"`
+- **Markdown Prettier disidir** (`.prettierignore`). Spec/ADR/task dosyalari elle
+  bicimlendirilir ve birden fazla agent ayni anda dokunur; otomatik yeniden
+  bicimlendirme anlamsiz diff uretir
+
+Komutlar: `pnpm lint` · `pnpm lint:fix` · `pnpm format` · `pnpm format:check`
+
+## Rust
+
+- Bicim: `rustfmt` varsayilan profili — `pnpm rust:fmt` (`cargo fmt --all -- --check`)
+- Lint: `pnpm rust:lint` (`cargo clippy --all-targets -- -D warnings`) — **uyari = hata**
+- Test: `pnpm rust:test` (`cargo test`)
+- Toolchain `rust-toolchain.toml` ile pinli; MSRV ayrica `src-tauri/Cargo.toml`
+  icinde `rust-version` alaninda tutulur. Yukseltme bilincli bir commit'tir
+  (`asuna-docs/DECISIONS.md`)
 
 ## File Naming
 - Tum dosyalar `kebab-case` — istisna yok
@@ -100,6 +158,15 @@ Kurallar:
   onay istegi, hata, aktif proje
 
 ## Testing
+
+> Kosum ortami ASU-003'te kuruldu: **Vitest** + **jsdom**, konfigurasyon
+> `vite.config.ts` icindeki `test` blogunda (ayri `vitest.config.ts` yok — tek
+> kaynak). Setup: `src/test-setup.ts` (jest-dom matcher'lari + her testten sonra
+> `cleanup()`). Komutlar: `pnpm test` · `pnpm test:watch` · `pnpm test:coverage`.
+
+- Test dosyalari kaynagin yaninda: `src/**/*.spec.ts(x)`
+- **Vitest `globals` KAPALI** — `describe` / `it` / `expect` acikca `vitest`'ten
+  import edilir; sihirli global yok
 - Happy path + error case minimum
 - Guvenlik/izin/path mantigi icin test **zorunlu**: path sandbox, traversal reddi, risk seviyesi
   karari, approval gate, secret redaksiyon

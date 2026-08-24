@@ -1,8 +1,8 @@
 import react from '@vitejs/plugin-react';
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 
 // Tauri CLI, mobil/uzak cihaz gelistirmede bu degiskeni set eder.
-const host = process.env.TAURI_DEV_HOST;
+const host = process.env['TAURI_DEV_HOST'];
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -16,7 +16,8 @@ export default defineConfig({
     port: 1420,
     strictPort: true,
     host: host ?? false,
-    hmr: host ? { protocol: 'ws', host, port: 1421 } : undefined,
+    // `exactOptionalPropertyTypes` acik: `hmr: undefined` yazmak yerine kosullu spread.
+    ...(host === undefined ? {} : { hmr: { protocol: 'ws' as const, host, port: 1421 } }),
     watch: {
       // src-tauri degisikliklerini Rust tarafi zaten izliyor; Vite'in izlemesi gereksiz reload uretir.
       ignored: ['**/src-tauri/**'],
@@ -35,4 +36,18 @@ export default defineConfig({
   // `PICOVOICE_ACCESS_KEY` yalnizca Tauri Rust tarafinda okunur; renderer bundle'ina
   // hicbir kosulda girmez (PROJECT.md Bolum 19, ASU-009).
   envPrefix: ['VITE_'],
+
+  test: {
+    // `globals: false` (varsayilan) — describe/it/expect acikca import edilir.
+    environment: 'jsdom',
+    setupFiles: ['./src/test-setup.ts'],
+    include: ['src/**/*.spec.{ts,tsx}'],
+    css: true,
+    coverage: {
+      provider: 'v8',
+      reportsDirectory: './coverage',
+      include: ['src/**/*.{ts,tsx}'],
+      exclude: ['src/**/*.spec.{ts,tsx}', 'src/test-setup.ts', 'src/vite-env.d.ts'],
+    },
+  },
 });

@@ -1,0 +1,25 @@
+# Turetilmis cikti
+dist/
+coverage/
+node_modules/
+src-tauri/target/
+src-tauri/gen/
+src-tauri/icons/
+pnpm-lock.yaml
+
+# TUM markdown Prettier disi.
+# Gerekce: spec, ADR ve task dosyalari (PROJECT.md, docs/, asuna-*/) elle
+# bicimlendirilen, birden fazla agent'in ayni anda dokundugu dokumanlar.
+# Prettier'in tablo/liste normalizasyonu bu dosyalarda anlamsiz diff uretiyor
+# ve baska agent'larin devam eden isini eziyor. Markdown'i bicimlendirmek
+# devops'un yetkisi degil.
+*.md
+**/*.md
+
+# Meta dizinler (md disi icerikleri de dahil)
+asuna-tasks/
+asuna-docs/
+asuna-config/
+asuna-plans/
+docs/
+.claude/
