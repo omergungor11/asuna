@@ -91,25 +91,44 @@ tek giris noktasi. Test: `src/asuna/prompts/core.v1.spec.ts` (14 test).
 
 ## ASU-013: `AsunaRealtimeService` (SDK Wrapper)
 
-**Scope**: backend | **Boyut**: L | **Durum**: PENDING | **Bagimlilik**: ASU-011, ASU-012
+**Scope**: backend | **Boyut**: L | **Durum**: COMPLETED (2026-08-24) | **Bagimlilik**: ASU-011, ASU-012
 
 ### Aciklama
 OpenAI Agents SDK detaylarini tek bir servis arkasina kapat. SDK API'si degistiginde sadece bu dosya
 degissin (PROJECT.md Bolum 24, Bolum 39/13).
 
 ### Acceptance Criteria
-- [ ] `AsunaRealtimeService` API'si: `connect()`, `disconnect()`, `interrupt()`, event subscription
-- [ ] `RealtimeAgent` + `RealtimeSession` yalnizca bu dosyada import ediliyor (lint kurali veya
-      testle dogrulanmis)
-- [ ] Model ID `ASUNA_REALTIME_MODEL` config'inden geliyor, hard-code yok
-- [ ] Ephemeral token ASU-011 command'i uzerinden aliniyor
-- [ ] Baglanti event'leri normalize edilmis Asuna event'lerine ceviriliyor (SDK tipi disari sizmiyor)
-- [ ] Yeniden baglanma denemesi sinirli ve gorunur (sonsuz retry yok)
-- [ ] Unit test: mock transport ile connect/disconnect yasam dongusu
+- [x] `AsunaRealtimeService` API'si: `connect()`, `disconnect()`, `interrupt()`, `subscribe()`,
+      `getState()` (`src/asuna/agent/realtime-service.ts`)
+- [x] `RealtimeAgent` + `RealtimeSession` yalnizca `realtime-service.ts` icinde import ediliyor —
+      `src/asuna/agent/sdk-import-boundary.spec.ts` `src/` agacini tarayip zorluyor; ayni test
+      SDK'nin `useInsecureApiKey` kacis kapisinin hicbir yerde kullanilmadigini da dogruluyor
+- [x] Model ID `FrontendConfig.realtimeModel`'den geliyor (`ASUNA_REALTIME_MODEL`), hard-code yok;
+      Rust'in bastigi token modeli farkliysa oturum acilmiyor (`model_mismatch`)
+- [x] Ephemeral token ASU-011 komutu uzerinden, `connect({ apiKey: () => ... })` **lazy** desenle
+      aliniyor; cache'lenmiyor, log'lanmiyor, `sk-` gorunumlu deger reddediliyor
+- [x] SDK event'leri normalize `AsunaRealtimeEvent`'lere ve `VoiceStateMachine` gecislerine
+      ceviriliyor; disariya SDK tipi cikmiyor (`realtime-events.ts`, `realtime-session-port.ts`)
+- [x] Yeniden baglanma sinirli (varsayilan 3 deneme) ve `reconnecting` event'i ile gorunur;
+      kalici hatalarda (gecersiz anahtar, kota, model erisimi, WebRTC yok) hic denenmiyor
+- [x] Unit test: sahte session port'u ile connect/disconnect yasam dongusu, event->durum
+      eslemeleri, token hatasi -> `ERROR` + durust mesaj, SDK import siniri
+      (`realtime-service.spec.ts` + `realtime-token.spec.ts` + `sdk-import-boundary.spec.ts`,
+      69 test)
 
 ### Notlar
-Bu servis Phase 5'te tool tanimlarini da alacak; API'yi simdiden `tools?: AsunaToolDefinition[]`
-alacak sekilde tasarla ama Phase 1'de bos gec. Fazla soyutlama yapma (PROJECT.md Bolum 39/16).
+Servis `tools?: AsunaToolDefinition[]` aliyor ama Phase 1'de bos geciliyor; tip `src/asuna/tools/types.ts`
+icinde yalnizca interface olarak duruyor (implementasyon Phase 5). Tool verilirse SDK adaptoru
+**acikca patlar** — sessizce dusurulmuyor.
+
+Oturum ayarlari voice.md Bolum 9'daki iskeletle birebir: `transport: 'webrtc'` acik,
+`turnDetection: semantic_vad/medium`, `noiseReduction: near_field`, `historyStoreAudio: false`,
+`outputModalities: ['audio']`, `transcription` yalnizca `ASUNA_TRANSCRIPT_STORAGE` acikken.
+
+Tasarim karari: SDK sinyali mevcut duruma uymuyorsa (`LISTENING` -> `ASSISTANT_SPEAKING` gibi)
+gecis durum makinesine gonderilmiyor — dev'deki `throw` politikasi sesli oturumu dusururdu — ama
+yutulmuyor da: `unexpected_signal` event'i yayinlaniyor (ASU-019 log'una baglanir).
+`session.usage` disconnect'te `usage` event'i olarak raporlaniyor (ASU-020 girdisi).
 
 ---
 

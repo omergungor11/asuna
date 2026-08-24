@@ -69,7 +69,7 @@
 | ASU-010 | `docs/architecture` + ADR dizini + README local run | 0 | S | docs | COMPLETED |
 | ASU-011 | Ephemeral Realtime token minting (Rust) | 1 | L | backend | COMPLETED |
 | ASU-012 | Asuna core prompt / instructions dosyasi | 1 | S | backend | COMPLETED |
-| ASU-013 | `AsunaRealtimeService` (SDK wrapper) | 1 | L | backend | PENDING |
+| ASU-013 | `AsunaRealtimeService` (SDK wrapper) | 1 | L | backend | COMPLETED |
 | ASU-014 | Voice state machine | 1 | M | frontend | COMPLETED |
 | ASU-015 | "Talk to Asuna" gecici butonu + baglanti akisi | 1 | M | frontend | PENDING |
 | ASU-016 | Iki yonlu ses + interruption (barge-in) | 1 | M | frontend | PENDING |
