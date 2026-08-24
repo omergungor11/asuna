@@ -9,15 +9,15 @@
 | Phase | Ad | Total | Done | In Progress | Review | Pending | Blocked |
 |-------|----|-------|------|-------------|--------|---------|---------|
 | 0 | Arastirma + Scaffold | 11 | 11 | 0 | 0 | 0 | 0 |
-| 1 | Realtime Voice (dikey dilim) | 10 | 9 | 0 | 0 | 1 | 0 |
+| 1 | Realtime Voice (dikey dilim) | 11 | 10 | 0 | 0 | 1 | 0 |
 | 2 | Wake Word | 8 | 0 | 0 | 0 | 8 | 0 |
 | 3 | Memory | 10 | 0 | 0 | 0 | 10 | 0 |
 | 4 | Project Context | 8 | 0 | 0 | 0 | 8 | 0 |
 | 5 | One Useful Action (Tools) | 9 | 0 | 0 | 0 | 9 | 0 |
 | 6 | Focus Recovery (MVP) | 8 | 0 | 0 | 0 | 8 | 0 |
-| **Total** | | **64** | **20** | **0** | **0** | **44** | **0** |
+| **Total** | | **65** | **21** | **0** | **0** | **44** | **0** |
 
-**Progress**: 20/64 (31%)
+**Progress**: 21/65 (32%)
 
 > ASU-008b spike tamamlandi (2026-08-24): motor/lisans/CPU/bundle dogrulandi, ADR-004 accepted
 > (kapsami daraltilmis). ACIK: model+ifade secimi — gigaspeech-3.3M "Hey Asuna"yi tasimiyor (R2).
@@ -30,7 +30,7 @@
 
 | Milestone | Hedef | Phase'ler | Kanit (nasil dogrulanir) | Durum |
 |-----------|-------|-----------|--------------------------|-------|
-| M1 | **Sesli konusma calisiyor** — butona bas, Turkce konus, Asuna dusuk gecikmeyle cevap versin, sozunu kesebil, transcript'i gor, temiz kapat | 0-1 | ASU-020 (PROJECT.md Bolum 35, 8 madde) | PENDING |
+| M1 | **Sesli konusma calisiyor** — butona bas, Turkce konus, Asuna cevap versin, sozunu kesebil, transcript gor, temiz kapat | 0-1 | ASU-020 | **DONE (2026-08-24)** — canli test: Turkce anlasildi, barge-in sorunsuz, temiz kapanis. Not: gecikme iyilestirmesi ASU-064 |
 | M2 | **"Hey Asuna" ile uyaniyor** — idle'da bulut'a ses gitmiyor, wake word ile oturum aciliyor, timeout ile kapaniyor | 2 | ASU-028 | PENDING |
 | M3 | **Hatiriyor** — oturum kapanir, uygulama yeniden baslar, onceki oturumun karari hatirlanir | 3 | ASU-038 | PENDING |
 | M4 | **Projeleri taniyor + ilk tool** — hangi projede oldugunu soyleyebiliyor, onayli tool calistiriyor, audit'e yaziyor | 4-5 | ASU-046 + ASU-055 | PENDING |
@@ -76,7 +76,7 @@
 | ASU-017 | Canli transcript UI | 1 | M | frontend | COMPLETED |
 | ASU-018 | Temiz disconnect + kaynak temizligi | 1 | M | frontend | COMPLETED |
 | ASU-019 | Hata yonetimi + observability (state transition log) | 1 | M | backend | COMPLETED |
-| ASU-020 | **M1 kabul testi** — PROJECT.md Bolum 35, 8 madde | 1 | M | test | PENDING |
+| ASU-020 | **M1 kabul testi** — PROJECT.md Bolum 35, 8 madde | 1 | M | test | COMPLETED |
 | ASU-021 | `WakeWordProvider` interface + fake provider | 2 | M | backend | PENDING |
 | ASU-022 | `SherpaKwsProvider` (sherpa-onnx KWS, "Hey Asuna") | 2 | L | backend | PENDING |
 | ASU-023 | IDLE_WAKE_WORD -> WAKING -> CONNECTING gecisi | 2 | M | frontend | PENDING |
@@ -120,6 +120,7 @@
 | ASU-061 | Halusinasyon korumasi (state yoksa uydurma) | 6 | M | test | PENDING |
 | ASU-062 | **M5 / MVP kabul checklist** — PROJECT.md Bolum 33 | 6 | L | test | PENDING |
 | ASU-063 | README + RUNBOOK + v0.1.0 release | 6 | M | docs | PENDING |
+| ASU-064 | Realtime gecikme ayari — turn detection konfigurasyonu + olcum | 1 | S | backend | PENDING |
 
 ---
 

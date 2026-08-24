@@ -52,7 +52,7 @@
         "base-uri": "'self'",
         "form-action": "'none'"
       },
-      "freezePrototype": true,
+      "freezePrototype": false,
       "assetProtocol": {
         "enable": false,
         "scope": []

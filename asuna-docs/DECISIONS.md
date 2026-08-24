@@ -42,6 +42,12 @@ Katman mimarileri: `docs/architecture/{voice,memory,tools,security}.md`.
 
 ### Phase 1 uygulama kararlari (ADR'siz, kayit icin)
 
+- **`freezePrototype: false`** (ASU-020 canli test, 2026-08-24): scaffold'daki `true` degeri
+  WKWebView'de beyaz ekrana yol acti — zod v3 compat katmanindaki `errorUtil.toString = ...`
+  atamasi, donmus `Object.prototype.toString` yuzunden JS "override mistake" kuralina takilip
+  `TypeError: Attempted to assign to readonly property` firlatiyor (yalniz WebKit strict mode;
+  Chromium'da ayar yok). Prototype-pollution savunmasi kaybi kabul edildi — CSP + capability
+  ACL + deny-by-default manifest asil savunma hatti olarak kaliyor.
 - **MSRV 1.82 → 1.85** (ASU-011, 2026-08-24): `reqwest =0.13.4` (`rust-version = 1.85`) icin.
   Toolchain zaten 1.96.1 pinli — pratik etki yok, kayit icin. reqwest minimal feature setiyle
   (`rustls`, `json`, `system-proxy`; http2/cookies/blocking kapali) ve `redirect: none` ile

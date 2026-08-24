@@ -354,7 +354,7 @@ Realtime servisi entegrasyonu (ASU-013) bu API'yi `logger.child('realtime')` +
 
 ## ASU-020: M1 Kabul Testi (PROJECT.md Bolum 35)
 
-**Scope**: test | **Boyut**: M | **Durum**: PENDING | **Bagimlilik**: ASU-011..ASU-019
+**Scope**: test | **Boyut**: M | **Durum**: COMPLETED (2026-08-24, canli test — kullanici dogruladi) | **Bagimlilik**: ASU-011..ASU-019
 
 ### Aciklama
 Phase 1'in "done" tanimi PROJECT.md Bolum 35'teki 8 maddedir. Hepsi gecmeden Phase 2'ye gecilmez.
@@ -375,3 +375,28 @@ Phase 1'in "done" tanimi PROJECT.md Bolum 35'teki 8 maddedir. Hepsi gecmeden Pha
 ### Notlar
 Bu test **manuel + Turkce** yapilir. Ingilizce ile gecip Turkce ile takilirsa milestone gecmemis
 sayilir (R8).
+
+---
+
+## ASU-064: Realtime Gecikme Ayari (M1 sonrasi iyilestirme)
+
+**Scope**: backend | **Boyut**: S | **Durum**: PENDING | **Bagimlilik**: ASU-020
+
+### Aciklama
+M1 canli testinde kullanici fark edilir gecikme raporladi. Turn-detection parametreleri
+konfigurabilir yapilip varsayilanlar hizlandirilacak; olcum karsilastirmali kaydedilecek.
+
+### Acceptance Criteria
+- [ ] `ASUNA_VAD_EAGERNESS` env degiskeni (auto|low|medium|high; varsayilan **high**) —
+      Rust config + frontend whitelist + `.env.example` + realtime-service baglantisi
+- [ ] `ASUNA_TURN_DETECTION` (semantic_vad|server_vad) ve server_vad icin
+      `ASUNA_VAD_SILENCE_MS` (varsayilan 400) opsiyonel destegi
+- [ ] Gecikme olcumu (TurnLatencyTracker) log satirinda onceki/sonraki karsilastirmaya uygun
+- [ ] Tum gate'ler yesil; testler guncel
+- [ ] Kod disi kaldiraç dokumante: Cloudflare WARP kapali/acik karsilastirma notu
+      (ASU-007: WARP tum trafigi tunelliyor — WebRTC ses gecikmesine dogrudan eklenir)
+
+### Notlar
+Eagerness "high" = model "konusma bitti" kararini daha erken verir; Turkcede erken kesme
+yaparsa "medium"a donulur (env ile ayar, rebuild yok). Model degisikligi (mini vs 2.1) ayri
+bir kaldiraç — ayni env uzerinden A/B yapilabilir.
