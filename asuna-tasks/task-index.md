@@ -9,15 +9,15 @@
 | Phase | Ad | Total | Done | In Progress | Review | Pending | Blocked |
 |-------|----|-------|------|-------------|--------|---------|---------|
 | 0 | Arastirma + Scaffold | 11 | 11 | 0 | 0 | 0 | 0 |
-| 1 | Realtime Voice (dikey dilim) | 10 | 8 | 0 | 0 | 2 | 0 |
+| 1 | Realtime Voice (dikey dilim) | 10 | 9 | 0 | 0 | 1 | 0 |
 | 2 | Wake Word | 8 | 0 | 0 | 0 | 8 | 0 |
 | 3 | Memory | 10 | 0 | 0 | 0 | 10 | 0 |
 | 4 | Project Context | 8 | 0 | 0 | 0 | 8 | 0 |
 | 5 | One Useful Action (Tools) | 9 | 0 | 0 | 0 | 9 | 0 |
 | 6 | Focus Recovery (MVP) | 8 | 0 | 0 | 0 | 8 | 0 |
-| **Total** | | **64** | **19** | **0** | **0** | **45** | **0** |
+| **Total** | | **64** | **20** | **0** | **0** | **44** | **0** |
 
-**Progress**: 19/64 (30%)
+**Progress**: 20/64 (31%)
 
 > ASU-008b spike tamamlandi (2026-08-24): motor/lisans/CPU/bundle dogrulandi, ADR-004 accepted
 > (kapsami daraltilmis). ACIK: model+ifade secimi — gigaspeech-3.3M "Hey Asuna"yi tasimiyor (R2).
