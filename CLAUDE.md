@@ -18,7 +18,7 @@ butonu merkezli bir arayüz kurma. Ses birincildir; UI'nin işi sistemi güvenil
 (listening / connected / speaking / tool usage / approval / error / current project). Voice loop
 çalışmadan büyük dashboard inşa etme.
 
-- **GitHub**: _(henüz yok — Phase 0'da belirlenecek)_
+- **GitHub**: https://github.com/omergungor11/asuna (public, MIT)
 
 ## Slash Commandlar
 
