@@ -14,12 +14,13 @@ import type { AsunaRealtimeEvent, AsunaRealtimeEventListener } from './realtime-
 import {
   describeRealtimeFailure,
   useAsunaSession,
+  type AsunaSession,
   type AsunaSessionPort,
   type UseAsunaSessionOptions,
 } from './use-asuna-session';
 import { MicrophoneAccessError, type MicrophoneProbe } from '../audio/microphone-access';
 import type { FrontendConfig } from '../config/frontend-config';
-import { AsunaLogger } from '../observability';
+import { AsunaLogger, type LogEntry } from '../observability';
 import { VoiceStateMachine } from '../state/voice-state-machine';
 
 const CONFIG: FrontendConfig = {
@@ -48,6 +49,8 @@ interface HarnessOptions {
   readonly probe?: () => Promise<MicrophoneProbe>;
   readonly loadConfig?: () => Promise<FrontendConfig>;
   readonly logger?: AsunaLogger;
+  /** Gecikme olcumu icin deterministik saat. */
+  readonly now?: () => number;
 }
 
 interface Harness {
@@ -67,6 +70,7 @@ function createHarness(harnessOptions: HarnessOptions = {}): Harness {
   const options: UseAsunaSessionOptions = {
     stateMachine: machine,
     logger: harnessOptions.logger ?? new AsunaLogger(),
+    ...(harnessOptions.now === undefined ? {} : { now: harnessOptions.now }),
     loadConfig:
       harnessOptions.loadConfig ?? ((): Promise<FrontendConfig> => Promise.resolve(CONFIG)),
     probeMicrophone:
@@ -370,5 +374,160 @@ describe('describeRealtimeFailure', () => {
     expect(described.kind).toBe('realtime_connect_failed');
     expect(described.message).toBe('Realtime oturumu acilamadi: SDP reddedildi');
     expect(described.retryable).toBe(true);
+  });
+});
+
+describe('useAsunaSession — iki yonlu ses ve barge-in (ASU-016)', () => {
+  /** Baglantiyi kurup sahte servisi doner. */
+  async function connected(harness: Harness): Promise<{
+    readonly session: () => AsunaSession;
+    readonly service: FakeService;
+  }> {
+    const { result } = renderHook(() => useAsunaSession(harness.options));
+    await flush(() => {
+      result.current.start();
+    });
+    return { session: (): AsunaSession => result.current, service: harness.service() };
+  }
+
+  it('konusma durumlarini yansitiyor: dusunuyor -> konusuyor -> dinliyor', async () => {
+    const harness = createHarness();
+    const { session, service } = await connected(harness);
+
+    act(() => {
+      harness.machine.transition('ASSISTANT_THINKING', 'ASSISTANT_RESPONSE_STARTED');
+      service.emit({ type: 'agent_thinking' });
+    });
+    expect(session().state).toBe('ASSISTANT_THINKING');
+
+    act(() => {
+      harness.machine.transition('ASSISTANT_SPEAKING', 'ASSISTANT_AUDIO_STARTED');
+      service.emit({ type: 'agent_audio_started' });
+    });
+    expect(session().state).toBe('ASSISTANT_SPEAKING');
+
+    act(() => {
+      harness.machine.transition('LISTENING', 'ASSISTANT_RESPONSE_COMPLETED');
+      service.emit({ type: 'agent_audio_stopped' });
+    });
+    expect(session().state).toBe('LISTENING');
+  });
+
+  it('barge-in: soz kesilince gorsel tepki veriyor ve USER_SPEAKING oluyor', async () => {
+    const harness = createHarness();
+    const { session, service } = await connected(harness);
+
+    act(() => {
+      harness.machine.transition('ASSISTANT_THINKING', 'ASSISTANT_RESPONSE_STARTED');
+      harness.machine.transition('ASSISTANT_SPEAKING', 'ASSISTANT_AUDIO_STARTED');
+      service.emit({ type: 'agent_audio_started' });
+    });
+    expect(session().bargeIn).toBe(false);
+
+    act(() => {
+      harness.machine.transition('USER_SPEAKING', 'USER_INTERRUPTED');
+      service.emit({ type: 'agent_interrupted' });
+    });
+
+    expect(session().state).toBe('USER_SPEAKING');
+    expect(session().bargeIn).toBe(true);
+
+    // Yeni cevap baslayinca isaret kalkar: kesme eski cevabin devami degil.
+    act(() => {
+      harness.machine.transition('ASSISTANT_THINKING', 'ASSISTANT_RESPONSE_STARTED');
+      harness.machine.transition('ASSISTANT_SPEAKING', 'ASSISTANT_AUDIO_STARTED');
+      service.emit({ type: 'agent_audio_started' });
+    });
+    expect(session().bargeIn).toBe(false);
+  });
+
+  it('konusma sonu -> ilk ses gecikmesini olcup logluyor', async () => {
+    const entries: LogEntry[] = [];
+    let clock = 0;
+    const harness = createHarness({
+      logger: new AsunaLogger({
+        level: 'debug',
+        sinks: [
+          (entry): void => {
+            entries.push(entry);
+          },
+        ],
+      }),
+      now: (): number => clock,
+    });
+    const { session, service } = await connected(harness);
+
+    act(() => {
+      clock = 1_000;
+      service.emit({ type: 'agent_thinking' });
+      clock = 1_480;
+      service.emit({ type: 'agent_audio_started' });
+    });
+
+    expect(session().lastLatencyMs).toBe(480);
+    expect(entries.some((entry) => entry.message.includes('Yanit gecikmesi: 480 ms'))).toBe(
+      true,
+    );
+  });
+
+  it('kullanici transkripti kesinlestiginde olcum oradan basliyor', async () => {
+    let clock = 0;
+    const harness = createHarness({ now: (): number => clock });
+    const { session, service } = await connected(harness);
+
+    act(() => {
+      clock = 2_000;
+      service.emit({
+        type: 'transcript',
+        entry: { itemId: 'u1', role: 'user', text: 'merhaba', status: 'completed' },
+      });
+      clock = 2_200;
+      service.emit({ type: 'agent_thinking' });
+      clock = 2_600;
+      service.emit({ type: 'agent_audio_started' });
+    });
+
+    expect(session().lastLatencyMs).toBe(600);
+  });
+
+  it('kesilen turun olcumu sonraki tura tasinmiyor', async () => {
+    let clock = 0;
+    const harness = createHarness({ now: (): number => clock });
+    const { session, service } = await connected(harness);
+
+    act(() => {
+      clock = 100;
+      service.emit({ type: 'agent_thinking' });
+      clock = 200;
+      service.emit({ type: 'agent_interrupted' });
+      clock = 900;
+      service.emit({ type: 'agent_audio_started' });
+    });
+
+    expect(session().lastLatencyMs).toBeNull();
+  });
+
+  it('echo cancellation dogrulanamazsa self-interrupt riskini uyariyor', async () => {
+    const entries: LogEntry[] = [];
+    const harness = createHarness({
+      logger: new AsunaLogger({
+        level: 'debug',
+        sinks: [
+          (entry): void => {
+            entries.push(entry);
+          },
+        ],
+      }),
+      probe: (): Promise<MicrophoneProbe> =>
+        Promise.resolve({ echoCancellation: false, noiseSuppression: true }),
+    });
+    const { result } = renderHook(() => useAsunaSession(harness.options));
+
+    await flush(() => {
+      result.current.start();
+    });
+
+    const warning = entries.find((entry) => entry.level === 'warn');
+    expect(warning?.message).toContain('Echo cancellation dogrulanamadi');
   });
 });

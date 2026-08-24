@@ -121,6 +121,11 @@ body,
   opacity: 0.75;
 }
 
+.asuna-panel__bargein {
+  margin: 0;
+  opacity: 0.8;
+}
+
 .asuna-panel__facts {
   display: flex;
   gap: 16px;

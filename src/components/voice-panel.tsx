@@ -44,6 +44,11 @@ export function VoicePanel({ options }: VoicePanelProps): React.JSX.Element {
 
       {session.error !== null && <ErrorNotice error={session.error} />}
 
+      {/* Barge-in gorsel tepkisi (ASU-016): kullanici "duydu mu?" diye tekrarlamasin. */}
+      {session.bargeIn && (
+        <p className="asuna-panel__bargein">Sözünü kestin — Asuna sustu, seni dinliyor.</p>
+      )}
+
       <dl className="asuna-panel__facts">
         <div className="asuna-panel__fact">
           <dt>Model</dt>
@@ -52,6 +57,12 @@ export function VoicePanel({ options }: VoicePanelProps): React.JSX.Element {
         <div className="asuna-panel__fact">
           <dt>Aktif araç</dt>
           <dd>{session.activeTool ?? '—'}</dd>
+        </div>
+        <div className="asuna-panel__fact">
+          <dt>Gecikme</dt>
+          <dd>
+            {session.lastLatencyMs === null ? '—' : `${session.lastLatencyMs.toString()} ms`}
+          </dd>
         </div>
       </dl>
     </section>

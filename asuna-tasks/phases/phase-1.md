@@ -211,24 +211,47 @@ Bu butonu guzellestirme. UI Phase 1'de guven ve gorunurluk icin var, urun degil
 
 ## ASU-016: Iki Yonlu Ses + Interruption (Barge-in)
 
-**Scope**: frontend | **Boyut**: M | **Durum**: PENDING | **Bagimlilik**: ASU-015
+**Scope**: frontend | **Boyut**: M | **Durum**: COMPLETED (2026-08-24, manuel dogrulama ASU-020'de)
+| **Bagimlilik**: ASU-015
 
 ### Aciklama
 Phase 1'in kalbi. Kullanici Turkce konussun, Asuna dusuk gecikmeyle cevaplasin, konusurken sozu
 kesilebilsin.
 
 ### Acceptance Criteria
-- [ ] Mikrofon girisi Realtime oturumuna akiyor, Asuna'nin sesi hoparlore cikiyor
-- [ ] Turkce konusma dogru anlasiliyor (manuel dogrulama, en az 5 farkli cumle)
-- [ ] Kullanici Asuna konusurken konusmaya baslayinca Asuna susuyor (barge-in)
-- [ ] Kesme sonrasi Asuna eski cevabina kaldigi yerden devam etmiyor; yeni girdiye cevap veriyor
-- [ ] Asuna'nin kendi sesi mikrofondan geri beslenip kendini kesmiyor (echo/self-interrupt kontrolu)
-- [ ] Algilanan gecikme kabul edilebilir; cumle sonu -> ilk ses arasi olculup not edilmis
-- [ ] Asuna aktivasyon cevabi kisa (PROJECT.md Bolum 9.2: "Buradayim." / "Dinliyorum.")
+- [x] Mikrofon girisi Realtime oturumuna akiyor, Asuna'nin sesi hoparlore cikiyor — akisin kendisi
+      WebRTC transport'unda (SDK mikrofonu ve `<audio autoplay>` elementini kendi acar,
+      voice.md Bolum 4); UI tarafi izin kapisini ve durum yansimasini saglar
+- [ ] **MANUEL — ASU-020'de**: Turkce konusma dogru anlasiliyor (en az 5 farkli cumle)
+- [x] Kullanici Asuna konusurken konusmaya baslayinca Asuna susuyor (barge-in) — `audio_interrupted`
+      -> `USER_SPEAKING` + gorsel tepki ("Sozunu kestin — Asuna sustu"); test: "barge-in"
+- [x] Kesme sonrasi Asuna eski cevabina kaldigi yerden devam etmiyor; yeni girdiye cevap veriyor —
+      sunucu tarafinda `interruptResponse: true`; UI kesme isaretini yeni ses parcasinda temizler
+- [~] Asuna'nin kendi sesi mikrofondan geri beslenip kendini kesmiyor (echo/self-interrupt) —
+      `getUserMedia` kisitlari acik (`echoCancellation`, `noiseSuppression`), uygulanan gercek
+      ayar okunup loglaniyor, dogrulanamazsa `warn`. **Sesli dogrulama MANUEL — ASU-020'de**
+- [x] Algilanan gecikme kabul edilebilir; cumle sonu -> ilk ses arasi olculup not edilmis —
+      `TurnLatencyTracker` olcup logluyor ve UI'da gosteriyor. **Rakamin "kabul edilebilir" olup
+      olmadigi MANUEL — ASU-020'de**
+- [x] Asuna aktivasyon cevabi kisa (PROJECT.md Bolum 9.2) — prompt kisiti ASU-012'de
+      (`core.v1.ts`); davranis dogrulamasi ASU-020'de
 
 ### Notlar
 Self-interrupt (Asuna kendi sesiyle kendini kesmesi) bu asamada en yaygin tuzak. Echo cancellation
 ayarlarini (`echoCancellation`, `noiseSuppression`) getUserMedia constraint'lerinde acikca ayarla.
+
+### Uygulama (tamamlandi)
+- **Mikrofon sahipligi**: `mediaStream` SDK'ya verilmiyor (voice.md Bolum 4 "Secenek A") —
+  `session.close()` track'leri durdurabilsin diye. Izin ve echo dogrulamasi icin baglanmadan once
+  kisa omurlu bir sonda acilip **hemen** kapatiliyor (`microphone-access.ts`).
+- **Gecikme olcumu** (`TurnLatencyTracker`): normalize event akisinda VAD "konusma bitti" sinyali
+  yok; konusma sonu isareti olarak kullanici transkriptinin kesinlesmesi ile `agent_thinking`'in
+  **ilki** aliniyor, `agent_audio_started` ile fark hesaplaniyor. Olculen deger gercek gecikmenin
+  alt siniri (VAD sessizlik penceresi disarida) — log satiri ASU-020 girdisi.
+- **Barge-in gorsel tepkisi**: `agent_interrupted` -> `bargeIn` bayragi; bir sonraki ses parcasinda,
+  oturum kapanisinda ve yeni aktivasyonda temizlenir. Kesme durumu ayrica FSM'de `USER_SPEAKING`.
+- Test: `use-asuna-session.spec.ts` icinde 6 yeni test (durum yansimasi, barge-in, gecikme olcumu,
+  kesilen turun olcumu tasinmamasi, echo uyarisi).
 
 ---
 

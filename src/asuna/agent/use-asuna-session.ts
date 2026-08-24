@@ -11,6 +11,14 @@
  * - Baglanti akisi: mikrofon izni -> config -> `connect()` (token mint SDK'nin lazy
  *   `apiKey` cagrisinda, servisin icinde olur) -> `LISTENING`.
  * - Tum bagimliliklar enjekte edilebilir; testler ne aga cikar ne mikrofona dokunur.
+ *
+ * # Ses yolu (ASU-016)
+ *
+ * Iki yonlu sesin kendisi burada **kurulmaz**: mikrofon track'ini ve `<audio autoplay>`
+ * cikis elementini WebRTC transport'u (SDK) kendisi acar (voice.md Bolum 4). Hook'un isi
+ * o akisi gorunur kilmak: konusma durumu, barge-in tepkisi ve "konusma sonu -> ilk ses"
+ * gecikmesi. Mikrofon izni ve echo cancellation dogrulamasi baglanmadan once
+ * `probeMicrophoneAccess()` ile yapilir.
  */
 
 import {
@@ -136,6 +144,43 @@ export function describeActivationError(error: unknown): UserFacingError {
 }
 
 // ---------------------------------------------------------------------------
+// Gecikme olcumu (ASU-016 / ASU-020 girdisi)
+// ---------------------------------------------------------------------------
+
+/**
+ * "Konusma sonu -> ilk ses" suresini olcer.
+ *
+ * DURUSTLUK NOTU: normalize event akisinda VAD'in "konusma bitti" sinyali **yok**
+ * (`realtime-events.ts`). Konusma sonuna en yakin gozlemlenebilir iki isaret var:
+ * kullanici transkriptinin kesinlesmesi ve modelin yanit uretmeye baslamasi
+ * (`agent_thinking`). Hangisi once gelirse konusma sonu kabul edilir; olculen sure
+ * bu yuzden gercek gecikmenin **alt siniridir** (VAD sessizlik penceresi disarida kalir).
+ * ASU-020'de canli olcumle karsilastirilacak.
+ */
+export class TurnLatencyTracker {
+  private speechEndAt: number | null = null;
+
+  /** Ilk isaret kazanir; ayni turda gelen ikinci isaret olcumu bozmaz. */
+  public markSpeechEnd(at: number): void {
+    this.speechEndAt ??= at;
+  }
+
+  /** @returns olculen gecikme (ms) ya da olcum baslamadiysa `null`. */
+  public takeLatency(at: number): number | null {
+    const start = this.speechEndAt;
+    if (start === null) {
+      return null;
+    }
+    this.speechEndAt = null;
+    return at - start;
+  }
+
+  public reset(): void {
+    this.speechEndAt = null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Event -> UI olgulari
 // ---------------------------------------------------------------------------
 
@@ -147,6 +192,13 @@ interface SessionFacts {
   /** Phase 5'te dolacak; Phase 1'de tool yok ama gorunurluk yolu hazir. */
   readonly activeTool: string | null;
   readonly error: UserFacingError | null;
+  /**
+   * Kullanici Asuna'nin sozunu kesti ve Asuna sustu (ASU-016 barge-in).
+   * Bir sonraki ses parcasi baslayana ya da oturum kapanana kadar gorunur kalir.
+   */
+  readonly bargeIn: boolean;
+  /** Son turun "konusma sonu -> ilk ses" suresi (ms). */
+  readonly lastLatencyMs: number | null;
 }
 
 const INITIAL_FACTS: SessionFacts = {
@@ -154,11 +206,14 @@ const INITIAL_FACTS: SessionFacts = {
   model: null,
   activeTool: null,
   error: null,
+  bargeIn: false,
+  lastLatencyMs: null,
 };
 
 type SessionAction =
   | { readonly type: 'activation_started' }
   | { readonly type: 'activation_failed'; readonly error: UserFacingError }
+  | { readonly type: 'latency_measured'; readonly latencyMs: number }
   | { readonly type: 'realtime_event'; readonly event: AsunaRealtimeEvent };
 
 function reduceRealtimeEvent(state: SessionFacts, event: AsunaRealtimeEvent): SessionFacts {
@@ -167,14 +222,14 @@ function reduceRealtimeEvent(state: SessionFacts, event: AsunaRealtimeEvent): Se
       return { ...state, connected: false };
 
     case 'connected':
-      return { ...state, connected: true, model: event.model, error: null };
+      return { ...state, connected: true, model: event.model, error: null, bargeIn: false };
 
     case 'reconnecting':
       // Sessiz retry yok: kullanici neden beklettigimizi gorsun.
       return { ...state, error: describeRealtimeFailure(event.error) };
 
     case 'disconnected':
-      return { ...state, connected: false, activeTool: null };
+      return { ...state, connected: false, activeTool: null, bargeIn: false };
 
     case 'error':
       return { ...state, error: describeRealtimeFailure(event.error) };
@@ -186,11 +241,18 @@ function reduceRealtimeEvent(state: SessionFacts, event: AsunaRealtimeEvent): Se
     case 'tool_call_completed':
       return { ...state, activeTool: null };
 
+    // Barge-in: kullanici sozu kesti, sunucu uretilen sesi durdurdu. Gorsel tepki
+    // olmazsa kullanici "duydu mu?" diye tekrar konusur (ASU-016).
+    case 'agent_interrupted':
+      return { ...state, bargeIn: true };
+
+    // Yeni ses parcasi basladi: kesme isareti kalkar.
+    case 'agent_audio_started':
+      return { ...state, bargeIn: false };
+
     // Durum gecisleri FSM'den okunuyor; bu event'ler UI olgusu tasimiyor.
     case 'agent_thinking':
-    case 'agent_audio_started':
     case 'agent_audio_stopped':
-    case 'agent_interrupted':
     case 'turn_ended':
     case 'transcript':
     case 'usage':
@@ -202,9 +264,11 @@ function reduceRealtimeEvent(state: SessionFacts, event: AsunaRealtimeEvent): Se
 function reduceSession(state: SessionFacts, action: SessionAction): SessionFacts {
   switch (action.type) {
     case 'activation_started':
-      return { ...state, error: null, activeTool: null };
+      return { ...state, error: null, activeTool: null, bargeIn: false };
     case 'activation_failed':
       return { ...state, connected: false, error: action.error };
+    case 'latency_measured':
+      return { ...state, lastLatencyMs: action.latencyMs };
     case 'realtime_event':
       return reduceRealtimeEvent(state, action.event);
   }
@@ -220,6 +284,8 @@ export interface UseAsunaSessionOptions {
   readonly probeMicrophone?: () => Promise<MicrophoneProbe>;
   readonly stateMachine?: VoiceStateMachine;
   readonly logger?: AsunaLogger;
+  /** Gecikme olcumunun zaman kaynagi — testte deterministik kilmak icin. */
+  readonly now?: () => number;
 }
 
 export interface AsunaSession {
@@ -238,6 +304,10 @@ export interface AsunaSession {
   readonly model: string | null;
   readonly activeTool: string | null;
   readonly error: UserFacingError | null;
+  /** Kullanici Asuna'nin sozunu kesti — gorsel tepki icin (ASU-016). */
+  readonly bargeIn: boolean;
+  /** Son turun olculen yanit gecikmesi (ms); yoksa `null`. */
+  readonly lastLatencyMs: number | null;
   /** "Talk to Asuna" — izin -> config -> connect. Hata icerde yakalanir. */
   readonly start: () => void;
   /** "Stop" — oturumu kapatir. */
@@ -250,6 +320,8 @@ interface ResolvedDeps {
   readonly probeMicrophone: () => Promise<MicrophoneProbe>;
   readonly machine: VoiceStateMachine;
   readonly log: AsunaLogger;
+  readonly now: () => number;
+  readonly latency: TurnLatencyTracker;
 }
 
 function defaultCreateService(context: AsunaSessionContext): AsunaSessionPort {
@@ -269,6 +341,8 @@ function resolveDeps(options: UseAsunaSessionOptions): ResolvedDeps {
     // Log'lu makine: gecisler ASU-019 formatinda kendiliginden akar.
     machine: options.stateMachine ?? createLoggedVoiceStateMachine(),
     log: log.child('voice-session'),
+    now: options.now ?? ((): number => Date.now()),
+    latency: new TurnLatencyTracker(),
   };
 }
 
@@ -310,6 +384,62 @@ export function useAsunaSession(options: UseAsunaSessionOptions = {}): AsunaSess
     [deps.machine],
   );
 
+  /**
+   * Gecikme olcumu (ASU-016 / ASU-020).
+   *
+   * Reducer saf kalsin diye zaman damgalari burada islenir; olculen sure hem log'a
+   * hem UI'ya duser. Log satiri ASU-020 maliyet/gecikme notunun kaynagidir.
+   */
+  const trackLatency = useCallback(
+    (event: AsunaRealtimeEvent): void => {
+      const { latency, now, log } = deps;
+
+      switch (event.type) {
+        case 'agent_thinking':
+          latency.markSpeechEnd(now());
+          return;
+
+        case 'transcript':
+          if (event.entry.role === 'user' && event.entry.status === 'completed') {
+            latency.markSpeechEnd(now());
+          }
+          return;
+
+        case 'agent_audio_started': {
+          const latencyMs = latency.takeLatency(now());
+          if (latencyMs === null) {
+            return;
+          }
+          log.info(`Yanit gecikmesi: ${latencyMs.toString()} ms (konusma sonu -> ilk ses)`, {
+            latencyMs,
+          });
+          dispatch({ type: 'latency_measured', latencyMs });
+          return;
+        }
+
+        // Kesilen ya da biten turun olcumu tasinmaz — sonraki tur temiz baslar.
+        case 'agent_interrupted':
+        case 'agent_audio_stopped':
+        case 'turn_ended':
+        case 'disconnected':
+          latency.reset();
+          return;
+
+        case 'connecting':
+        case 'connected':
+        case 'reconnecting':
+        case 'usage':
+        case 'error':
+        case 'tool_call_started':
+        case 'tool_call_completed':
+        case 'tool_approval_requested':
+        case 'unexpected_signal':
+          return;
+      }
+    },
+    [deps],
+  );
+
   const handleEvent = useCallback(
     (event: AsunaRealtimeEvent): void => {
       if (event.type === 'connected') {
@@ -317,9 +447,10 @@ export function useAsunaSession(options: UseAsunaSessionOptions = {}): AsunaSess
       } else if (event.type === 'disconnected') {
         connectedRef.current = false;
       }
+      trackLatency(event);
       dispatch({ type: 'realtime_event', event });
     },
-    [dispatch],
+    [trackLatency],
   );
 
   const ensureService = useCallback(
@@ -397,6 +528,14 @@ export function useAsunaSession(options: UseAsunaSessionOptions = {}): AsunaSess
         echoCancellation: probe.echoCancellation,
         noiseSuppression: probe.noiseSuppression,
       });
+      if (probe.echoCancellation !== true) {
+        // Self-interrupt (Asuna kendi sesiyle kendini kesmesi) bu asamanin en yaygin
+        // tuzagi (phase-1.md ASU-016). Sessizce gecistirmiyoruz.
+        deps.log.warn(
+          'Echo cancellation dogrulanamadi — Asuna kendi sesiyle kendini kesebilir.',
+          { echoCancellation: probe.echoCancellation },
+        );
+      }
 
       const config = await ensureConfig();
       const service = ensureService(config);
@@ -439,6 +578,8 @@ export function useAsunaSession(options: UseAsunaSessionOptions = {}): AsunaSess
     model: facts.model,
     activeTool: facts.activeTool,
     error: facts.error,
+    bargeIn: facts.bargeIn,
+    lastLatencyMs: facts.lastLatencyMs,
     start,
     stop,
   };
