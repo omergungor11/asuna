@@ -8,7 +8,8 @@ repository = "https://github.com/omergungor11/asuna"
 edition = "2021"
 # Rust surumu `rust-toolchain.toml` ile pinlenir. Burada ayrica dil MSRV'si
 # tutulur ki CI'da farkli bir toolchain kullanilirsa hata erken ciksin.
-rust-version = "1.82"
+# 1.85: `reqwest 0.13` (ASU-011) bu surumu sart kosuyor.
+rust-version = "1.85"
 
 [lib]
 # `_lib` soneki gereklidir: bin hedefi (`asuna`) ile lib adi Windows'ta
@@ -31,6 +32,36 @@ tauri-build = { version = "2.6.3", features = [] }
 tauri = { version = "2.11.5", features = [] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+
+# --- ASU-011: ephemeral Realtime token minting -----------------------------
+# Kalici `OPENAI_API_KEY` yalnizca bu process'te; OpenAI'ye giden tek HTTP
+# cagrisi burada yapiliyor. Surum **exact** pinli: TLS/HTTP yuzeyi kendi
+# kendine yukselmemeli (yeni bir minor surumun getirdigi davranis degisikligi
+# secret tasiyan tek istegimizi etkiler). Yukseltme bilincli bir commit.
+#
+# Feature secimi (default kapali — her feature ayri bir kod yuzeyi):
+#   rustls       : TLS. `default-tls` zaten reqwest 0.13'te rustls'e cozuluyor;
+#                  acikca yazildi ki TLS backend'i tesadufen degismesin.
+#                  (Platform sertifika dogrulayicisi: rustls-platform-verifier.)
+#   json         : istek/yanit govdesi icin serde_json koprusu.
+#   system-proxy : kurumsal ag arkasindaki kullanicida token uretimi sessizce
+#                  patlamasin diye macOS sistem proxy ayari okunur.
+# Bilerek KAPALI: http2 (tek kucuk POST icin gereksiz `h2` agaci),
+# charset (yanit yalnizca JSON olarak okunuyor), cookies, blocking,
+# multipart, stream, socks.
+reqwest = { version = "=0.13.4", default-features = false, features = [
+  "rustls",
+  "json",
+  "system-proxy",
+] }
+# Tipli hata varyantlari (PROJECT.md Bolum 30). Zaten agacta vardi; exact pinli.
+thiserror = "=2.0.20"
+
+[dev-dependencies]
+# Yalnizca test icin: `#[tokio::test]`. Runtime'i tauri zaten tasiyor,
+# burada ek olarak sadece test makrolari aciliyor. Gercek API'ye cikan test
+# YOK — testler yerelde acilan bir TCP sunucusuna vurur (bkz. realtime_token.rs).
+tokio = { version = "=1.53.1", features = ["macros", "rt-multi-thread"] }
 
 [profile.release]
 # Surekli acik duran bir companion: binary boyutu ve bellek ayak izi urun kriteri.

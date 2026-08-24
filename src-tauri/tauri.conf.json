@@ -59,7 +59,8 @@
       },
       "capabilities": [
         "default",
-        "asuna-config"
+        "asuna-config",
+        "asuna-realtime"
       ]
     }
   },

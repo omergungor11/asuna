@@ -79,6 +79,13 @@ const KNOWN_VOICES: [&str; 10] = [
 pub struct SecretString(String);
 
 impl SecretString {
+    /// Sarmalayiciyi kurar. Kaynak yalnizca guvenilir process olabilir
+    /// (`.env` / process environment / ileride Keychain) — renderer'dan gelen
+    /// bir deger buraya girmez.
+    pub fn new(value: String) -> Self {
+        Self(value)
+    }
+
     /// Ham degeri dondurur. Yalnizca guvenilir process icinde, dogrudan
     /// OpenAI'ya giden `Authorization` header'i icin cagrilir (ASU-011).
     pub fn expose(&self) -> &str {
@@ -312,7 +319,7 @@ pub fn load() -> Result<AsunaConfig, ConfigError> {
 
 /// Saf ayristirma/dogrulama — dosya sistemine ve process environment'a dokunmaz.
 pub fn load_from_map(map: &EnvMap) -> Result<AsunaConfig, ConfigError> {
-    let openai_api_key = SecretString(required_non_empty(map, KEY_OPENAI_API_KEY)?);
+    let openai_api_key = SecretString::new(required_non_empty(map, KEY_OPENAI_API_KEY)?);
 
     let realtime_model = required_non_empty(map, KEY_REALTIME_MODEL)?;
     if realtime_model.contains(char::is_whitespace) {

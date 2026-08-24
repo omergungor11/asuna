@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "asuna-realtime",
+  "description": "Renderer'in yalnizca `mint_realtime_token` komutunu cagirmasina izin verir (ASU-011). Komut, kalici `OPENAI_API_KEY` ile OpenAI'nin `/v1/realtime/client_secrets` endpoint'ine gider ve renderer'a SADECE kisa omurlu client secret'i (`ek_...`), son kullanma zamanini ve model ID'sini dondurur. Kalici anahtar, organizasyon/proje bilgisi ve ham API yaniti bu kumede YOKTUR — hepsi Rust tarafinda kalir. Komut argument almaz; renderer model ya da TTL secemez (ikisi de config'ten gelir). Kapsam ana pencere ile sinirlidir; wildcard izin yoktur.",
+  "platforms": ["macOS"],
+  "windows": ["main"],
+  "permissions": ["allow-mint-realtime-token"]
+}

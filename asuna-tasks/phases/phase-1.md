@@ -13,7 +13,7 @@
 
 ## ASU-011: Ephemeral Realtime Token Minting (Rust)
 
-**Scope**: backend | **Boyut**: L | **Durum**: PENDING | **Bagimlilik**: ASU-006, ASU-009
+**Scope**: backend | **Boyut**: L | **Durum**: COMPLETED | **Bagimlilik**: ASU-006, ASU-009
 
 ### Aciklama
 Kalici `OPENAI_API_KEY` yalnizca Tauri'nin Rust tarafinda kalir. Renderer, kisa omurlu bir Realtime
@@ -21,18 +21,44 @@ client secret icin Rust'a bir command cagirir; anahtarin kendisi asla webview'a 
 (PROJECT.md Bolum 7 — Authentication)
 
 ### Acceptance Criteria
-- [ ] Rust tarafinda `mint_realtime_token` Tauri command'i; API key'i env/keychain'den okuyor
-- [ ] OpenAI'ye ephemeral client secret istegi atiliyor, sadece token + expiry donuyor
-- [ ] Donen payload'da kalici API key veya org bilgisi **yok**
-- [ ] Token'in son kullanma zamani frontend'e donuyor; suresi dolmus token yeniden isteniyor
-- [ ] Hata durumlari ayirt ediliyor: key yok / gecersiz key / kota yok / ag hatasi — her biri
+- [x] Rust tarafinda `mint_realtime_token` Tauri command'i; API key'i env/keychain'den okuyor
+- [x] OpenAI'ye ephemeral client secret istegi atiliyor, sadece token + expiry donuyor
+- [x] Donen payload'da kalici API key veya org bilgisi **yok**
+- [x] Token'in son kullanma zamani frontend'e donuyor; suresi dolmus token yeniden isteniyor
+- [x] Hata durumlari ayirt ediliyor: key yok / gecersiz key / kota yok / ag hatasi — her biri
       kullaniciya farkli ve durust mesaj uretiyor (PROJECT.md Bolum 30)
-- [ ] API key hicbir log satirinda gorunmuyor (redaction testi var)
-- [ ] Unit test: mint hatasi durumunda command panic etmiyor, tipli hata donuyor
+- [x] API key hicbir log satirinda gorunmuyor (redaction testi var)
+- [x] Unit test: mint hatasi durumunda command panic etmiyor, tipli hata donuyor
 
 ### Notlar
 MVP kabul checklist'inde iki madde bu task'a bagli: "API key never shipped in renderer bundle" ve
 "Realtime session uses temporary client credential".
+
+### Uygulama (tamamlandi)
+- `src-tauri/src/realtime_token.rs` — `RealtimeTokenService` + `mint_realtime_token` komutu.
+  Donus tipi `EphemeralToken` → JSON `{ value, expiresAt, model }` (camelCase). `Debug`
+  implementasyonu elle yazildi: token degeri log'a basilamaz.
+- Endpoint `POST https://api.openai.com/v1/realtime/client_secrets`, payload
+  `{ expires_after: { anchor: "created_at", seconds: 600 }, session: { type: "realtime", model } }`.
+  Model `ASUNA_REALTIME_MODEL` config'inden gelir; renderer model/TTL secemez.
+- Tipli hata varyantlari (`RealtimeTokenError`, IPC bicimi `{ kind, message }`):
+  `missing_api_key` · `invalid_api_key` (401) · `model_access_denied` (403/404) ·
+  `quota_exceeded` (429) · `network` (`Connect`/`Timeout`/`Interrupted`) ·
+  `upstream_unavailable` (5xx) · `unexpected_status` · `malformed_response` ·
+  `http_client_unavailable`. Panic yok, `unwrap` yok.
+- Guvenlik: `reqwest::Error` saklanmaz (URL sizdirabilir); redirect politikasi `none`
+  (`Authorization` header'i baska host'a tasinmaz); yanittan yalnizca `value` + `expires_at`
+  okunur (`session`/org/proje alanlari okunmaz); `sk-` gorunumlu bir deger donerse
+  `malformed_response` uretilir.
+- Yetki: `capabilities/asuna-realtime.json` (`allow-mint-realtime-token`, sadece `main`
+  penceresi) + `build.rs` AppManifest + `tauri.conf.json` `app.security.capabilities`.
+  `commands.rs` testleri bu dort noktanin senkron kalmasini zorunlu kilar.
+- Bagimlilik: `reqwest =0.13.4` (`default-features = false`, features: `rustls`, `json`,
+  `system-proxy`), `thiserror =2.0.20`, dev-only `tokio =1.53.1` (`macros`, `rt-multi-thread`).
+  MSRV `1.82` → `1.85` (reqwest 0.13 sarti).
+- Test: 49 cargo testi gecti (16'si bu modul). Gercek API cagrisi yok — testler yerelde
+  acilan bir `TcpListener` HTTP sunucusuna vurur (`wiremock` bagimliligi eklenmedi).
+  Canli endpoint dogrulamasi ASU-020'de.
 
 ---
 

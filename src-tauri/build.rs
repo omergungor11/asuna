@@ -5,8 +5,13 @@ fn main() {
     // tarafindan izin verilmeyen bir komut renderer'dan cagrilamaz.
     // Her yeni `#[tauri::command]` icin: bu listeye ekle + `capabilities/`
     // altinda dar kapsamli bir izin kaydi ac.
-    let attributes = tauri_build::Attributes::new()
-        .app_manifest(tauri_build::AppManifest::new().commands(&["get_frontend_config"]));
+    let attributes =
+        tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
+            // ASU-009: config whitelist'i (capabilities/asuna-config.json)
+            "get_frontend_config",
+            // ASU-011: ephemeral Realtime token (capabilities/asuna-realtime.json)
+            "mint_realtime_token",
+        ]));
 
     if let Err(error) = tauri_build::try_build(attributes) {
         panic!("tauri-build basarisiz: {error:#}");
