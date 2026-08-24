@@ -1,0 +1,45 @@
+[package]
+name = "asuna-kws-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# ASU-008b spike. Ana koda tasinmaz. Uretim implementasyonu ASU-022'de yazilir.
+
+[dependencies]
+# ASU-008b bulgusu: `sherpa-onnx` 1.13.5, `sherpa-onnx-sys`'e caret (^1.13) bagimli.
+# Cargo bunu 1.13.6'ya cozuyor ve sys 1.13.6'daki yeni alan (`window_shift_ratio`)
+# yuzunden wrapper DERLENMIYOR. sys surumu ELLE pinlenmek zorunda.
+sherpa-onnx = "=1.13.5"
+sherpa-onnx-sys = "=1.13.5"
+cpal = "0.16"
+hound = "3.5"
+
+[[bin]]
+name = "kws-batch"
+path = "src/batch.rs"
+
+[[bin]]
+name = "kws-idle"
+path = "src/idle.rs"
+
+[[bin]]
+name = "kws-asr"
+path = "src/asr.rs"
+
+[[bin]]
+name = "kws-tokentest"
+path = "src/kwtest.rs"
+
+# Boyut deltasi olcumu: sherpa'ya hic dokunmayan taban binary.
+[[bin]]
+name = "kws-baseline"
+path = "src/baseline.rs"
+
+# src-tauri/Cargo.toml ile ayni release profili -> gercekci .app delta'si.
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
