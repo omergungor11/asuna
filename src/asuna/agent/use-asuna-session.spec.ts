@@ -12,6 +12,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { AsunaRealtimeError } from './realtime-errors';
 import type { AsunaRealtimeEvent, AsunaRealtimeEventListener } from './realtime-events';
 import {
+  MAX_TRANSCRIPT_LINES,
   describeRealtimeFailure,
   useAsunaSession,
   type AsunaSession,
@@ -529,5 +530,159 @@ describe('useAsunaSession — iki yonlu ses ve barge-in (ASU-016)', () => {
 
     const warning = entries.find((entry) => entry.level === 'warn');
     expect(warning?.message).toContain('Echo cancellation dogrulanamadi');
+  });
+});
+
+describe('useAsunaSession — canli transcript (ASU-017)', () => {
+  async function connectedHook(harness: Harness): Promise<{
+    readonly session: () => AsunaSession;
+    readonly service: FakeService;
+  }> {
+    const { result } = renderHook(() => useAsunaSession(harness.options));
+    await flush(() => {
+      result.current.start();
+    });
+    return { session: (): AsunaSession => result.current, service: harness.service() };
+  }
+
+  it('kullanici ve Asuna satirlarini sirasiyla biriktirir', async () => {
+    const harness = createHarness();
+    const { session, service } = await connectedHook(harness);
+
+    act(() => {
+      service.emit({
+        type: 'transcript',
+        entry: { itemId: 'u1', role: 'user', text: 'merhaba', status: 'completed' },
+      });
+      service.emit({
+        type: 'transcript',
+        entry: { itemId: 'a1', role: 'assistant', text: 'buradayim', status: 'completed' },
+      });
+    });
+
+    expect(session().transcript.map((line) => `${line.role}:${line.text}`)).toEqual([
+      'user:merhaba',
+      'assistant:buradayim',
+    ]);
+  });
+
+  it('kismi satiri ayni itemId uzerinde kesinlestirir (kopya uretmez)', async () => {
+    const harness = createHarness();
+    const { session, service } = await connectedHook(harness);
+
+    act(() => {
+      service.emit({
+        type: 'transcript',
+        entry: { itemId: 'u1', role: 'user', text: 'bugun', status: 'in_progress' },
+      });
+    });
+    expect(session().transcript[0]?.status).toBe('in_progress');
+
+    act(() => {
+      service.emit({
+        type: 'transcript',
+        entry: { itemId: 'u1', role: 'user', text: 'bugun ne yapsam', status: 'completed' },
+      });
+    });
+
+    expect(session().transcript).toHaveLength(1);
+    expect(session().transcript[0]?.text).toBe('bugun ne yapsam');
+    expect(session().transcript[0]?.status).toBe('completed');
+  });
+
+  it('kesme aninda uretilen Asuna cevabini isaretler ve isaret kaybolmaz', async () => {
+    const harness = createHarness();
+    const { session, service } = await connectedHook(harness);
+
+    act(() => {
+      service.emit({
+        type: 'transcript',
+        entry: { itemId: 'a1', role: 'assistant', text: 'sana sunu', status: 'in_progress' },
+      });
+      service.emit({ type: 'agent_interrupted' });
+    });
+    expect(session().transcript[0]?.interrupted).toBe(true);
+
+    // Ayni item guncellenince isaret korunur.
+    act(() => {
+      service.emit({
+        type: 'transcript',
+        entry: {
+          itemId: 'a1',
+          role: 'assistant',
+          text: 'sana sunu anlat',
+          status: 'completed',
+        },
+      });
+    });
+    expect(session().transcript[0]?.interrupted).toBe(true);
+  });
+
+  it('kesme, tamamlanmis eski cevabi geriye donuk isaretlemez', async () => {
+    const harness = createHarness();
+    const { session, service } = await connectedHook(harness);
+
+    act(() => {
+      service.emit({
+        type: 'transcript',
+        entry: { itemId: 'a1', role: 'assistant', text: 'tamamlandi', status: 'completed' },
+      });
+      service.emit({ type: 'agent_interrupted' });
+    });
+
+    expect(session().transcript[0]?.interrupted).toBe(false);
+  });
+
+  it('uzun oturumda satir sayisi sinirli kalir (bellek)', async () => {
+    const harness = createHarness();
+    const { session, service } = await connectedHook(harness);
+
+    act(() => {
+      for (let index = 0; index < MAX_TRANSCRIPT_LINES + 25; index += 1) {
+        service.emit({
+          type: 'transcript',
+          entry: {
+            itemId: `i${index.toString()}`,
+            role: 'user',
+            text: `satir ${index.toString()}`,
+            status: 'completed',
+          },
+        });
+      }
+    });
+
+    const transcript = session().transcript;
+    expect(transcript).toHaveLength(MAX_TRANSCRIPT_LINES);
+    expect(transcript[0]?.text).toBe('satir 25');
+    expect(transcript[transcript.length - 1]?.text).toBe(
+      `satir ${(MAX_TRANSCRIPT_LINES + 24).toString()}`,
+    );
+  });
+
+  it('yeni oturum yeni dokumle baslar', async () => {
+    const harness = createHarness();
+    const { result } = renderHook(() => useAsunaSession(harness.options));
+    await flush(() => {
+      result.current.start();
+    });
+
+    act(() => {
+      harness.service().emit({
+        type: 'transcript',
+        entry: { itemId: 'u1', role: 'user', text: 'eski oturum', status: 'completed' },
+      });
+    });
+    expect(result.current.transcript).toHaveLength(1);
+
+    act(() => {
+      result.current.stop();
+    });
+    // Kapaninca dokum ekranda kalir: kullanici okumaya devam edebilir.
+    expect(result.current.transcript).toHaveLength(1);
+
+    await flush(() => {
+      result.current.start();
+    });
+    expect(result.current.transcript).toHaveLength(0);
   });
 });

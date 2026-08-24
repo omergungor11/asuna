@@ -257,15 +257,29 @@ ayarlarini (`echoCancellation`, `noiseSuppression`) getUserMedia constraint'leri
 
 ## ASU-017: Canli Transcript UI
 
-**Scope**: frontend | **Boyut**: M | **Durum**: PENDING | **Bagimlilik**: ASU-016
+**Scope**: frontend | **Boyut**: M | **Durum**: COMPLETED (2026-08-24) | **Bagimlilik**: ASU-016
 
 ### Acceptance Criteria
-- [ ] Kullanici ve Asuna repliklerini ayirt eden akan transcript listesi
-- [ ] Kismi (partial) transcript'ler konusma sirasinda gorunuyor, bitince kesinlesiyor
-- [ ] Kesilen (interrupted) Asuna cevabi transcript'te kesildigi yerde isaretleniyor
-- [ ] Otomatik en alta kaydirma; kullanici yukari kaydirdiysa zorla asagi atmiyor
-- [ ] Transcript Phase 1'de **sadece bellekte** — disk yazimi Phase 3'un konusu (ASU-032)
-- [ ] Uzun oturumda transcript listesi UI'yi kilitlemiyor
+- [x] Kullanici ve Asuna repliklerini ayirt eden akan transcript listesi
+      (`src/components/transcript-view.tsx`, "Sen:" / "Asuna:")
+- [x] Kismi (partial) transcript'ler konusma sirasinda gorunuyor, bitince kesinlesiyor —
+      ayni `itemId` uzerinde upsert, kopya satir uretmiyor
+- [x] Kesilen (interrupted) Asuna cevabi transcript'te kesildigi yerde isaretleniyor
+      ("— kesildi"); isaret sonraki guncellemelerde kaybolmuyor, tamamlanmis eski cevaba
+      geriye donuk konmuyor
+- [x] Otomatik en alta kaydirma; kullanici yukari kaydirdiysa zorla asagi atmiyor
+      (dibe donunce otomatik kaydirma geri geliyor)
+- [x] Transcript Phase 1'de **sadece bellekte** — disk yazimi Phase 3'un konusu (ASU-032)
+- [x] Uzun oturumda transcript listesi UI'yi kilitlemiyor — bellekte 200 satir tavani
+      (`MAX_TRANSCRIPT_LINES`), DOM'da son 60 satir (`VISIBLE_LINE_COUNT`) + gizlenen
+      satir sayisi durustce yaziliyor
+
+### Notlar
+Transcript bir **kayit/log**, sohbet gecmisi degil: mesaj balonu, avatar, metin girisi yok
+(CLAUDE.md prime directive — test bunu ayrica zorluyor). Metin duz render ediliyor;
+`dangerouslySetInnerHTML` kullanilmiyor. Yeni oturum acildiginda dokum sifirlaniyor
+(onceki oturum modelin baglaminda da yok), oturum kapaninca ekranda kaliyor.
+Test: `transcript-view.spec.tsx` (7) + `use-asuna-session.spec.ts` transcript blogu (6).
 
 ---
 

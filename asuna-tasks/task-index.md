@@ -9,15 +9,15 @@
 | Phase | Ad | Total | Done | In Progress | Review | Pending | Blocked |
 |-------|----|-------|------|-------------|--------|---------|---------|
 | 0 | Arastirma + Scaffold | 11 | 11 | 0 | 0 | 0 | 0 |
-| 1 | Realtime Voice (dikey dilim) | 10 | 6 | 0 | 0 | 4 | 0 |
+| 1 | Realtime Voice (dikey dilim) | 10 | 7 | 0 | 0 | 3 | 0 |
 | 2 | Wake Word | 8 | 0 | 0 | 0 | 8 | 0 |
 | 3 | Memory | 10 | 0 | 0 | 0 | 10 | 0 |
 | 4 | Project Context | 8 | 0 | 0 | 0 | 8 | 0 |
 | 5 | One Useful Action (Tools) | 9 | 0 | 0 | 0 | 9 | 0 |
 | 6 | Focus Recovery (MVP) | 8 | 0 | 0 | 0 | 8 | 0 |
-| **Total** | | **64** | **17** | **0** | **0** | **47** | **0** |
+| **Total** | | **64** | **18** | **0** | **0** | **46** | **0** |
 
-**Progress**: 17/64 (27%)
+**Progress**: 18/64 (28%)
 
 > ASU-008b spike tamamlandi (2026-08-24): motor/lisans/CPU/bundle dogrulandi, ADR-004 accepted
 > (kapsami daraltilmis). ACIK: model+ifade secimi — gigaspeech-3.3M "Hey Asuna"yi tasimiyor (R2).
@@ -73,7 +73,7 @@
 | ASU-014 | Voice state machine | 1 | M | frontend | COMPLETED |
 | ASU-015 | "Talk to Asuna" gecici butonu + baglanti akisi | 1 | M | frontend | COMPLETED |
 | ASU-016 | Iki yonlu ses + interruption (barge-in) | 1 | M | frontend | COMPLETED |
-| ASU-017 | Canli transcript UI | 1 | M | frontend | PENDING |
+| ASU-017 | Canli transcript UI | 1 | M | frontend | COMPLETED |
 | ASU-018 | Temiz disconnect + kaynak temizligi | 1 | M | frontend | PENDING |
 | ASU-019 | Hata yonetimi + observability (state transition log) | 1 | M | backend | COMPLETED |
 | ASU-020 | **M1 kabul testi** — PROJECT.md Bolum 35, 8 madde | 1 | M | test | PENDING |

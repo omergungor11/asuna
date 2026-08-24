@@ -121,6 +121,40 @@ body,
   opacity: 0.75;
 }
 
+/* --- Transcript (ASU-017) — kayit, sohbet penceresi degil. --- */
+
+.asuna-transcript {
+  max-height: 40vh;
+  overflow-y: auto;
+  padding: 8px 10px;
+  background: #12151d;
+  border: 1px solid #22262f;
+  border-radius: 6px;
+}
+
+.asuna-transcript__line,
+.asuna-transcript__empty,
+.asuna-transcript__hidden {
+  margin: 0 0 4px;
+}
+
+.asuna-transcript__empty,
+.asuna-transcript__hidden {
+  opacity: 0.5;
+}
+
+.asuna-transcript__role {
+  opacity: 0.6;
+}
+
+.asuna-transcript__line[data-status='in_progress'] {
+  opacity: 0.7;
+}
+
+.asuna-transcript__cut {
+  opacity: 0.6;
+}
+
 .asuna-panel__bargein {
   margin: 0;
   opacity: 0.8;

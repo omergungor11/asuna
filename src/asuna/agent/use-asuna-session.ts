@@ -35,7 +35,11 @@ import {
   type AsunaRealtimeErrorInfo,
   type AsunaRealtimeErrorKind,
 } from './realtime-errors';
-import type { AsunaRealtimeEvent, AsunaRealtimeEventListener } from './realtime-events';
+import type {
+  AsunaRealtimeEvent,
+  AsunaRealtimeEventListener,
+  TranscriptEntry,
+} from './realtime-events';
 import { AsunaRealtimeService } from './realtime-service';
 import { probeMicrophoneAccess, type MicrophoneProbe } from '../audio/microphone-access';
 import { loadFrontendConfig } from '../config/config.service';
@@ -181,6 +185,89 @@ export class TurnLatencyTracker {
 }
 
 // ---------------------------------------------------------------------------
+// Transcript (ASU-017)
+// ---------------------------------------------------------------------------
+
+/**
+ * Ekranda gorunen tek dokum satiri.
+ *
+ * `TranscriptEntry`'den tek farki `interrupted`: kesilen cevabin nerede kesildigini
+ * kullanici gormeli (ASU-017). Bu bilgi item'in kendisinde degil, ayri bir event'te
+ * (`agent_interrupted`) geliyor.
+ */
+export interface TranscriptLine {
+  readonly itemId: string;
+  readonly role: 'user' | 'assistant';
+  readonly text: string;
+  readonly status: 'in_progress' | 'completed' | 'incomplete';
+  readonly interrupted: boolean;
+}
+
+/**
+ * Bellekte tutulan azami satir sayisi.
+ *
+ * Phase 1'de dokum **yalnizca bellekte** (disk yazimi ASU-032). Sinirsiz buyuyen bir
+ * dizi uzun oturumda hem bellegi hem render'i sisirir; en eski satirlar dusurulur.
+ */
+export const MAX_TRANSCRIPT_LINES = 200;
+
+function upsertTranscript(
+  lines: readonly TranscriptLine[],
+  entry: TranscriptEntry,
+): readonly TranscriptLine[] {
+  const index = lines.findIndex((line) => line.itemId === entry.itemId);
+
+  if (index >= 0) {
+    const previous = lines[index];
+    const next = lines.slice();
+    next[index] = {
+      itemId: entry.itemId,
+      role: entry.role,
+      text: entry.text,
+      status: entry.status,
+      // Kesilme isareti item guncellenince kaybolmamali.
+      interrupted: previous?.interrupted === true || entry.status === 'incomplete',
+    };
+    return next;
+  }
+
+  const appended = [
+    ...lines,
+    {
+      itemId: entry.itemId,
+      role: entry.role,
+      text: entry.text,
+      status: entry.status,
+      interrupted: entry.status === 'incomplete',
+    },
+  ];
+
+  return appended.length > MAX_TRANSCRIPT_LINES
+    ? appended.slice(appended.length - MAX_TRANSCRIPT_LINES)
+    : appended;
+}
+
+/** Kesme aninda uretilmekte olan Asuna cevabini isaretler. */
+function markLastAssistantInterrupted(
+  lines: readonly TranscriptLine[],
+): readonly TranscriptLine[] {
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    if (line?.role !== 'assistant') {
+      continue;
+    }
+    // En son Asuna satiri zaten bitmisse kesilecek bir sey yok: geriye donuk isaret koymuyoruz.
+    if (line.status !== 'in_progress' || line.interrupted) {
+      return lines;
+    }
+    const next = lines.slice();
+    next[index] = { ...line, interrupted: true };
+    return next;
+  }
+  return lines;
+}
+
+// ---------------------------------------------------------------------------
 // Event -> UI olgulari
 // ---------------------------------------------------------------------------
 
@@ -199,6 +286,8 @@ interface SessionFacts {
   readonly bargeIn: boolean;
   /** Son turun "konusma sonu -> ilk ses" suresi (ms). */
   readonly lastLatencyMs: number | null;
+  /** Canli dokum — yalnizca bellekte (ASU-017). */
+  readonly transcript: readonly TranscriptLine[];
 }
 
 const INITIAL_FACTS: SessionFacts = {
@@ -208,6 +297,7 @@ const INITIAL_FACTS: SessionFacts = {
   error: null,
   bargeIn: false,
   lastLatencyMs: null,
+  transcript: [],
 };
 
 type SessionAction =
@@ -244,17 +334,23 @@ function reduceRealtimeEvent(state: SessionFacts, event: AsunaRealtimeEvent): Se
     // Barge-in: kullanici sozu kesti, sunucu uretilen sesi durdurdu. Gorsel tepki
     // olmazsa kullanici "duydu mu?" diye tekrar konusur (ASU-016).
     case 'agent_interrupted':
-      return { ...state, bargeIn: true };
+      return {
+        ...state,
+        bargeIn: true,
+        transcript: markLastAssistantInterrupted(state.transcript),
+      };
 
     // Yeni ses parcasi basladi: kesme isareti kalkar.
     case 'agent_audio_started':
       return { ...state, bargeIn: false };
 
     // Durum gecisleri FSM'den okunuyor; bu event'ler UI olgusu tasimiyor.
+    case 'transcript':
+      return { ...state, transcript: upsertTranscript(state.transcript, event.entry) };
+
     case 'agent_thinking':
     case 'agent_audio_stopped':
     case 'turn_ended':
-    case 'transcript':
     case 'usage':
     case 'unexpected_signal':
       return state;
@@ -264,7 +360,8 @@ function reduceRealtimeEvent(state: SessionFacts, event: AsunaRealtimeEvent): Se
 function reduceSession(state: SessionFacts, action: SessionAction): SessionFacts {
   switch (action.type) {
     case 'activation_started':
-      return { ...state, error: null, activeTool: null, bargeIn: false };
+      // Yeni oturum yeni dokum: onceki oturumun satirlari modelin baglaminda da yok.
+      return { ...state, error: null, activeTool: null, bargeIn: false, transcript: [] };
     case 'activation_failed':
       return { ...state, connected: false, error: action.error };
     case 'latency_measured':
@@ -308,6 +405,8 @@ export interface AsunaSession {
   readonly bargeIn: boolean;
   /** Son turun olculen yanit gecikmesi (ms); yoksa `null`. */
   readonly lastLatencyMs: number | null;
+  /** Canli dokum: kayit/log, sohbet gecmisi degil (ASU-017). */
+  readonly transcript: readonly TranscriptLine[];
   /** "Talk to Asuna" — izin -> config -> connect. Hata icerde yakalanir. */
   readonly start: () => void;
   /** "Stop" — oturumu kapatir. */
@@ -580,6 +679,7 @@ export function useAsunaSession(options: UseAsunaSessionOptions = {}): AsunaSess
     error: facts.error,
     bargeIn: facts.bargeIn,
     lastLatencyMs: facts.lastLatencyMs,
+    transcript: facts.transcript,
     start,
     stop,
   };

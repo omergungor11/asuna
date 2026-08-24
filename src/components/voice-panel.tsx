@@ -16,6 +16,7 @@ import { useAsunaSession, type UseAsunaSessionOptions } from '../asuna/agent/use
 import { ErrorNotice } from './error-notice';
 import { MicIndicator } from './mic-indicator';
 import { TalkButton } from './talk-button';
+import { TranscriptView } from './transcript-view';
 import { VoiceStatusBadge } from './voice-status-badge';
 
 export interface VoicePanelProps {
@@ -48,6 +49,8 @@ export function VoicePanel({ options }: VoicePanelProps): React.JSX.Element {
       {session.bargeIn && (
         <p className="asuna-panel__bargein">Sözünü kestin — Asuna sustu, seni dinliyor.</p>
       )}
+
+      <TranscriptView lines={session.transcript} />
 
       <dl className="asuna-panel__facts">
         <div className="asuna-panel__fact">
