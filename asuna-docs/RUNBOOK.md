@@ -35,6 +35,33 @@ pnpm tauri dev
 On kosul: `.env` dolu (`cp .env.example .env`). Eksik/gecersiz degisken varsa uygulama
 acilista net bir hata mesajiyla durur — sessiz varsayilan yok.
 
+### Ilk calistirma
+
+M1 canli testinde (2026-08-24) ucu de yasandi; sirasiyla kontrol et:
+
+1. **OpenAI API kredisi zorunlu.** ChatGPT Plus/Pro aboneligi **API kredisi vermez** — ayri
+   faturalanir. Kredi yoksa `insufficient_quota` doner ve bu **tum** endpoint'lerde olur
+   (ephemeral token minting dahil), yani hata "baglanamiyor" gibi gorunebilir.
+   Cozum: platform.openai.com → **Billing → Add to credit balance** (test icin $5 yeterli).
+   Kredi yuklendikten sonra uygulamayi yeniden baslat. Gelistirmede `gpt-realtime-2.1-mini` kullan.
+
+2. **Beyaz ekran gorursen once `Cmd+R`.** Vite bagimlilik grafigi degistiginde (yeni paket,
+   `pnpm install`, lockfile degisimi) dep re-optimize ile webview yuklemesi yarisa girip bos
+   sayfa birakabiliyor. Reload cozerse kod hatasi degildir — debug'a girme.
+   Reload cozmuyorsa webview konsolunu ac; `TypeError: Attempted to assign to readonly property`
+   goruyorsan `freezePrototype` tekrar `true` olmus demektir (`false` kalmali — DECISIONS.md,
+   Phase 1 uygulama kararlari).
+
+3. **Mikrofon izni akisi.** TCC prompt'u ilk `getUserMedia` cagrisinda cikar — yani "Talk to
+   Asuna"ya basildiginda, uygulama acilisinda degil. Bir kez verilir ve kalicidir.
+   - Prompt hic cikmadan patliyorsa `NSMicrophoneUsageDescription` `src-tauri/Info.plist`
+     icinde eksiktir.
+   - Izin dev binary ile paketlenmis `.app` icin **ayri** verilir; dev'de rebuild sonrasi
+     prompt tekrar cikabilir.
+   - Yanlislikla reddedildiyse: Sistem Ayarlari → Gizlilik ve Guvenlik → Mikrofon.
+   - Oturum sonrasi menu cubugundaki turuncu gosterge sonmeli; sonmuyorsa track'ler
+     durdurulmamistir.
+
 ## Build
 
 ```bash

@@ -5,7 +5,11 @@
 >
 > **Milestone:** M3 — "Hatiriyor".
 >
-> **Onkosul:** Phase 2 ASU-028 gecmis olmali **ve** ADR-005 (ASU-005) karari verilmis olmali (R4).
+> **Onkosul:** ADR-005 karari verilmis olmali (R4) — **verildi (accepted)**.
+> **Orchestrator karari (2026-08-24):** "Phase 2 ASU-028 gecmis olmali" on kosulu esnetildi —
+> Phase 2, wake word model secimiyle (ADR-004, kullanici mikrofon testi) harici olarak bloklu;
+> Phase 3'un tek gercek teknik bagimliligi ASU-032 ↔ ASU-026 (oturum kapanis akisi). ASU-032
+> Phase 1 disconnect event'lerine baglanir, ASU-026 gelince birlesir. M3 kabul sirasi degismez.
 >
 > **Ilke (PROJECT.md Bolum 5.3 / Bolum 14):** Tum konusmayi sonsuza kadar saklamak hafiza degildir.
 > Working context ile durable memory ayridir. Her working-context maddesi kalici hafizaya terfi etmez.

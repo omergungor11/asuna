@@ -10,11 +10,13 @@
 - `asuna-docs/DECISIONS.md` — verilmis mimari kararlar (ADR-001..ADR-007).
 
 ## Project Status
-- **Phase 0**: KAPANIYOR (10/11) — Tauri 2 iskeleti ayakta, bos pencere aciliyor, CI yesil,
-  ASU-005..008 arastirmalari ADR'ye baglandi, dokumantasyon (ASU-010) tamam.
-  - Kalan tek task: **ASU-008b** — sherpa-onnx KWS detection spike'i. Phase 1'i **bloklamaz**,
-    ama Phase 2 (wake word) baslamadan bitmeli; ADR-004 o zamana kadar `proposed`.
-- **Sirada Phase 1: realtime voice** (ASU-011 ephemeral token minting ile baslar).
+- **Phase 0 TAMAM** (11/11) — scaffold + CI + 4 arastirma ADR'ye baglandi.
+- **Phase 1 TAMAM** (ASU-011..020) — realtime voice dikey dilimi calisiyor.
+  **M1 canli testte gecti (2026-08-24)**: Turkce anlasildi, barge-in sorunsuz, temiz kapanis.
+  Acik: **ASU-064** — fark edilir gecikme, turn detection ayari + olcum.
+- **Phase 2 (wake word)**: kismen bloklu — ADR-004'te model + ifade secimi ACIK
+  (gercek mikrofon testi kullaniciyi bekliyor). ASU-021 (interface + fake provider) bloklu degil.
+- **Phase 3 (memory)**: hazir, ADR-005 accepted. Plan: `asuna-plans/plan-phase-3-memory.md`.
 - Katman mimarileri: `docs/architecture/{voice,memory,tools,security}.md`.
 
 ## Important Patterns
@@ -47,11 +49,19 @@
   `tauri.conf.json → app.security.capabilities` dizisine de eklenir.
 - **CSP `pnpm tauri dev`'de uygulanmaz.** `connect-src` hatasi sadece paketlenmis build'de
   gorunur — ses dev'de calisip `tauri build` sonrasi sessizce olebilir (ASU-007'de yasandi).
-- ChatGPT aboneligi ile OpenAI API kredisi ayri faturalanir — Realtime kullanimi ayrica ucretlendirilir.
-  Gelistirmede `gpt-realtime-2.1-mini` kullan.
+- **`freezePrototype: true` YASAK** (ASU-020): WKWebView'de beyaz ekran — zod compat katmanindaki
+  atama WebKit "override mistake" kuraline takiliyor. `false` kalir (gerekce DECISIONS.md).
+- **Vite bagimlilik re-optimize sonrasi beyaz ekran** — dev'de dep degistiginde webview yarisi
+  kaybedebiliyor; **Cmd+R** cozer. Kod hatasi sanip debug'a girme.
+- **OpenAI API kredisi ≠ ChatGPT aboneligi.** Kredi yoksa `insufficient_quota` **tum**
+  endpoint'lerde doner (token minting dahil) — 401 gibi gorunmez. Cozum: Billing → Add to
+  credit balance. Gelistirmede `gpt-realtime-2.1-mini` kullan.
+- **Kullanicinin makinesinde Cloudflare WARP acik** — WebRTC gecikmesinin suphelisi;
+  ASU-064 olcumunde once WARP kapali/acik karsilastirilir.
 - Wake word icin API anahtari/ucret yok (sherpa-onnx, Apache-2.0). KWS model dosyalari indirilir;
-  yol/esik `ASUNA_WAKE_WORD_MODEL_DIR` + `ASUNA_WAKE_WORD_THRESHOLD` ile verilir. Model
-  agirliklarinin lisansi ASU-008b'de dogrulanacak.
+  yol/esik `ASUNA_WAKE_WORD_MODEL_DIR` + `ASUNA_WAKE_WORD_THRESHOLD` ile verilir. Lisans/CPU/bundle
+  ASU-008b'de dogrulandi (Apache-2.0, %2.3 CPU, +20.7MB). **Ama `gigaspeech-3.3M` "Hey Asuna"yi
+  tasimiyor** — model + ifade secimi hala acik (R2).
 
 ## Working Credentials (Dev)
 - Yok. Gercek secret ASLA buraya yazilmaz — `.env.example` sablon, `.env` commit edilmez.

@@ -18,6 +18,17 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Phase 1 — realtime voice dikey dilimi (ASU-011..ASU-020).** Butona basilir, Turkce konusulur,
+  Asuna sesle cevap verir, sozu kesilebilir, transcript gorunur, oturum temiz kapanir:
+  - ASU-011: ephemeral Realtime token minting (Rust) — `OPENAI_API_KEY` renderer'a hic girmiyor,
+    webview kisa omurlu `ek_` token ile baglaniyor.
+  - ASU-012: `core.v1` prompt baseline (`src/asuna/prompts/`), versiyonlu; aktif surum tek noktadan secilir.
+  - ASU-013: `AsunaRealtimeService` — `@openai/agents-realtime` wrapper; SDK degisimi tek dosyada izole.
+  - ASU-014: voice state machine — gecersiz gecis dev'de `throw`, prod'da `reject`; sessiz yutma yok.
+  - ASU-015..ASU-018: "Talk to Asuna" butonu + baglanti akisi, iki yonlu ses gorunurlugu +
+    barge-in tepkisi, canli transcript UI, temiz disconnect + kaynak temizligi (mikrofon gostergesi soner).
+  - ASU-019: observability — logger (secret redaksiyonu), state transition log, durust hata
+    mesajlari, debug paneli.
 - Proje Asuna spec'ine gore sekillendirildi: `PROJECT.md` (urun/mimari spec, 40 bolum),
   `TRANSCRIPT.md` (urun niyeti) ve `asuna-docs/AGENT-SPEC-ORIGINAL.md` (coding agent kurallari)
   kaynak gercek olarak repoya alindi.
@@ -52,9 +63,22 @@ All notable changes to this project will be documented in this file.
   implementasyon adi `SherpaKwsProvider`, `WakeWordProvider` arayuzu degismedi.
   `PICOVOICE_ACCESS_KEY` kaldirildi. Calisan detection spike'i ASU-008b'ye ayrildi.
 
+### Fixed
+- ASU-020: **`freezePrototype: true` beyaz ekran.** Paketlenmis/webview calistirmada uygulama hic
+  render etmiyordu; zod v3 compat katmanindaki `errorUtil.toString = ...` atamasi donmus
+  `Object.prototype` yuzunden WebKit'in "override mistake" kuraline takilip
+  `TypeError: Attempted to assign to readonly property` firlatiyordu (Chromium'da gorunmuyor).
+  `freezePrototype: false` yapildi; gerekce ve kabul edilen risk `asuna-docs/DECISIONS.md`
+  → *Phase 1 uygulama kararlari*.
+- ASU-007: prod CSP `connect-src`'a `https://api.openai.com` eklendi — dev'de gorunmeyen,
+  paketlenmis build'de sesi sessizce olduren blocker.
+
 ### Notes
-- Uygulama kodu henuz YOK. Repo su an sadece Claude Code workflow meta-template'i iceriyor;
-  app scaffold greenfield olarak Phase 0'da kurulacak.
-- Phase 0 yeniden yorumlandi: "template audit" tamamlandi sayiliyor (denetlenecek uygulama kodu yok);
-  Phase 0 = teknik arastirma + scaffold (Tauri 2 iskeleti ayakta, bos pencere aciliyor, CI yesil).
-- Acik soru: SQLite erisim katmani (`tauri-plugin-sql` vs Rust tarafi servis) — ADR-005, Phase 0'da netlesecek.
+- **M1 milestone 2026-08-24'te canli testte gecti** (ASU-020): kullanici Turkce konustu, Asuna
+  anladi ve cevapladi, barge-in sorunsuz calisti, oturum temiz kapandi. Testte fark edilir bir
+  gecikme gozlendi → **ASU-064** (turn detection konfigurasyonu + olcum) acildi.
+- Phase 0 yeniden yorumlandi: "template audit" tamamlandi sayiliyor (denetlenecek uygulama kodu yoktu);
+  Phase 0 = teknik arastirma + scaffold. Tamamlandi: Tauri 2 iskeleti, CI yesil, ADR-001..007.
+- Acik soru "SQLite erisim katmani" **kapandi** (ASU-005): Rust tarafi servis (`rusqlite`),
+  `docs/decisions/ADR-005-sqlite-access.md` accepted.
+- Acik kalan: wake word model + ifade secimi (ADR-004, R2) — gercek mikrofon testi bekliyor.

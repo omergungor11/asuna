@@ -49,9 +49,18 @@ Bu dosya bir **referans kartı**; spec kopyası değil. Detay için `PROJECT.md`
 
 ## Mevcut Durum
 
-**Phase 0 başlıyor** — teknik araştırma + scaffold. Template audit tamamlandı sayılır
-(repoda uygulama kodu yok, app scaffold greenfield). Phase 0 çıktısı: Tauri 2 iskeleti ayakta,
-boş pencere açılıyor, CI yeşil.
+**Phase 0 + Phase 1 tamam.** Phase 0: Tauri 2 + React/TS scaffold, CI yeşil, 4 araştırma
+ADR'ye bağlandı. Phase 1: realtime voice dikey dilimi (ASU-011..020).
+
+**M1 geçti (2026-08-24, canlı test)** — Türkçe konuşuldu, barge-in sorunsuz, temiz kapanış.
+
+Sırada:
+
+| Ne | Durum |
+|----|-------|
+| ASU-064 — realtime gecikme ayarı (turn detection + ölçüm) | M1'de fark edilen gecikme, açık |
+| Phase 2 — wake word | Kısmen bloklu: model + ifade seçimi ADR-004'te ACIK, gerçek mikrofon testi kullanıcıyı bekliyor. ASU-021 (interface + fake provider) bloklu değil |
+| Phase 3 — memory | Hazır (ADR-005 accepted); plan: `asuna-plans/plan-phase-3-memory.md` |
 
 Task listesi ve ilerleme → `asuna-tasks/task-index.md`
 
@@ -109,7 +118,7 @@ Checklist → `asuna-config/security.md`, detay → `PROJECT.md` Bölüm 19-20.
 
 ## Workspace
 
-> **Hedef yapı** — Phase 0'da scaffold edilecek. Kaynak: `PROJECT.md` Bölüm 22.
+> Kaynak: `PROJECT.md` Bölüm 22 — scaffold tamamlandı, yapı büyük ölçüde kurulu.
 
 ```
 asuna/
@@ -140,12 +149,10 @@ SQLite, OpenAI Agents SDK for TypeScript (`RealtimeAgent` / `RealtimeSession`),
 WebRTC transport, wake word: sherpa-onnx KWS (Rust tarafında, `WakeWordProvider` adapter
 arkasında — vendor lock yok).
 
-> **AÇIK SORU (Phase 0):** SQLite erişim yolu — `tauri-plugin-sql` mi, Rust tarafında
-> servis mi? Araştırılıp `asuna-docs/DECISIONS.md`'ye ADR olarak yazılacak.
+> **KARAR (ADR-005):** SQLite erişimi yalnızca Rust'tan (`rusqlite`) — renderer SQL görmez.
+> Detay: `docs/decisions/ADR-005-sqlite-access.md`.
 
 ## Temel Komutlar
-
-> Placeholder — **Phase 0 scaffold sonrası netleşecek.**
 
 ```bash
 pnpm dev            # Vite dev server (web katmanı)
