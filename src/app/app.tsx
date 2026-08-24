@@ -1,5 +1,6 @@
-import { Suspense, lazy } from 'react';
+import { Suspense, lazy, useState } from 'react';
 
+import { MemoryView } from '../components/memory-view';
 import { VoicePanel } from '../components/voice-panel';
 
 /**
@@ -15,17 +16,73 @@ const DebugPanel = import.meta.env.DEV
     })
   : null;
 
+const TABS = [
+  { id: 'conversation', label: 'Konuşma' },
+  { id: 'memory', label: 'Hafıza' },
+] as const;
+
+type TabId = (typeof TABS)[number]['id'];
+
 /**
  * Uygulama kabugu.
  *
- * Kabuk bilerek ince: hicbir servis cagrisi burada yok. Ses oturumunun tum
- * gorunur yuzeyi `VoicePanel` icinde (ASU-015), log paneli yalnizca dev'de.
+ * Kabuk bilerek ince: hicbir servis cagrisi burada yok, yalnizca hangi panelin
+ * gorunur oldugunu tutar.
+ *
+ * # Sekme kurali: ses paneli ASLA unmount edilmez
+ *
+ * `VoicePanel` canli bir Realtime oturumu tasir. Hafiza sekmesine gecince
+ * unmount edilseydi oturum kopar, kullanici konusurken Asuna susardi. Bu yuzden
+ * panel her zaman monte kalir, yalnizca `hidden` ile gizlenir. `MemoryView`
+ * tersine yalnizca acikken monte olur — kapali sekme IPC sorgusu atmasin.
  */
 export function App(): React.JSX.Element {
+  const [tab, setTab] = useState<TabId>('conversation');
+
   return (
     <main className="asuna-shell">
       <h1 className="asuna-shell__title">Asuna</h1>
-      <VoicePanel />
+
+      <div className="asuna-tabs" role="tablist" aria-label="Asuna panelleri">
+        {TABS.map((entry) => (
+          <button
+            key={entry.id}
+            type="button"
+            role="tab"
+            id={`asuna-tab-${entry.id}`}
+            className="asuna-tabs__tab"
+            aria-selected={tab === entry.id}
+            aria-controls={`asuna-panel-${entry.id}`}
+            onClick={(): void => {
+              setTab(entry.id);
+            }}
+          >
+            {entry.label}
+          </button>
+        ))}
+      </div>
+
+      <div
+        id="asuna-panel-conversation"
+        role="tabpanel"
+        aria-labelledby="asuna-tab-conversation"
+        className="asuna-shell__panel"
+        hidden={tab !== 'conversation'}
+      >
+        <VoicePanel />
+      </div>
+
+      {tab === 'memory' && (
+        <div
+          id="asuna-panel-memory"
+          role="tabpanel"
+          aria-labelledby="asuna-tab-memory"
+          className="asuna-shell__panel"
+        >
+          <MemoryView />
+        </div>
+      )}
+
       {DebugPanel !== null && (
         <Suspense fallback={null}>
           <DebugPanel />

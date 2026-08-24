@@ -267,19 +267,42 @@ PROJECT.md Bolum 13 Stage A + Bolum 25. Embedding **yok** — Phase 3 determinis
 
 ## ASU-036: Memory UI (Listele / Ara / Sil / Arsivle)
 
-**Scope**: frontend | **Boyut**: M | **Durum**: PENDING | **Bagimlilik**: ASU-031
+**Scope**: frontend | **Boyut**: M | **Durum**: DONE (2026-08-25) | **Bagimlilik**: ASU-031
 
 ### Aciklama
 PROJECT.md Bolum 20: "Memory storage is inspectable. User can delete memories." Bu MVP kabul
 checklist maddesi — opsiyonel degil.
 
 ### Acceptance Criteria
-- [ ] Memory sekmesi: hafiza listesi, kind rozeti, olusturma tarihi, kaynak oturum
-- [ ] Metin aramasi + kind'a gore filtre
-- [ ] Tek hafizayi silme (onay ile) ve arsivleme
-- [ ] Bir hafizanin hangi oturumdan geldigi gorulebiliyor
-- [ ] Silinen hafiza sonraki oturumun baglamina girmiyor (dogrulanmis)
-- [ ] Liste buyudugunde UI donmuyor (sayfalama veya sanal liste)
+- [x] Memory sekmesi: hafiza listesi, kind rozeti, olusturma tarihi, kaynak oturum
+      — `src/components/memory-view.tsx` + `memory-item.tsx`; sekme gecisi `src/app/app.tsx`
+- [x] Metin aramasi + kind'a gore filtre
+      — `memory-filters.tsx`; arama 250 ms debounce ile `MemoryFilter.search`, tur secimi
+        `MemoryFilter.kinds` olarak servise gider (UI kendi kendine filtrelemez)
+- [x] Tek hafizayi silme (onay ile) ve arsivleme
+      — onay **satir ici**; `window.confirm` yok (WKWebView'de tum pencereyi kilitler,
+        canli ses oturumu arkada calisiyor olabilir)
+- [x] Bir hafizanin hangi oturumdan geldigi gorulebiliyor
+      — `source_session_id` her satirda: "Oturum #7" ya da acikca "Kaynak oturum bilinmiyor"
+- [~] Silinen hafiza sonraki oturumun baglamina girmiyor (dogrulanmis)
+      — **ASU-035 ile birlikte** kapanir: retrieval/bootstrap katmani orada yaziliyor.
+        Bu task'ta dogrulanan: silme sonrasi liste depodan **yeniden okunuyor**, silinen
+        kayit ekranda kalmiyor (`onaydan sonra siler ve liste tutarli kalir` testi)
+- [x] Liste buyudugunde UI donmuyor (sayfalama veya sanal liste)
+      — "son N + daha fazla yukle": `limit` tavani 25'er buyur, sanal liste kutuphanesi yok
+
+### Notlar
+- **Sekme gecisi ses oturumunu koparmaz.** `VoicePanel` her zaman monte kalir, yalnizca `hidden`
+  ile gizlenir; `MemoryView` ise yalnizca acikken monte olur (kapali sekme IPC sorgusu atmaz).
+  Testle bagli: `app.spec.tsx` → "hafiza sekmesine gecince ses paneli monte kalir".
+- **Liste goruntulemek erisim degildir**: `markAccessed` gonderilmiyor, aksi halde UI'da gezinmek
+  Stage A siralamasini (ASU-035) bozardi. Test filtrenin tam sekline bakiyor.
+- **`disabled` ile `unavailable` ayri ekran**: kapali hafiza ariza gibi gosterilmiyor, bozuk hafiza
+  ise nedeniyle birlikte `role="alert"` ile cikiyor (PROJECT.md Bolum 30).
+- **`skipped` yazma sonucu basari sayilmiyor**: hafiza kapaliyken "sildim/arsivledim" denmiyor.
+- **Sayfalama neden `limit`?** Servis katmani offset sunmuyor (`MemoryFilter`); "daha fazla yukle"
+  tavani buyutup listeyi tazeliyor. Offset gerekirse backend task'i acilmali.
+- Metin duz render ediliyor; `dangerouslySetInnerHTML` yok (test: `<b>` etiketi metin olarak basiliyor).
 
 ---
 
