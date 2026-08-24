@@ -11,7 +11,20 @@
 
 import type { AsunaRealtimeErrorInfo } from './realtime-errors';
 import type { RealtimeUsageSnapshot, TranscriptEntry } from './realtime-events';
+import type { VadEagerness } from '../config/frontend-config';
 import type { AsunaToolDefinition } from '../tools/types';
+
+/**
+ * Tur tespiti ayari (ASU-064) — SDK tipi degil, duz veri.
+ *
+ * Ayrik birlesim bilincli: `eagerness` yalnizca `semantic_vad`'de,
+ * `silenceDurationMs` yalnizca `server_vad`'de anlamli. Ikisini ayni nesnede
+ * opsiyonel alan olarak tutmak, ilgisiz bir alani sessizce SDK'ya gondermeye
+ * davetiye cikarirdi.
+ */
+export type TurnDetectionSpec =
+  | { readonly type: 'semantic_vad'; readonly eagerness: VadEagerness }
+  | { readonly type: 'server_vad'; readonly silenceDurationMs: number };
 
 /**
  * Oturumun acilis parametreleri. Model ID burada bir *degerdir*, sabit degil —
@@ -28,6 +41,11 @@ export interface RealtimeSessionSpec {
    * `false` ise transkripsiyon **kapatilir** — hem maliyet hem gizlilik (voice.md Bolum 2).
    */
   readonly transcription: boolean;
+  /**
+   * Tur tespiti ayari (`ASUNA_TURN_DETECTION` + `ASUNA_VAD_*`). Sabit degil:
+   * gecikme/erken-kesme takasi rebuild olmadan env ile ayarlanabilir (ASU-064).
+   */
+  readonly turnDetection: TurnDetectionSpec;
   /** Phase 1'de bos. Phase 5'te (ASU-05x) doldurulacak. */
   readonly tools: readonly AsunaToolDefinition[];
 }

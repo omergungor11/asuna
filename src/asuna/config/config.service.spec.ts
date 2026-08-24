@@ -15,11 +15,15 @@ const VALID_PAYLOAD = {
   realtimeModel: 'gpt-realtime-2.1-mini',
   realtimeVoice: null,
   wakeWord: 'Hey Asuna',
+  wakeWordProvider: 'sherpa-kws',
   idleTimeoutSeconds: 45,
   logLevel: 'debug',
   memoryEnabled: false,
   transcriptStorage: true,
   toolApprovalMode: 'always',
+  turnDetection: 'semantic_vad',
+  vadEagerness: 'high',
+  vadSilenceMs: 400,
 };
 
 describe('loadFrontendConfig', () => {

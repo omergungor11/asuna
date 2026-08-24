@@ -29,11 +29,15 @@ const CONFIG: FrontendConfig = {
   realtimeModel: 'gpt-realtime-2.1-mini',
   realtimeVoice: null,
   wakeWord: 'Hey Asuna',
+  wakeWordProvider: 'sherpa-kws',
   idleTimeoutSeconds: 45,
   logLevel: 'info',
   memoryEnabled: true,
   transcriptStorage: true,
   toolApprovalMode: 'safe',
+  turnDetection: 'semantic_vad',
+  vadEagerness: 'high',
+  vadSilenceMs: 400,
 };
 
 const GRANTED: MicrophoneProbe = { echoCancellation: true, noiseSuppression: true };

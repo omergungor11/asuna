@@ -36,10 +36,13 @@ pub const KEY_LOG_LEVEL: &str = "ASUNA_LOG_LEVEL";
 pub const KEY_WAKE_WORD_PROVIDER: &str = "ASUNA_WAKE_WORD_PROVIDER";
 pub const KEY_WAKE_WORD_MODEL_DIR: &str = "ASUNA_WAKE_WORD_MODEL_DIR";
 pub const KEY_WAKE_WORD_THRESHOLD: &str = "ASUNA_WAKE_WORD_THRESHOLD";
+pub const KEY_TURN_DETECTION: &str = "ASUNA_TURN_DETECTION";
+pub const KEY_VAD_EAGERNESS: &str = "ASUNA_VAD_EAGERNESS";
+pub const KEY_VAD_SILENCE_MS: &str = "ASUNA_VAD_SILENCE_MS";
 
 /// Konfigurasyonu olusturan tum anahtarlar. Process environment sadece bu
 /// listedeki anahtarlar icin okunur — alakasiz degiskenler config'e sizmaz.
-pub const ALL_KEYS: [&str; 12] = [
+pub const ALL_KEYS: [&str; 15] = [
     KEY_OPENAI_API_KEY,
     KEY_REALTIME_MODEL,
     KEY_REALTIME_VOICE,
@@ -52,6 +55,9 @@ pub const ALL_KEYS: [&str; 12] = [
     KEY_WAKE_WORD_PROVIDER,
     KEY_WAKE_WORD_MODEL_DIR,
     KEY_WAKE_WORD_THRESHOLD,
+    KEY_TURN_DETECTION,
+    KEY_VAD_EAGERNESS,
+    KEY_VAD_SILENCE_MS,
 ];
 
 /// `ASUNA_IDLE_TIMEOUT_SECONDS` icin kabul edilen aralik.
@@ -66,6 +72,12 @@ const IDLE_TIMEOUT_RANGE: std::ops::RangeInclusive<u32> = 5..=1800;
 const KNOWN_VOICES: [&str; 10] = [
     "alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse", "marin", "cedar",
 ];
+
+/// `ASUNA_VAD_SILENCE_MS` icin kabul edilen aralik (ASU-064).
+/// Alt sinir: 100 ms altinda sunucu her nefes arasini "konusma bitti" sayar.
+/// Ust sinir: 2000 ms zaten fark edilir bir gecikme — daha yukarisi ayar degil ariza.
+/// Yalnizca `server_vad` modunda kullanilir; `semantic_vad` sessizligi model ile karar verir.
+const VAD_SILENCE_RANGE: std::ops::RangeInclusive<u32> = 100..=2000;
 
 // ---------------------------------------------------------------------------
 // Secret sarmalayici
@@ -144,6 +156,54 @@ impl ToolApprovalMode {
         match raw {
             "safe" => Some(Self::Safe),
             "always" => Some(Self::Always),
+            _ => None,
+        }
+    }
+}
+
+/// Realtime tur tespiti (turn detection) yontemi — ASU-064.
+///
+/// Renderer'a gider: oturum config'ini `RealtimeSession`'a veren taraf renderer
+/// (voice.md Bolum 7). Vendor detayi degil, davranis ayari.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnDetectionKind {
+    /// Model "konusma bitti mi" kararini anlamdan verir (varsayilan).
+    SemanticVad,
+    /// Klasik sessizlik esigi; `ASUNA_VAD_SILENCE_MS` ile ayarlanir.
+    ServerVad,
+}
+
+impl TurnDetectionKind {
+    fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "semantic_vad" => Some(Self::SemanticVad),
+            "server_vad" => Some(Self::ServerVad),
+            _ => None,
+        }
+    }
+}
+
+/// `semantic_vad` icin "konusma bitti" kararinin acikgozlulugu (ASU-064).
+///
+/// Yuksek deger = karar daha erken = daha dusuk gecikme, ama Turkce'de tumce
+/// ortasindaki duraklamalarda erken kesme riski. Dusuk deger tersi.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VadEagerness {
+    Auto,
+    Low,
+    Medium,
+    High,
+}
+
+impl VadEagerness {
+    fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "auto" => Some(Self::Auto),
+            "low" => Some(Self::Low),
+            "medium" => Some(Self::Medium),
+            "high" => Some(Self::High),
             _ => None,
         }
     }
@@ -249,6 +309,11 @@ pub struct AsunaConfig {
     pub wake_word_provider: WakeWordProviderKind,
     pub wake_word_model_dir: Option<PathBuf>,
     pub wake_word_threshold: f32,
+    pub turn_detection: TurnDetectionKind,
+    pub vad_eagerness: VadEagerness,
+    /// Yalnizca `turn_detection == ServerVad` iken anlamli; deger her durumda
+    /// dogrulanir ki mod degistirmek yeniden yapilandirma gerektirmesin.
+    pub vad_silence_ms: u32,
 }
 
 impl AsunaConfig {
@@ -271,6 +336,9 @@ impl AsunaConfig {
             memory_enabled: self.memory_enabled,
             transcript_storage: self.transcript_storage,
             tool_approval_mode: self.tool_approval_mode,
+            turn_detection: self.turn_detection,
+            vad_eagerness: self.vad_eagerness,
+            vad_silence_ms: self.vad_silence_ms,
         }
     }
 }
@@ -291,6 +359,11 @@ pub struct FrontendConfig {
     pub memory_enabled: bool,
     pub transcript_storage: bool,
     pub tool_approval_mode: ToolApprovalMode,
+    /// ASU-064: tur tespiti ayarlari renderer'a acilir cunku `RealtimeSession`
+    /// config'ini renderer kurar (voice.md Bolum 7). Secret icermez.
+    pub turn_detection: TurnDetectionKind,
+    pub vad_eagerness: VadEagerness,
+    pub vad_silence_ms: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -413,6 +486,41 @@ pub fn load_from_map(map: &EnvMap) -> Result<AsunaConfig, ConfigError> {
         });
     }
 
+    // --- Tur tespiti (ASU-064) ---------------------------------------------
+    let turn_detection_raw = required_non_empty(map, KEY_TURN_DETECTION)?;
+    let turn_detection =
+        TurnDetectionKind::parse(&turn_detection_raw).ok_or(ConfigError::Invalid {
+            key: KEY_TURN_DETECTION,
+            expected: "`semantic_vad` veya `server_vad`".to_owned(),
+        })?;
+
+    let eagerness_raw = required_non_empty(map, KEY_VAD_EAGERNESS)?;
+    let vad_eagerness = VadEagerness::parse(&eagerness_raw).ok_or(ConfigError::Invalid {
+        key: KEY_VAD_EAGERNESS,
+        expected: "`auto`, `low`, `medium` veya `high`".to_owned(),
+    })?;
+
+    let silence_expected = || {
+        format!(
+            "{}-{} arasi tam sayi (milisaniye)",
+            VAD_SILENCE_RANGE.start(),
+            VAD_SILENCE_RANGE.end()
+        )
+    };
+    let silence_raw = required_non_empty(map, KEY_VAD_SILENCE_MS)?;
+    let vad_silence_ms: u32 = silence_raw
+        .parse::<u32>()
+        .map_err(|_| ConfigError::Invalid {
+            key: KEY_VAD_SILENCE_MS,
+            expected: silence_expected(),
+        })?;
+    if !VAD_SILENCE_RANGE.contains(&vad_silence_ms) {
+        return Err(ConfigError::Invalid {
+            key: KEY_VAD_SILENCE_MS,
+            expected: silence_expected(),
+        });
+    }
+
     Ok(AsunaConfig {
         openai_api_key,
         realtime_model,
@@ -426,6 +534,9 @@ pub fn load_from_map(map: &EnvMap) -> Result<AsunaConfig, ConfigError> {
         wake_word_provider,
         wake_word_model_dir,
         wake_word_threshold,
+        turn_detection,
+        vad_eagerness,
+        vad_silence_ms,
     })
 }
 
@@ -483,6 +594,9 @@ mod tests {
             (KEY_WAKE_WORD_PROVIDER, "sherpa-kws"),
             (KEY_WAKE_WORD_MODEL_DIR, ""),
             (KEY_WAKE_WORD_THRESHOLD, "0.25"),
+            (KEY_TURN_DETECTION, "semantic_vad"),
+            (KEY_VAD_EAGERNESS, "high"),
+            (KEY_VAD_SILENCE_MS, "400"),
         ];
         pairs
             .into_iter()
@@ -517,10 +631,13 @@ mod tests {
         assert_eq!(config.wake_word_provider, WakeWordProviderKind::SherpaKws);
         assert_eq!(config.wake_word_model_dir, None);
         assert!((config.wake_word_threshold - 0.25).abs() < f32::EPSILON);
+        assert_eq!(config.turn_detection, TurnDetectionKind::SemanticVad);
+        assert_eq!(config.vad_eagerness, VadEagerness::High);
+        assert_eq!(config.vad_silence_ms, 400);
         assert_eq!(config.openai_api_key().expose(), TEST_API_KEY);
     }
 
-    /// Sessiz default yok: 12 anahtarin **her biri** eksikse acilista hata.
+    /// Sessiz default yok: anahtarlarin **her biri** eksikse acilista hata.
     #[test]
     fn every_key_is_required() {
         for key in ALL_KEYS {
@@ -690,6 +807,115 @@ mod tests {
         }
     }
 
+    // --- Tur tespiti (ASU-064) ---------------------------------------------
+
+    #[test]
+    fn accepts_every_valid_eagerness_level() {
+        for (raw, expected) in [
+            ("auto", VadEagerness::Auto),
+            ("low", VadEagerness::Low),
+            ("medium", VadEagerness::Medium),
+            ("high", VadEagerness::High),
+        ] {
+            let config = load_from_map(&map_with(KEY_VAD_EAGERNESS, raw))
+                .unwrap_or_else(|error| panic!("`{raw}` kabul edilmeliydi: {error}"));
+            assert_eq!(config.vad_eagerness, expected);
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_eagerness() {
+        // `HIGH`/`aggressive` sessizce `high`a dusmez: yanlis yazim acilista patlar.
+        for value in ["HIGH", "aggressive", "fast", "1", ""] {
+            let Err(error) = load_from_map(&map_with(KEY_VAD_EAGERNESS, value)) else {
+                panic!("`{value}` reddedilmeliydi");
+            };
+            assert!(matches!(
+                error,
+                ConfigError::Invalid {
+                    key: KEY_VAD_EAGERNESS,
+                    ..
+                } | ConfigError::Empty {
+                    key: KEY_VAD_EAGERNESS
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn accepts_both_turn_detection_kinds() {
+        for (raw, expected) in [
+            ("semantic_vad", TurnDetectionKind::SemanticVad),
+            ("server_vad", TurnDetectionKind::ServerVad),
+        ] {
+            let config = load_from_map(&map_with(KEY_TURN_DETECTION, raw))
+                .unwrap_or_else(|error| panic!("`{raw}` kabul edilmeliydi: {error}"));
+            assert_eq!(config.turn_detection, expected);
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_turn_detection() {
+        // `null` bilerek yok: tur yonetimini uygulamaya devretmek istenmiyor (voice.md 7).
+        for value in ["null", "none", "semantic", "vad"] {
+            let Err(error) = load_from_map(&map_with(KEY_TURN_DETECTION, value)) else {
+                panic!("`{value}` reddedilmeliydi");
+            };
+            assert!(matches!(
+                error,
+                ConfigError::Invalid {
+                    key: KEY_TURN_DETECTION,
+                    ..
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn rejects_out_of_range_or_non_numeric_vad_silence() {
+        for value in ["0", "99", "2001", "-100", "abc", "400.5"] {
+            let Err(error) = load_from_map(&map_with(KEY_VAD_SILENCE_MS, value)) else {
+                panic!("`{value}` reddedilmeliydi");
+            };
+            assert!(matches!(
+                error,
+                ConfigError::Invalid {
+                    key: KEY_VAD_SILENCE_MS,
+                    ..
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn accepts_vad_silence_bounds() {
+        for value in ["100", "2000"] {
+            let config = load_from_map(&map_with(KEY_VAD_SILENCE_MS, value))
+                .unwrap_or_else(|error| panic!("`{value}` kabul edilmeliydi: {error}"));
+            assert_eq!(config.vad_silence_ms.to_string(), value);
+        }
+    }
+
+    /// Sessizlik suresi `semantic_vad` modunda kullanilmasa da dogrulanir:
+    /// mod degistirmek (server_vad'e gecmek) ikinci bir duzeltme gerektirmemeli.
+    #[test]
+    fn vad_silence_is_validated_even_in_semantic_mode() {
+        let mut map = valid_map();
+        map.insert(KEY_TURN_DETECTION.to_owned(), "semantic_vad".to_owned());
+        map.insert(KEY_VAD_SILENCE_MS.to_owned(), "5000".to_owned());
+
+        let Err(error) = load_from_map(&map) else {
+            panic!("aralik disi sessizlik suresi reddedilmeliydi");
+        };
+        assert!(matches!(
+            error,
+            ConfigError::Invalid {
+                key: KEY_VAD_SILENCE_MS,
+                ..
+            }
+        ));
+    }
+
     #[test]
     fn accepts_threshold_upper_bound() {
         let config =
@@ -724,6 +950,9 @@ mod tests {
             (KEY_LOG_LEVEL, TEST_API_KEY),
             (KEY_WAKE_WORD_PROVIDER, TEST_API_KEY),
             (KEY_WAKE_WORD_THRESHOLD, TEST_API_KEY),
+            (KEY_TURN_DETECTION, TEST_API_KEY),
+            (KEY_VAD_EAGERNESS, TEST_API_KEY),
+            (KEY_VAD_SILENCE_MS, TEST_API_KEY),
         ];
         for (key, value) in cases {
             let Err(error) = load_from_map(&map_with(key, value)) else {
@@ -741,7 +970,7 @@ mod tests {
         }
     }
 
-    /// Whitelist testi: frontend'e giden JSON **tam olarak** 8 alan icerir ve
+    /// Whitelist testi: frontend'e giden JSON **tam olarak** 11 alan icerir ve
     /// API key hicbir bicimde icinde degildir.
     #[test]
     fn frontend_config_exposes_only_the_whitelisted_fields() {
@@ -761,6 +990,9 @@ mod tests {
                 "realtimeVoice",
                 "toolApprovalMode",
                 "transcriptStorage",
+                "turnDetection",
+                "vadEagerness",
+                "vadSilenceMs",
                 "wakeWord",
             ]
         );
@@ -781,6 +1013,8 @@ mod tests {
         map.insert(KEY_LOG_LEVEL.to_owned(), "debug".to_owned());
         map.insert(KEY_TOOL_APPROVAL_MODE.to_owned(), "always".to_owned());
         map.insert(KEY_REALTIME_VOICE.to_owned(), String::new());
+        map.insert(KEY_TURN_DETECTION.to_owned(), "server_vad".to_owned());
+        map.insert(KEY_VAD_EAGERNESS.to_owned(), "low".to_owned());
 
         let config = load_from_map(&map).expect("gecerli config yuklenmeli");
         let json = serde_json::to_value(config.to_frontend()).expect("serialize edilebilmeli");
@@ -788,5 +1022,10 @@ mod tests {
         assert_eq!(json["logLevel"], "debug");
         assert_eq!(json["toolApprovalMode"], "always");
         assert!(json["realtimeVoice"].is_null());
+        // Renderer'in gordugu bicim TS whitelist'iyle birebir ayni olmali
+        // (`src/asuna/config/frontend-config.ts`).
+        assert_eq!(json["turnDetection"], "server_vad");
+        assert_eq!(json["vadEagerness"], "low");
+        assert_eq!(json["vadSilenceMs"], 400);
     }
 }

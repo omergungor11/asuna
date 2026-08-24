@@ -28,11 +28,15 @@ const CONFIG: FrontendConfig = {
   realtimeModel: 'gpt-realtime-2.1-mini',
   realtimeVoice: 'marin',
   wakeWord: 'Hey Asuna',
+  wakeWordProvider: 'sherpa-kws',
   idleTimeoutSeconds: 45,
   logLevel: 'info',
   memoryEnabled: true,
   transcriptStorage: true,
   toolApprovalMode: 'safe',
+  turnDetection: 'semantic_vad',
+  vadEagerness: 'high',
+  vadSilenceMs: 400,
 };
 
 const PROBE: MicrophoneProbe = { echoCancellation: true, noiseSuppression: true };
@@ -469,6 +473,38 @@ describe('useAsunaSession — iki yonlu ses ve barge-in (ASU-016)', () => {
     expect(entries.some((entry) => entry.message.includes('Yanit gecikmesi: 480 ms'))).toBe(
       true,
     );
+  });
+
+  // ASU-064: olcumun yaninda ayar yoksa "onceki/sonraki" karsilastirmasi yapilamaz.
+  it('gecikme log satiri aktif tur-tespiti ayarini da tasiyor', async () => {
+    const entries: LogEntry[] = [];
+    let clock = 0;
+    const harness = createHarness({
+      loadConfig: (): Promise<FrontendConfig> =>
+        Promise.resolve({ ...CONFIG, turnDetection: 'server_vad', vadSilenceMs: 700 }),
+      logger: new AsunaLogger({
+        level: 'debug',
+        sinks: [
+          (entry): void => {
+            entries.push(entry);
+          },
+        ],
+      }),
+      now: (): number => clock,
+    });
+    const { service } = await connected(harness);
+
+    act(() => {
+      clock = 1_000;
+      service.emit({ type: 'agent_thinking' });
+      clock = 2_240;
+      service.emit({ type: 'agent_audio_started' });
+    });
+
+    const line = entries.find((entry) => entry.message.includes('Yanit gecikmesi'));
+    expect(line?.message).toContain('1240 ms');
+    expect(line?.message).toContain('vad=server/700ms');
+    expect(line?.data).toMatchObject({ latencyMs: 1240, vad: 'server/700ms' });
   });
 
   it('kullanici transkripti kesinlestiginde olcum oradan basliyor', async () => {

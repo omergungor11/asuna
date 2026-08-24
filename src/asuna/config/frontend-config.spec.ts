@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   FRONTEND_CONFIG_KEYS,
   FrontendConfigError,
+  describeTurnDetection,
   parseFrontendConfig,
   type FrontendConfig,
 } from './frontend-config';
@@ -14,11 +15,15 @@ function validPayload(): Record<string, unknown> {
     realtimeModel: 'gpt-realtime-2.1',
     realtimeVoice: 'marin',
     wakeWord: 'Hey Asuna',
+    wakeWordProvider: 'sherpa-kws',
     idleTimeoutSeconds: 45,
     logLevel: 'info',
     memoryEnabled: true,
     transcriptStorage: false,
     toolApprovalMode: 'safe',
+    turnDetection: 'semantic_vad',
+    vadEagerness: 'high',
+    vadSilenceMs: 400,
   };
 }
 
@@ -34,16 +39,36 @@ describe('parseFrontendConfig', () => {
       realtimeModel: 'gpt-realtime-2.1',
       realtimeVoice: 'marin',
       wakeWord: 'Hey Asuna',
+      wakeWordProvider: 'sherpa-kws',
       idleTimeoutSeconds: 45,
       logLevel: 'info',
       memoryEnabled: true,
       transcriptStorage: false,
       toolApprovalMode: 'safe',
+      turnDetection: 'semantic_vad',
+      vadEagerness: 'high',
+      vadSilenceMs: 400,
     });
   });
 
   it('realtimeVoice icin null kabul eder (SDK varsayilani)', () => {
     expect(parseFrontendConfig(payloadWith('realtimeVoice', null)).realtimeVoice).toBeNull();
+  });
+
+  it('tur tespiti alanlarini (ASU-064) sozlesmeye alir', () => {
+    const semantic = parseFrontendConfig(validPayload());
+    expect(semantic.turnDetection).toBe('semantic_vad');
+    expect(semantic.vadEagerness).toBe('high');
+    expect(semantic.vadSilenceMs).toBe(400);
+
+    const server = parseFrontendConfig({
+      ...validPayload(),
+      turnDetection: 'server_vad',
+      vadEagerness: 'auto',
+      vadSilenceMs: 100,
+    });
+    expect(server.turnDetection).toBe('server_vad');
+    expect(server.vadSilenceMs).toBe(100);
   });
 
   it('nesne olmayan payload"u reddeder', () => {
@@ -67,6 +92,9 @@ describe('parseFrontendConfig', () => {
       ['realtimeModel', ''],
       ['realtimeVoice', 7],
       ['wakeWord', null],
+      ['wakeWordProvider', 'porcupine'],
+      ['wakeWordProvider', 'SHERPA-KWS'],
+      ['wakeWordProvider', null],
       ['idleTimeoutSeconds', '45'],
       ['idleTimeoutSeconds', 0],
       ['idleTimeoutSeconds', 45.5],
@@ -74,6 +102,13 @@ describe('parseFrontendConfig', () => {
       ['transcriptStorage', 1],
       ['logLevel', 'verbose'],
       ['toolApprovalMode', 'never'],
+      ['turnDetection', 'semantic'],
+      ['turnDetection', null],
+      ['vadEagerness', 'aggressive'],
+      ['vadEagerness', 'HIGH'],
+      ['vadSilenceMs', '400'],
+      ['vadSilenceMs', 0],
+      ['vadSilenceMs', 400.5],
     ];
 
     for (const [key, value] of cases) {
@@ -117,5 +152,21 @@ describe('parseFrontendConfig', () => {
     const config = parseFrontendConfig(validPayload());
     expect(Object.keys(config).sort()).toStrictEqual([...FRONTEND_CONFIG_KEYS].sort());
     expect(JSON.stringify(config)).not.toContain(API_KEY_SENTINEL);
+  });
+});
+
+describe('describeTurnDetection', () => {
+  it('semantic modda acikgozluluk etiketini verir', () => {
+    const config = parseFrontendConfig(payloadWith('vadEagerness', 'medium'));
+    expect(describeTurnDetection(config)).toBe('semantic/medium');
+  });
+
+  it('server modda sessizlik penceresini verir', () => {
+    const config = parseFrontendConfig({
+      ...validPayload(),
+      turnDetection: 'server_vad',
+      vadSilenceMs: 250,
+    });
+    expect(describeTurnDetection(config)).toBe('server/250ms');
   });
 });

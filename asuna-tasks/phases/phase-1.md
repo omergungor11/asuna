@@ -380,23 +380,55 @@ sayilir (R8).
 
 ## ASU-064: Realtime Gecikme Ayari (M1 sonrasi iyilestirme)
 
-**Scope**: backend | **Boyut**: S | **Durum**: PENDING | **Bagimlilik**: ASU-020
+**Scope**: backend | **Boyut**: S | **Durum**: COMPLETED (2026-08-24) | **Bagimlilik**: ASU-020
 
 ### Aciklama
 M1 canli testinde kullanici fark edilir gecikme raporladi. Turn-detection parametreleri
 konfigurabilir yapilip varsayilanlar hizlandirilacak; olcum karsilastirmali kaydedilecek.
 
 ### Acceptance Criteria
-- [ ] `ASUNA_VAD_EAGERNESS` env degiskeni (auto|low|medium|high; varsayilan **high**) —
+- [x] `ASUNA_VAD_EAGERNESS` env degiskeni (auto|low|medium|high; varsayilan **high**) —
       Rust config + frontend whitelist + `.env.example` + realtime-service baglantisi
-- [ ] `ASUNA_TURN_DETECTION` (semantic_vad|server_vad) ve server_vad icin
+- [x] `ASUNA_TURN_DETECTION` (semantic_vad|server_vad) ve server_vad icin
       `ASUNA_VAD_SILENCE_MS` (varsayilan 400) opsiyonel destegi
-- [ ] Gecikme olcumu (TurnLatencyTracker) log satirinda onceki/sonraki karsilastirmaya uygun
-- [ ] Tum gate'ler yesil; testler guncel
-- [ ] Kod disi kaldiraç dokumante: Cloudflare WARP kapali/acik karsilastirma notu
+- [x] Gecikme olcumu (TurnLatencyTracker) log satirinda onceki/sonraki karsilastirmaya uygun
+- [x] Tum gate'ler yesil; testler guncel
+- [x] Kod disi kaldiraç dokumante: Cloudflare WARP kapali/acik karsilastirma notu
       (ASU-007: WARP tum trafigi tunelliyor — WebRTC ses gecikmesine dogrudan eklenir)
 
 ### Notlar
 Eagerness "high" = model "konusma bitti" kararini daha erken verir; Turkcede erken kesme
 yaparsa "medium"a donulur (env ile ayar, rebuild yok). Model degisikligi (mini vs 2.1) ayri
 bir kaldiraç — ayni env uzerinden A/B yapilabilir.
+
+**Kod disi kaldiraç — Cloudflare WARP (dokumantasyon, kod isi degil):**
+ASU-007'de tespit edildigi gibi WARP tum trafigi tunelliyor. Realtime sesi WebRTC uzerinden
+akiyor; tunel her ses paketine ek RTT ve olasi jitter ekler — bu, turn-detection ayarindan
+**bagimsiz** ve genelde ondan buyuk bir kalemdir. Olcum protokolu:
+1. WARP **acik**: 3 tur konus, her turun `Yanit gecikmesi: … vad=…` log satirini not al.
+2. WARP **kapali** (ayni ag, ayni oturum uzunlugu): ayni 3 turu tekrarla.
+3. Fark 150 ms'den buyukse gecikmenin kaynagi VAD degil ag yolu — once WARP'i kapat,
+   sonra `ASUNA_VAD_EAGERNESS` ile oynamaya devam et.
+Bu adim kod degisikligi gerektirmez — olcum ve karar kullanicinin elinde. Log satirindaki
+`vad=` etiketi iki kosulun kayitlarini birbirinden ayirt edilebilir kilar.
+
+### Uygulama (tamamlandi)
+- `src-tauri/src/config.rs` — uc yeni anahtar (`ASUNA_TURN_DETECTION`, `ASUNA_VAD_EAGERNESS`,
+  `ASUNA_VAD_SILENCE_MS`), `TurnDetectionKind` / `VadEagerness` enum'lari, `VAD_SILENCE_RANGE`
+  (100-2000 ms). Mevcut desen korundu: **sessiz default yok** — anahtar tanimsiz ya da gecersizse
+  uygulama acilista net hatayla durur, hata mesaji degeri degil yalnizca anahtar adini anar.
+  Ucu de `FrontendConfig` whitelist'ine eklendi (secret icermiyor; oturum config'ini renderer kurar).
+- `src/asuna/config/frontend-config.ts` — `TURN_DETECTION_TYPES` / `VAD_EAGERNESS_LEVELS`
+  whitelist'i + `describeTurnDetection(config)` (log etiketi: `semantic/high`, `server/400ms`).
+- `src/asuna/agent/realtime-session-port.ts` — `TurnDetectionSpec` ayrik birlesimi; `eagerness`
+  yalnizca semantic'te, `silenceDurationMs` yalnizca server'da tasinir (ilgisiz alan SDK'ya gitmez).
+- `src/asuna/agent/realtime-service.ts` — `toTurnDetectionSpec(config)`; SDK cagrisinda
+  `createResponse` / `interruptResponse` sabit `true` kaldi (urun sozlesmesi, env ile kapatilamaz).
+- `src/asuna/agent/use-asuna-session.ts` — gecikme log satiri artik aktif ayari tasiyor:
+  `Yanit gecikmesi: 1240 ms (konusma sonu -> ilk ses) vad=semantic/high`.
+- `.env.example` — uc degisken, gecikme/erken-kesme takasi tek satirda acikliyor.
+
+**Varsayilan secimi**: `semantic_vad` + `eagerness=high`. Onceki sabit deger `medium`di.
+`high` "konusma bitti" kararini daha erken verdirir; bu, olculen "konusma sonu -> ilk ses"
+suresinin dogrudan ve en ucuz kaldirci. Takas: Turkce'de tumce ortasi duraklamada erken kesme.
+Erken kesme gorulurse `.env`'de `medium`a donulur — rebuild yok.

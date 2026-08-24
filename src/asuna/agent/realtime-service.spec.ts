@@ -16,7 +16,11 @@ import type {
   RealtimeSessionSignalListener,
   RealtimeSessionSpec,
 } from './realtime-session-port';
-import { AsunaRealtimeService, type AsunaRealtimeServiceOptions } from './realtime-service';
+import {
+  AsunaRealtimeService,
+  toTurnDetectionSpec,
+  type AsunaRealtimeServiceOptions,
+} from './realtime-service';
 import type { EphemeralRealtimeToken } from './realtime-token';
 import type { FrontendConfig } from '../config/frontend-config';
 import { buildAsunaInstructions } from '../prompts';
@@ -26,11 +30,15 @@ const CONFIG: FrontendConfig = {
   realtimeModel: 'gpt-realtime-2.1-mini',
   realtimeVoice: 'marin',
   wakeWord: 'Hey Asuna',
+  wakeWordProvider: 'sherpa-kws',
   idleTimeoutSeconds: 45,
   logLevel: 'info',
   memoryEnabled: true,
   transcriptStorage: true,
   toolApprovalMode: 'safe',
+  turnDetection: 'semantic_vad',
+  vadEagerness: 'high',
+  vadSilenceMs: 400,
 };
 
 const TOKEN: EphemeralRealtimeToken = {
@@ -183,6 +191,25 @@ function eventTypes(events: readonly AsunaRealtimeEvent[]): string[] {
 
 // ---------------------------------------------------------------------------
 
+describe('toTurnDetectionSpec (ASU-064)', () => {
+  it('her acikgozluluk seviyesini oldugu gibi tasir', () => {
+    for (const eagerness of ['auto', 'low', 'medium', 'high'] as const) {
+      expect(toTurnDetectionSpec({ ...CONFIG, vadEagerness: eagerness })).toEqual({
+        type: 'semantic_vad',
+        eagerness,
+      });
+    }
+  });
+
+  it('server_vad`de sessizlik penceresi SDK alan adina cevrilir', () => {
+    expect(
+      toTurnDetectionSpec({ ...CONFIG, turnDetection: 'server_vad', vadSilenceMs: 1200 }),
+    ).toEqual({ type: 'server_vad', silenceDurationMs: 1200 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+
 describe('AsunaRealtimeService — yasam dongusu', () => {
   it('connect() durumu BOOTING -> WAKING -> CONNECTING -> LISTENING yapar', async () => {
     const harness = createHarness();
@@ -216,6 +243,36 @@ describe('AsunaRealtimeService — yasam dongusu', () => {
     expect(spec?.transcription).toBe(true);
     expect(spec?.tools).toEqual([]);
     expect(spec?.instructions).toBe(buildAsunaInstructions());
+  });
+
+  it('turn detection semantic_vad config`inden kuruluyor (ASU-064)', async () => {
+    const harness = createHarness({
+      config: { ...CONFIG, turnDetection: 'semantic_vad', vadEagerness: 'low' },
+    });
+    await harness.service.connect();
+
+    expect(harness.sessions[0]?.spec.turnDetection).toEqual({
+      type: 'semantic_vad',
+      eagerness: 'low',
+    });
+  });
+
+  it('turn detection server_vad secilince sessizlik penceresi tasiniyor (ASU-064)', async () => {
+    const harness = createHarness({
+      config: {
+        ...CONFIG,
+        turnDetection: 'server_vad',
+        vadEagerness: 'high',
+        vadSilenceMs: 250,
+      },
+    });
+    await harness.service.connect();
+
+    // `eagerness` server_vad'de anlamsiz: config'te dolu olsa bile spec'e sizmaz.
+    expect(harness.sessions[0]?.spec.turnDetection).toEqual({
+      type: 'server_vad',
+      silenceDurationMs: 250,
+    });
   });
 
   it('transcriptStorage kapaliyken transkripsiyon istenmiyor', async () => {

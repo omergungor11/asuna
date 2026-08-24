@@ -46,6 +46,7 @@ import type {
   RealtimeSessionSignal,
   RealtimeSessionSignalListener,
   RealtimeSessionSpec,
+  TurnDetectionSpec,
 } from './realtime-session-port';
 import { mintRealtimeToken, type EphemeralRealtimeToken } from './realtime-token';
 import type { FrontendConfig } from '../config/frontend-config';
@@ -81,6 +82,19 @@ const DEFAULT_MAX_CONNECT_ATTEMPTS = 3;
 
 /** Denemeler arasi bekleme. */
 const DEFAULT_RECONNECT_DELAY_MS = 500;
+
+/**
+ * Config'ten SDK'ya gidecek tur tespiti ayarini kurar (ASU-064).
+ *
+ * `createResponse` / `interruptResponse` burada degil, SDK cagrisinda sabit `true`:
+ * ikisi de Asuna'nin urun sozlesmesi (kullanici konusunca Asuna susar, konusma bitince
+ * kendiliginden cevaplar) — env ile kapatilabilir olmamalari bilincli.
+ */
+export function toTurnDetectionSpec(config: FrontendConfig): TurnDetectionSpec {
+  return config.turnDetection === 'semantic_vad'
+    ? { type: 'semantic_vad', eagerness: config.vadEagerness }
+    : { type: 'server_vad', silenceDurationMs: config.vadSilenceMs };
+}
 
 // ---------------------------------------------------------------------------
 // 1. SDK adaptoru — SDK tipleri bu bolumun disina cikmaz
@@ -162,9 +176,10 @@ export const createOpenAiRealtimeSession: RealtimeSessionFactory = (
       outputModalities: ['audio'],
       audio: {
         input: {
+          // camelCase kabul ediliyor (voice.md Bolum 7). Ayarin kendisi config'ten
+          // gelir; burada yalnizca Asuna'nin degismez turn politikasi eklenir.
           turnDetection: {
-            type: 'semantic_vad',
-            eagerness: 'medium',
+            ...spec.turnDetection,
             createResponse: true,
             interruptResponse: true,
           },
@@ -488,6 +503,7 @@ export class AsunaRealtimeService {
       model: this.config.realtimeModel,
       voice: this.config.realtimeVoice,
       transcription: this.config.transcriptStorage,
+      turnDetection: toTurnDetectionSpec(this.config),
       tools: this.tools,
     };
 

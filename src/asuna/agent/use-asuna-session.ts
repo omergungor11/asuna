@@ -44,7 +44,7 @@ import { AsunaRealtimeService } from './realtime-service';
 import { registerWindowCloseHandler } from './window-lifecycle';
 import { probeMicrophoneAccess, type MicrophoneProbe } from '../audio/microphone-access';
 import { loadFrontendConfig } from '../config/config.service';
-import type { FrontendConfig } from '../config/frontend-config';
+import { describeTurnDetection, type FrontendConfig } from '../config/frontend-config';
 import {
   createLoggedVoiceStateMachine,
   isAsunaErrorKind,
@@ -522,9 +522,14 @@ export function useAsunaSession(options: UseAsunaSessionOptions = {}): AsunaSess
           if (latencyMs === null) {
             return;
           }
-          log.info(`Yanit gecikmesi: ${latencyMs.toString()} ms (konusma sonu -> ilk ses)`, {
-            latencyMs,
-          });
+          // ASU-064: olcum tek basina ise yaramaz — hangi tur-tespiti ayariyla
+          // alindigi ayni satirda durmali ki once/sonra karsilastirilabilsin.
+          const config = configRef.current;
+          const vad = config === null ? 'unknown' : describeTurnDetection(config);
+          log.info(
+            `Yanit gecikmesi: ${latencyMs.toString()} ms (konusma sonu -> ilk ses) vad=${vad}`,
+            { latencyMs, vad },
+          );
           dispatch({ type: 'latency_measured', latencyMs });
           return;
         }
