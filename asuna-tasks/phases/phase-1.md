@@ -89,20 +89,32 @@ alacak sekilde tasarla ama Phase 1'de bos gec. Fazla soyutlama yapma (PROJECT.md
 
 ## ASU-014: Voice State Machine
 
-**Scope**: frontend | **Boyut**: M | **Durum**: PENDING | **Bagimlilik**: ASU-013
+**Scope**: frontend | **Boyut**: M | **Durum**: COMPLETED (2026-08-24) | **Bagimlilik**: ASU-013
+(SDK'ya bagimli olmadigi icin ASU-013 beklenmeden yapildi — saf TS, React ve SDK importu yok)
 
 ### Aciklama
 PROJECT.md Bolum 7'deki durum listesi icin acik bir state machine. UI bunun turevi olacak, tersi degil.
 
 ### Acceptance Criteria
-- [ ] Durumlar tanimli: `BOOTING`, `IDLE_WAKE_WORD`, `WAKING`, `CONNECTING`, `LISTENING`,
+- [x] Durumlar tanimli: `BOOTING`, `IDLE_WAKE_WORD`, `WAKING`, `CONNECTING`, `LISTENING`,
       `USER_SPEAKING`, `ASSISTANT_THINKING`, `ASSISTANT_SPEAKING`, `TOOL_PENDING`,
       `AWAITING_APPROVAL`, `ERROR`
-- [ ] Gecerli gecisler acikca tanimli; gecersiz gecis sessizce yutulmuyor (hata/log)
-- [ ] Phase 1'de kullanilmayan durumlar (`IDLE_WAKE_WORD`, `TOOL_PENDING`, `AWAITING_APPROVAL`)
-      tanimli ama erisilmez — sonraki phase'ler icin yer tutuyor
-- [ ] Unit test: her gecerli gecis + en az 3 gecersiz gecis reddi
-- [ ] State degisimleri tek bir yerden yayinlaniyor (ASU-019 loglamasi buna baglanacak)
+- [x] Gecerli gecisler acikca tanimli (`VOICE_STATE_TRANSITIONS` tablosu); gecersiz gecis
+      sessizce yutulmuyor — dev'de `InvalidVoiceTransitionError`, prod'da durum korunur +
+      `onInvalidTransition` ile loglanir
+- [x] Phase 1'de kullanilmayan durumlar (`IDLE_WAKE_WORD`, `TOOL_PENDING`, `AWAITING_APPROVAL`)
+      tanimli ama Phase 1 akisindan erisilmez — tabloda phase notlariyla isaretli
+- [x] Unit test: tablodaki her gecerli gecis (54 kenar) + 5 gecersiz gecis her iki politikada
+      (toplam 78 test, `src/asuna/state/voice-state-machine.spec.ts`)
+- [x] State degisimleri tek bir yerden yayinlaniyor (`subscribe` — ASU-019 loglamasi buna baglanir)
+
+### Notlar
+Gecersiz gecis politikasi konfigurabilir (`invalidTransitionPolicy`), varsayilan
+`import.meta.env.DEV ? 'throw' : 'reject'`: gelistirmede bug sessiz bir "durum degismedi"
+olarak gizlenmez, uretimde ise sesli oturum bir UI bug'i yuzunden dusmez (PROJECT.md Bolum 30).
+Oturum kapanisinda kanonik hedef `IDLE_WAKE_WORD`; Phase 1'de wake word motoru olmadigi icin
+`BOOTING` de gecerli cikis hedefi (ASU-018 "IDLE/BOOTING") ve Phase 2'de (ASU-023) kaldirilacak
+sekilde `SESSION_EXIT_TARGETS` icinde isaretli. React entegrasyonu ASU-015'te hook ile yapilacak.
 
 ---
 

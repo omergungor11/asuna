@@ -9,15 +9,15 @@
 | Phase | Ad | Total | Done | In Progress | Review | Pending | Blocked |
 |-------|----|-------|------|-------------|--------|---------|---------|
 | 0 | Arastirma + Scaffold | 11 | 11 | 0 | 0 | 0 | 0 |
-| 1 | Realtime Voice (dikey dilim) | 10 | 1 | 0 | 0 | 9 | 0 |
+| 1 | Realtime Voice (dikey dilim) | 10 | 2 | 0 | 0 | 8 | 0 |
 | 2 | Wake Word | 8 | 0 | 0 | 0 | 8 | 0 |
 | 3 | Memory | 10 | 0 | 0 | 0 | 10 | 0 |
 | 4 | Project Context | 8 | 0 | 0 | 0 | 8 | 0 |
 | 5 | One Useful Action (Tools) | 9 | 0 | 0 | 0 | 9 | 0 |
 | 6 | Focus Recovery (MVP) | 8 | 0 | 0 | 0 | 8 | 0 |
-| **Total** | | **64** | **12** | **0** | **0** | **52** | **0** |
+| **Total** | | **64** | **13** | **0** | **0** | **51** | **0** |
 
-**Progress**: 12/64 (19%)
+**Progress**: 13/64 (20%)
 
 > ASU-008b spike tamamlandi (2026-08-24): motor/lisans/CPU/bundle dogrulandi, ADR-004 accepted
 > (kapsami daraltilmis). ACIK: model+ifade secimi — gigaspeech-3.3M "Hey Asuna"yi tasimiyor (R2).
@@ -70,7 +70,7 @@
 | ASU-011 | Ephemeral Realtime token minting (Rust) | 1 | L | backend | PENDING |
 | ASU-012 | Asuna core prompt / instructions dosyasi | 1 | S | backend | COMPLETED |
 | ASU-013 | `AsunaRealtimeService` (SDK wrapper) | 1 | L | backend | PENDING |
-| ASU-014 | Voice state machine | 1 | M | frontend | PENDING |
+| ASU-014 | Voice state machine | 1 | M | frontend | COMPLETED |
 | ASU-015 | "Talk to Asuna" gecici butonu + baglanti akisi | 1 | M | frontend | PENDING |
 | ASU-016 | Iki yonlu ses + interruption (barge-in) | 1 | M | frontend | PENDING |
 | ASU-017 | Canli transcript UI | 1 | M | frontend | PENDING |
