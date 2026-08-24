@@ -285,18 +285,32 @@ Test: `transcript-view.spec.tsx` (7) + `use-asuna-session.spec.ts` transcript bl
 
 ## ASU-018: Temiz Disconnect + Kaynak Temizligi
 
-**Scope**: frontend | **Boyut**: M | **Durum**: PENDING | **Bagimlilik**: ASU-016
+**Scope**: frontend | **Boyut**: M | **Durum**: COMPLETED (2026-08-24, macOS gostergesi ASU-020'de)
+| **Bagimlilik**: ASU-016
 
 ### Aciklama
 Kotu kapanma bu urunde maliyet demek — acik kalan bir oturum fatura yazar (R1).
 
 ### Acceptance Criteria
-- [ ] Stop butonu oturumu kapatiyor; durum `IDLE`/`BOOTING`'e donuyor
-- [ ] Mikrofon track'leri `stop()` ediliyor — macOS mikrofon gostergesi soneyor
-- [ ] `RTCPeerConnection` kapatiliyor, event listener'lar temizleniyor
-- [ ] Pencere kapatilirken / uygulama cikarken oturum kapatiliyor (leak yok)
-- [ ] Ag kopmasi durumunda oturum otomatik temizleniyor ve UI `ERROR` gosteriyor
-- [ ] Ard arda 5 kez baglan/kes yapildiginda leak yok (bellek + acik baglanti sayisi kontrol edilmis)
+- [x] Stop butonu oturumu kapatiyor; durum `IDLE`/`BOOTING`'e donuyor
+- [~] Mikrofon track'leri `stop()` ediliyor — izin sondasinin track'leri `finally` icinde
+      hemen durduruluyor (testli); oturum mikrofonunun sahibi SDK ve `close()` onu
+      durduruyor (voice.md Bolum 4). **macOS gostergesinin sondugu MANUEL — ASU-020'de**
+- [x] `RTCPeerConnection` kapatiliyor, event listener'lar temizleniyor — `session.close()`
+      servis tarafinda; hook unmount'ta `subscribe` aboneligini sokuyor (sayac testli)
+- [x] Pencere kapatilirken / uygulama cikarken oturum kapatiliyor (leak yok) —
+      `registerWindowCloseHandler`: `beforeunload` + Tauri `onCloseRequested`
+- [x] Ag kopmasi durumunda oturum otomatik temizleniyor ve UI `ERROR` gosteriyor —
+      oturum ici hata: `disconnect()` + tekrar `ERROR` durumu; yeniden baglanma yolu acik
+- [x] Ard arda 5 kez baglan/kes yapildiginda leak yok — test: tek servis, dinleyici
+      sayaci sabit 1, unmount sonrasi 0; 5 connect / 5 disconnect, durum her turda tutarli
+
+### Notlar
+`disconnect()` cagrisi tam olarak acik oturum basina bir kez yapiliyor (`sessionOpenRef`):
+kapali oturumda stop/unmount fazladan cagri uretmiyor. Oturum ici hatada once oturum
+kapatilip sonra tekrar `ERROR` durumuna geciliyor — kaynak temizlenirken olay gizlenmiyor;
+FSM log'unda `ERROR -> BOOTING -> ERROR` zinciri bilincli olarak gorunur.
+Test: `use-asuna-session.spec.ts` ASU-018 blogu (5) + `window-lifecycle.spec.ts` (3).
 
 ---
 

@@ -686,3 +686,132 @@ describe('useAsunaSession — canli transcript (ASU-017)', () => {
     expect(result.current.transcript).toHaveLength(0);
   });
 });
+
+describe('useAsunaSession — temiz disconnect ve kaynak temizligi (ASU-018)', () => {
+  it('ard arda 5 baglan/kes: dinleyici birikmiyor, durum tutarli', async () => {
+    const harness = createHarness();
+    const { result, unmount } = renderHook(() => useAsunaSession(harness.options));
+
+    for (let round = 0; round < 5; round += 1) {
+      await flush(() => {
+        result.current.start();
+      });
+      expect(result.current.state).toBe('LISTENING');
+      expect(result.current.connected).toBe(true);
+
+      act(() => {
+        result.current.stop();
+      });
+      expect(result.current.state).toBe('BOOTING');
+      expect(result.current.connected).toBe(false);
+
+      // Her turda tek servis, tek dinleyici — abonelik birikmiyor.
+      expect(harness.createdServices()).toBe(1);
+      expect(harness.service().listenerCount()).toBe(1);
+    }
+
+    expect(harness.service().connectCalls()).toBe(5);
+    expect(harness.service().disconnectCalls()).toBe(5);
+
+    unmount();
+    expect(harness.service().listenerCount()).toBe(0);
+  });
+
+  it('kapali oturumda stop() fazladan disconnect uretmiyor', async () => {
+    const harness = createHarness();
+    const { result } = renderHook(() => useAsunaSession(harness.options));
+
+    await flush(() => {
+      result.current.start();
+    });
+    act(() => {
+      result.current.stop();
+      result.current.stop();
+      result.current.stop();
+    });
+
+    expect(harness.service().disconnectCalls()).toBe(1);
+  });
+
+  it('bilesen unmount olurken acik oturumu kapatiyor', async () => {
+    const harness = createHarness();
+    const { result, unmount } = renderHook(() => useAsunaSession(harness.options));
+
+    await flush(() => {
+      result.current.start();
+    });
+    const service = harness.service();
+
+    unmount();
+
+    expect(service.disconnectCalls()).toBe(1);
+    expect(service.listenerCount()).toBe(0);
+  });
+
+  it('pencere kapanirken oturumu kapatiyor ve kanca unmount’ta sokuluyor', async () => {
+    const handlers: (() => void)[] = [];
+    let detachCalls = 0;
+    const harness = createHarness();
+    const options: UseAsunaSessionOptions = {
+      ...harness.options,
+      registerCloseHandler: (handler): (() => void) => {
+        handlers.push(handler);
+        return (): void => {
+          detachCalls += 1;
+        };
+      },
+    };
+    const { result, unmount } = renderHook(() => useAsunaSession(options));
+
+    await flush(() => {
+      result.current.start();
+    });
+    expect(handlers).toHaveLength(1);
+
+    act(() => {
+      handlers[0]?.();
+    });
+
+    expect(harness.service().disconnectCalls()).toBe(1);
+    expect(result.current.connected).toBe(false);
+
+    unmount();
+    expect(detachCalls).toBe(1);
+  });
+
+  it('ag kopmasinda oturum otomatik temizleniyor ve UI ERROR gosteriyor', async () => {
+    const harness = createHarness();
+    const { result } = renderHook(() => useAsunaSession(harness.options));
+
+    await flush(() => {
+      result.current.start();
+    });
+    const service = harness.service();
+
+    act(() => {
+      harness.machine.transition('ERROR', 'ERROR_OCCURRED');
+      service.emit({
+        type: 'error',
+        error: {
+          kind: 'session',
+          cause: null,
+          message: 'Ses oturumunda hata olustu: baglanti koptu',
+          retryable: false,
+        },
+      });
+    });
+
+    expect(service.disconnectCalls()).toBe(1);
+    expect(result.current.state).toBe('ERROR');
+    expect(result.current.connected).toBe(false);
+    expect(result.current.error?.message).toContain('baglanti koptu');
+    // ERROR terminal degil: yeniden baglanma yolu acik.
+    expect(result.current.error?.retryable).toBe(true);
+
+    await flush(() => {
+      result.current.start();
+    });
+    expect(result.current.state).toBe('LISTENING');
+    expect(service.connectCalls()).toBe(2);
+  });
+});

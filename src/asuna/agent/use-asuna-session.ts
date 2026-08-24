@@ -41,6 +41,7 @@ import type {
   TranscriptEntry,
 } from './realtime-events';
 import { AsunaRealtimeService } from './realtime-service';
+import { registerWindowCloseHandler } from './window-lifecycle';
 import { probeMicrophoneAccess, type MicrophoneProbe } from '../audio/microphone-access';
 import { loadFrontendConfig } from '../config/config.service';
 import type { FrontendConfig } from '../config/frontend-config';
@@ -133,7 +134,10 @@ export function describeRealtimeFailure(info: AsunaRealtimeErrorInfo): UserFacin
     kind: fallback.kind,
     message: info.message,
     action: fallback.action,
-    retryable: info.retryable,
+    // Oturum ici hatada servisin `retryable: false` demesi "otomatik yeniden baglanma
+    // yapma" demektir (ASU-013 tasarim notu) — kullanicinin elle tekrar baglanmasi
+    // anlamsiz degil. UI sozlesmesi burada ASU-019 tablosunu izler.
+    retryable: info.kind === 'session' ? fallback.retryable : info.retryable,
   };
 }
 
@@ -383,6 +387,11 @@ export interface UseAsunaSessionOptions {
   readonly logger?: AsunaLogger;
   /** Gecikme olcumunun zaman kaynagi — testte deterministik kilmak icin. */
   readonly now?: () => number;
+  /**
+   * Pencere kapanisini dinler; kanca cagrildiginda oturum kapatilir (ASU-018).
+   * @returns kancayi soken fonksiyon.
+   */
+  readonly registerCloseHandler?: (handler: () => void) => () => void;
 }
 
 export interface AsunaSession {
@@ -421,6 +430,7 @@ interface ResolvedDeps {
   readonly log: AsunaLogger;
   readonly now: () => number;
   readonly latency: TurnLatencyTracker;
+  readonly registerCloseHandler: (handler: () => void) => () => void;
 }
 
 function defaultCreateService(context: AsunaSessionContext): AsunaSessionPort {
@@ -442,6 +452,7 @@ function resolveDeps(options: UseAsunaSessionOptions): ResolvedDeps {
     log: log.child('voice-session'),
     now: options.now ?? ((): number => Date.now()),
     latency: new TurnLatencyTracker(),
+    registerCloseHandler: options.registerCloseHandler ?? registerWindowCloseHandler,
   };
 }
 
@@ -458,6 +469,8 @@ export function useAsunaSession(options: UseAsunaSessionOptions = {}): AsunaSess
   const configRef = useRef<FrontendConfig | null>(null);
   const busyRef = useRef(false);
   const connectedRef = useRef(false);
+  /** Servis tarafinda kapatilmasi gereken bir oturum var mi (baglanma asamasi dahil). */
+  const sessionOpenRef = useRef(false);
   const mountedRef = useRef(true);
 
   const state = useSyncExternalStore(
@@ -539,17 +552,62 @@ export function useAsunaSession(options: UseAsunaSessionOptions = {}): AsunaSess
     [deps],
   );
 
+  /**
+   * Oturumu kapatir. Idempotent; acik oturum yoksa hicbir sey yapmaz (ASU-018).
+   *
+   * Kapanis servisin isi: `usage` raporlanir, `RTCPeerConnection` kapanir ve mikrofon
+   * track'leri durur (mikrofonun sahibi SDK — voice.md Bolum 4 "Secenek A").
+   */
+  const closeSession = useCallback(
+    (reason: string): void => {
+      const service = serviceRef.current;
+      connectedRef.current = false;
+      if (service === null || !sessionOpenRef.current) {
+        return;
+      }
+      sessionOpenRef.current = false;
+      deps.log.info(`Oturum kapatiliyor (${reason}).`);
+      service.disconnect();
+    },
+    [deps],
+  );
+
+  /**
+   * Oturum acikken gelen hata: kaynak sizmasin diye oturum kapatilir (R1 — acik
+   * kalan oturum fatura yazar), ama olay gizlenmez.
+   *
+   * `disconnect()` durumu idle'a aldigi icin hemen ardindan tekrar `ERROR`'a geciliyor:
+   * log'da "kapandi -> hata" zinciri gorunur kalir ve kullanici ekranda `ERROR` gorur
+   * (phase-1.md ASU-018). `ERROR` terminal degil — buton yeniden baglanma yolunu acar.
+   */
+  const handleSessionFailure = useCallback((): void => {
+    if (!connectedRef.current) {
+      // Baglanti asamasindaki hata: servis kendini zaten kapatti.
+      return;
+    }
+    deps.log.warn('Oturum hata sonrasi kapatiliyor (acik baglanti birakilmiyor).');
+    closeSession('error');
+    transition('ERROR', 'ERROR_OCCURRED');
+  }, [closeSession, deps, transition]);
+
   const handleEvent = useCallback(
     (event: AsunaRealtimeEvent): void => {
       if (event.type === 'connected') {
         connectedRef.current = true;
-      } else if (event.type === 'disconnected') {
-        connectedRef.current = false;
       }
       trackLatency(event);
       dispatch({ type: 'realtime_event', event });
+
+      if (event.type === 'disconnected') {
+        connectedRef.current = false;
+        sessionOpenRef.current = false;
+        return;
+      }
+      if (event.type === 'error') {
+        handleSessionFailure();
+      }
     },
-    [trackLatency],
+    [handleSessionFailure, trackLatency],
   );
 
   const ensureService = useCallback(
@@ -638,8 +696,13 @@ export function useAsunaSession(options: UseAsunaSessionOptions = {}): AsunaSess
 
       const config = await ensureConfig();
       const service = ensureService(config);
+      // Bu noktadan sonra servis tarafinda kapatilmasi gereken bir sey var: baglanma
+      // yarida kalirsa bile `disconnect()` akisi terk edip temizler (ASU-013).
+      sessionOpenRef.current = true;
       await service.connect();
     } catch (error) {
+      // Baglanti kurulamadi: servis kendi kaynagini zaten birakti.
+      sessionOpenRef.current = false;
       failActivation(error);
     } finally {
       busyRef.current = false;
@@ -654,20 +717,31 @@ export function useAsunaSession(options: UseAsunaSessionOptions = {}): AsunaSess
   }, [activate]);
 
   const stop = useCallback((): void => {
-    const service = serviceRef.current;
-    if (service === null) {
-      return;
-    }
-    connectedRef.current = false;
-    service.disconnect();
-  }, []);
+    closeSession('user_stop');
+  }, [closeSession]);
 
+  /**
+   * Kapanis kancalari (ASU-018).
+   *
+   * - Pencere kapanirken oturum kapatilir (acik oturum fatura yazar).
+   * - Bilesen unmount olurken oturum kapatilir **ve** servis aboneligi sokulur;
+   *   dinleyici birikmesi olmaz.
+   */
   useEffect(() => {
     mountedRef.current = true;
+    const detachCloseHandler = deps.registerCloseHandler(() => {
+      closeSession('window_closed');
+    });
+
     return (): void => {
       mountedRef.current = false;
+      detachCloseHandler();
+      closeSession('unmounted');
+      unsubscribeRef.current?.();
+      unsubscribeRef.current = null;
+      serviceRef.current = null;
     };
-  }, []);
+  }, [closeSession, deps]);
 
   return {
     state,
