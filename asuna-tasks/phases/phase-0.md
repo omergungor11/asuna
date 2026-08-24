@@ -165,7 +165,7 @@ Guncel resmi dokumantasyona bak, egitim verisindeki eski isimlere guvenme (TRANS
 
 ## ASU-007: [ARASTIRMA] Tauri Webview Mikrofon + WebRTC Spike
 
-**Scope**: research | **Boyut**: M | **Durum**: PENDING | **Bagimlilik**: ASU-002
+**Scope**: research | **Boyut**: M | **Durum**: COMPLETED (2026-08-24) — WKWebView calisiyor, OQ-5/R3 kapandi; bulgular voice.md Bolum 11 | **Bagimlilik**: ASU-002
 
 ### Aciklama
 **Phase 1'i tumden bloklayabilecek risk (R3).** macOS'te Tauri'nin WKWebView'inda `getUserMedia` ve

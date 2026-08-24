@@ -14,10 +14,10 @@
 | Paket yoneticisi | pnpm | Karar |
 | Frontend | React + TypeScript (strict) + Vite | Karar |
 | AI / orchestration | `@openai/agents-realtime` **0.17.0** (exact pin) — RealtimeAgent / RealtimeSession | Karar (ASU-006) |
-| Ses transport | WebRTC (`transport: 'webrtc'` acikca) | Karar |
+| Ses transport | WebRTC (`transport: 'webrtc'` acikca) | Karar — WKWebView'de dogrulandi (ASU-007) |
 | Realtime model | `gpt-realtime-2.1` (dev: `gpt-realtime-2.1-mini`) — env ile | Karar — dogrulandi (ASU-006) |
 | Wake word | **sherpa-onnx `KeywordSpotter`** (Rust, `cpal`), `WakeWordProvider` adapter arkasinda | Karar (proposed — spike bekliyor, `docs/decisions/ADR-004`) |
-| Veritabani | SQLite | Karar — **erisim yolu acik** (OQ-1) |
+| Veritabani | SQLite — Rust servis (`rusqlite`), `docs/decisions/ADR-005` | Karar (ASU-005) |
 | Secret / auth | Ephemeral Realtime token, key Rust tarafinda | Karar |
 | Test | Vitest (unit/integration) + Rust `cargo test` | Karar |
 
@@ -291,7 +291,7 @@ Phase 0'da (teknik arastirma + scaffold) kapatilir. Karar cikan her madde
 | OQ-2 | ~~Migration araci~~ **KAPANDI** (ASU-005): `rusqlite_migration` 2.6.0 (`user_version`, up/down, `validate()` CI testi) | — | Kapandi |
 | OQ-3 | ~~Porcupine lisans modeli~~ **KAPANDI** (ASU-008): Free Tier kapatildi, non-commercial tier yok → Porcupine elendi, sherpa-onnx secildi (`docs/decisions/ADR-004`). Kalan tek lisans sorusu KWS model agirliklari — spike'ta (ASU-008b) | — | Kapandi |
 | OQ-4 | ~~Wake word hangi tarafta?~~ **KAPANDI** (ASU-008): Rust tarafinda (sherpa-onnx + cpal); idle'da mikrofon renderer'a hic acilmiyor | — | Kapandi |
-| OQ-5 | Agents SDK'nin WebRTC transport'u Tauri WKWebView'inde sorunsuz calisiyor mu? | `getUserMedia` izinleri, WKWebView WebRTC destegi — Phase 1'in en buyuk teknik riski (ASU-007 spike). Not: SDK `window.RTCPeerConnection` yoksa sessizce WebSocket'e duser — spike ham WebRTC ile yapilmali | Phase 0 |
+| OQ-5 | ~~WebRTC WKWebView'de calisiyor mu?~~ **KAPANDI** (ASU-007): calisiyor — gUM+TCC kalici izin, SDP/DTLS/opus/data-channel, srflx/STUN, autoplay engelsiz; fallback gerekmedi. KRITIK: prod CSP connect-src'a api.openai.com eklendi (dev'de gorunmeyen blocker). Detay voice.md Bolum 11 | — | Kapandi |
 | OQ-6 | Mikrofon devir teslimi: Rust cpal (idle) ↔ renderer getUserMedia (aktif) | Gecis suresi, macOS TCC izin sayisi, turuncu gosterge davranisi — ASU-008b spike'inda olculur | Phase 0/2 |
 | OQ-7 | ~~Ephemeral token endpoint~~ **KAPANDI** (ASU-006): `POST /v1/realtime/client_secrets`, `expires_after.seconds` 10–7200 (varsayilan 600), yanit `ek_` prefix'li `value` — detay `docs/architecture/voice.md` Bolum 5 | — | Kapandi |
 | OQ-8 | Styling katmani ne olacak? | CSS Modules / Tailwind / minimal custom — UI ana urun degil, en az bakim gerektiren secilir | Phase 1 |

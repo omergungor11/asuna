@@ -744,3 +744,137 @@ yapışkan onay verir (Asuna'da **kullanılmamalı** — her destructive işlem 
 
 **Not:** `platform.openai.com/docs/*` WebFetch'e 403 dönüyor; içerik
 `developers.openai.com` üzerinden doğrulandı.
+
+---
+
+## 11. WKWebView doğrulaması (ASU-007)
+
+> Kaynak: ASU-007 spike'ı, 2026-08-24. Yöntem: SDK **olmadan**, ham tarayıcı
+> API'leriyle; sonuçlar Rust `#[tauri::command]` ile diske yazıldı. Ortam:
+> macOS (Darwin 25.5), Apple Silicon, Tauri 2.11.5 / wry 0.55.1, WKWebView
+> (AppleWebKit 605.1.15). 3 dev koşusu + 3 paketlenmiş `.app` koşusu +
+> native Safari kontrol deneyi.
+
+### 11.1 Sonuç
+
+**OQ-5 kapandı: WebRTC transport Tauri WKWebView'ında çalışıyor.** Fallback
+(WebSocket transport / Rust audio pipeline / ayrı process) gerekmiyor.
+`transport: 'webrtc'` açıkça verilmeli — ama `hasWebRTCSupport()` guard'ı da
+zaten `true` dönüyor, yani sessiz WebSocket düşüşü riski yok.
+
+### 11.2 API yüzeyi (izin gerektirmez)
+
+| Kontrol | dev (`http://localhost:1420`) | bundle (`tauri://localhost`) |
+| --- | --- | --- |
+| `typeof window.RTCPeerConnection` | `function` | `function` |
+| `hasWebRTCSupport()` (SDK guard) | `true` | `true` |
+| `typeof navigator.mediaDevices.getUserMedia` | `function` | `function` |
+| `window.isSecureContext` | `true` | **`true`** |
+| `typeof crypto.subtle` | `object` | `object` |
+| `RTCRtpSender.getCapabilities('audio')` | opus, red, G722, PCMU, PCMA, CN, telephone-event | aynı |
+
+**`tauri://localhost` bir secure context.** Custom protocol'ün
+`getUserMedia`/WebCrypto'yu düşürmesi riski gerçekleşmedi — `useHttpsScheme`
+gibi bir ayara ihtiyaç yok.
+
+### 11.3 SDP / ICE
+
+Mikrofon izni **olmadan** üretilen offer: `m=audio` ✓, `opus/48000` ✓,
+`a=fingerprint:` (DTLS) ✓, `m=application` (data channel `oai-events`) ✓,
+ICE gathering `complete`, host adayları toplanıyor. STUN verildiğinde
+**srflx adayı alınıyor** → webview dışarıya UDP gönderip yanıt alabiliyor.
+Bu, SDK'nın ihtiyaç duyduğu ağ kabiliyetinin ta kendisi.
+
+### 11.4 Mikrofon
+
+`getUserMedia({ audio: true })` → gerçek cihaz track'i:
+`label: "MacBook Pro Microphone"`, `readyState: live`, `sampleRate: 48000`,
+`echoCancellation: true`, `volume: 1`.
+
+- **Tek TCC promptu.** Paketlenmiş `.app` ilk kez istediğinde macOS dialogu
+  çıkıyor (gUM promise'i askıda kalıyor). Onaydan sonra grant **kalıcı**:
+  uygulamanın temiz yeniden açılışında gUM **65 ms**'de, dialogsuz dönüyor.
+- **`track.stop()` sonrası** track `ended` → macOS turuncu mikrofon göstergesi
+  sönüyor. `IDLE`'a dönüşte mikrofonu bırakmak uygulamanın sorumluluğu
+  (Bölüm 4 "mediaStream sahipliği" ile birebir örtüşür).
+- **Gotcha:** `navigator.permissions.query({name:'microphone'})` sayfa
+  yüklenirken TCC izni verilmiş olsa bile **`prompt`** döner; ancak o sayfada
+  başarılı bir gUM'dan sonra `granted` olur. **İzin durumu için bunu kaynak
+  gerçek olarak kullanma** — gerçek sinyal gUM'ın çözülme süresidir.
+- **wry not:** `webView:requestMediaCapturePermissionForOrigin:...` delegate'i
+  **koşulsuz `WKPermissionDecision::Grant`** dönüyor. Yani webview seviyesinde
+  bir izin kapısı **yok**; tek kapı macOS TCC. Güvenlik sonucu: webview'da
+  yüklenen her origin mikrofona erişebilir → CSP ve navigasyon kısıtları ekstra
+  önem kazanıyor (PROJECT.md Bölüm 19).
+
+### 11.5 Uzak ses çıkışı
+
+SDK'nın kod yolu (`<audio autoplay>` + `srcObject = remoteStream`) çalışıyor:
+`play()` promise **resolve oluyor**, `paused: false`, `readyState: 4`,
+`currentTime` ilerliyor. **Autoplay engeli yok** — wry
+`mediaTypesRequiringUserActionForPlayback = None` set ediyor (wry varsayılanı
+`autoplay: true`, Tauri bunu değiştirmiyor). `AudioContext` `running`, 48 kHz.
+`options.audioElement` vermeye gerek yok.
+
+### 11.6 CSP — Phase 1 için zorunlu değişiklik (UYGULANDI)
+
+SDK, SDP offer'ını `POST https://api.openai.com/v1/realtime/calls` ile
+gönderiyor (Bölüm 4). Paketlenmiş uygulamada varsayılan CSP bunu **engelliyordu**:
+
+```
+securitypolicyviolation: connect-src <- https://api.openai.com/v1/realtime/calls
+fetch → TypeError: Load failed
+```
+
+**Bu hata `pnpm tauri dev`'de GÖRÜNMEZ** — dev'de sayfayı Vite servis eder,
+Tauri'nin CSP header'ı uygulanmaz. Yani ses dev'de çalışıp `tauri build`
+sonrası sessizce ölür. Düzeltme `tauri.conf.json`'a uygulandı:
+
+```json
+"connect-src": "'self' ipc: http://ipc.localhost https://api.openai.com"
+```
+
+Doğrulandı (spike): düzeltmeden sonra paketlenmiş build'de istek ağa çıkıyor
+(`401`, auth yok — beklenen), sıfır CSP ihlali.
+`media-src 'self' blob: mediastream:` zaten yeterli. WebRTC'nin UDP/ICE trafiği
+`connect-src`'a tabi **değil** (CSP'li build'de de srflx adayı alındı) —
+kesilen yalnızca SDP HTTP POST'u.
+**WebSocket transport'a düşülürse** ayrıca `wss://api.openai.com` eklenmeli.
+
+### 11.7 Doğrulanamayan: gerçek RTP medya akışı
+
+İki lokal peer arasındaki loopback bu makinede `checking → failed`'de kaldı
+(`packetsSent: 0`). Katman izolasyonu:
+
+1. Trickle ICE adayları iki yöne forward edildi ve `addIceCandidate` yalnızca
+   remote description set edildikten sonra çağrıldı → `addIceCandidate`
+   hatası **sıfır**. Race elendi, sonuç değişmedi.
+2. Ortamda **Cloudflare WARP açık**. WebKit yalnızca WARP tünel adresini
+   (`172.16.0.2`) topluyor, `en0`'ı hiç toplamıyor; izin öncesi adaylar mDNS
+   maskeli (`<uuid>.local`) ve çözülemiyor.
+3. **Kontrol deneyi:** Aynı kod **native Safari 26.5.2**'de (Tauri yok),
+   STUN'suz ve STUN'lu, **tıpatıp aynı şekilde** başarısız.
+
+→ Lokal P2P hairpin bu ağda tarayıcı bağımsız çalışmıyor; **WKWebView kusuru
+değil**. Asuna'nın senaryosu P2P değil (client → OpenAI public sunucusu) ve o
+yolun ön koşulu olan srflx/STUN erişimi webview'da **çalışıyor**.
+Gerçek RTP akışı Phase 1'de ilk canlı oturumda `session.usage` ve
+`transport_event` ile doğrulanacak (V7 → kısmen kapandı, tam kapanış Phase 1).
+
+### 11.8 Kalan manuel doğrulamalar
+
+| # | Doğrulanacak | Nasıl | Ne zaman |
+|---|---|---|---|
+| M1 | Gerçek RTP medya akışı (paket + duyulabilir ses) | İlk canlı OpenAI oturumu; `session.usage`, `transport_event`, `getStats().inbound-rtp.totalAudioEnergy > 0` | Phase 1 ilk task |
+| M2 | Entitlement'ın fiilen uygulanması | Developer ID ile imzala → `codesign -d --entitlements -` çıktısında `audio-input` görünmeli | İmzalama/dağıtım task'ı |
+| M3 | Hardened runtime altında mikrofon | M2 ile birlikte — imzasız `.app`'te hardened runtime fiilen zorlanmıyor | İmzalama/dağıtım task'ı |
+| M4 | Dev binary'de her rebuild'de TCC promptu tekrar çıkıyor mu | Dev ergonomisi gözlemi | Phase 1 sırasında |
+| M5 | TCC devir teslimi: Rust `cpal` (wake word) → renderer `getUserMedia` tek izin mi | ASU-008b kapsamı — bu spike'ta paketlenmiş app **tek** mikrofon promptu gösterdi, iyi işaret | ASU-008b |
+
+### 11.9 Info.plist kuralı (pazarlıksız)
+
+`NSMicrophoneUsageDescription` **tam olarak `src-tauri/Info.plist`** dosyasında
+durmalı: dev'de `tauri-codegen` yalnızca bu yolu okuyup dev binary'ye gömer
+(`bundle.macOS.infoPlist` ile verilen özel yolu dev'de OKUMAZ — oraya konursa
+`tauri dev`'de mikrofon TCC ihlaliyle patlar); build'de bundler aynı dosyayı
+üretilen Info.plist ile merge eder.

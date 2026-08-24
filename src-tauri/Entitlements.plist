@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Hardened Runtime acikken (bundle.macOS.hardenedRuntime = true) mikrofon
+	     erisimi bu entitlement olmadan reddedilir. TCC izni ayri bir katman:
+	     entitlement "bu uygulama mikrofon isteyebilir" der, TCC kullanicinin
+	     onayini tutar. Ikisi de gerekli. -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+</dict>
+</plist>
