@@ -57,29 +57,17 @@
         "enable": false,
         "scope": []
       },
-      "capabilities": [
-        "default",
-        "asuna-config",
-        "asuna-realtime"
-      ]
+      "capabilities": ["default", "asuna-config", "asuna-realtime"]
     }
   },
   "bundle": {
     "active": true,
-    "targets": [
-      "app",
-      "dmg"
-    ],
+    "targets": ["app", "dmg"],
     "category": "Productivity",
     "copyright": "Copyright (c) 2026 Omer Gungor",
     "shortDescription": "Local-first sesli AI companion",
     "longDescription": "Asuna, macOS uzerinde calisan local-first sesli kisisel AI companion.",
-    "icon": [
-      "icons/32x32.png",
-      "icons/128x128.png",
-      "icons/128x128@2x.png",
-      "icons/icon.icns"
-    ],
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns"],
     "macOS": {
       "minimumSystemVersion": "13.0",
       "hardenedRuntime": true,
