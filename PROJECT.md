@@ -648,6 +648,11 @@ Possible libraries:
 - better-sqlite3;
 - template's existing database layer.
 
+> **REVISION (2026-08-24, ASU-005):** Access layer decided by measurement — SQLite is reached
+> **only from the Rust process** (`rusqlite` + `rusqlite_migration`, typed `#[tauri::command]`s,
+> per-command ACL). The JS-side ORM candidates above do not apply; the renderer never sees SQL.
+> See `docs/decisions/ADR-005-sqlite-access.md`.
+
 If the starter template already has a strong local database abstraction, preserve it.
 
 ## 12.2 Memory tables
