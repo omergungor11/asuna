@@ -1,0 +1,33 @@
+:root {
+  color-scheme: dark;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+.asuna-shell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  background: #0d0f14;
+  color: #e6e8ee;
+  /* Pencere surukleme alani: baslik cubugu gizli oldugunda govdeden tasinabilsin. */
+  user-select: none;
+}
+
+.asuna-shell__title {
+  margin: 0;
+  font-size: 2rem;
+  font-weight: 300;
+  letter-spacing: 0.35em;
+  opacity: 0.75;
+}

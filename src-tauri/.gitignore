@@ -1,0 +1,5 @@
+# Cargo build artifacts
+/target/
+
+# Tauri tarafindan uretilen sema/izin dosyalari — kaynak degil, turetilmis
+/gen/schemas/

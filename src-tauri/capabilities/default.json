@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Asuna ana penceresi icin minimum yetki kumesi (Phase 0 / ASU-002). Yalnizca `core:default` acik — Tauri'nin calismasi icin gereken temel event/path/window/webview izinleri. Filesystem, shell, http, dialog, clipboard, notification, sql gibi HICBIR plugin izni bilerek yok; her biri ihtiyac duyuldugu task'ta, gerekcesi ve dar scope'u ile ayri capability olarak eklenir (PROJECT.md Bolum 7, 17, 19). Yeni izin eklerken bu dosyaya genis wildcard yazma — ayri dosya ac, tek komut ac.",
+  "platforms": ["macOS"],
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

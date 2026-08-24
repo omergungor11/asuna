@@ -1,0 +1,41 @@
+[package]
+name = "asuna"
+version = "0.1.0"
+description = "Asuna — local-first, sesli kisisel AI companion (macOS)"
+authors = ["Omer Gungor"]
+license = "MIT"
+repository = "https://github.com/omergungor11/asuna"
+edition = "2021"
+# Rust surumu `rust-toolchain.toml` ile pinlenir. Burada ayrica dil MSRV'si
+# tutulur ki CI'da farkli bir toolchain kullanilirsa hata erken ciksin.
+rust-version = "1.82"
+
+[lib]
+# `_lib` soneki gereklidir: bin hedefi (`asuna`) ile lib adi Windows'ta
+# cakisiyor — https://github.com/rust-lang/cargo/issues/8519
+name = "asuna_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+# ---------------------------------------------------------------------------
+# Phase 0 bagimlilik politikasi: burada YALNIZCA Tauri kabugunu ayaga kaldirmak
+# icin gereken minimum var. `tauri-plugin-*` paketleri (opener, fs, shell, sql)
+# bilerek YOK — her plugin webview'e yeni bir komut yuzeyi acar ve Asuna'nin
+# yetki modeli (PROJECT.md Bolum 7, 17, 19) her komutun tek tek gerekcelendirilmesini
+# sart kosar. Ihtiyac dogduğu task'ta, capability dosyasiyla birlikte eklenir.
+# SQLite erisim yolu ASU-005'te (OQ-1) kararlastirilacak — simdiden plugin eklenmedi.
+# ---------------------------------------------------------------------------
+tauri = { version = "2.11.5", features = [] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+
+[profile.release]
+# Surekli acik duran bir companion: binary boyutu ve bellek ayak izi urun kriteri.
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
