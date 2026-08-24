@@ -192,19 +192,26 @@ OpenAI'a gonderilmez, diske yazilmaz (PROJECT.md 8, 20).
 **Neden:** Memory urunun merkezi ama MVP'de sorgu hacmi kucuk ve tek kullanicili.
 Vector platformu ya da sunucu DB'si bu asamada cozdugunden fazla sorun uretir.
 
-**Erisim yolu ACIK (OQ-1).** Degerlendirilecek secenekler:
+**Erisim yolu: KARAR VERILDI (ASU-005 spike, `docs/decisions/ADR-005-sqlite-access.md`).**
 
-| Secenek | Nasil | Arti | Eksi |
-|---------|-------|------|------|
-| A. `tauri-plugin-sql` | SQLx tabanli plugin, renderer'dan JS API | En hizli scaffold, migration destegi hazir | SQL webview tarafinda yazilir; sorgu yuzeyi genis, sandbox zayif |
-| B. Rust servis + `#[tauri::command]` | `rusqlite`/`sqlx` Rust tarafinda, webview'e dar tiplenmis komut API'si | Guvenlik ve audit dogru yerde; secret hic webview'e gecmez | Her repository metodu icin Rust + TS iki taraf yazilir |
-| C. Node sidecar + `better-sqlite3` | Ayri Node process | Bilindik JS ekosistemi | Ucuncu bir process, dagitim ve lifecycle karmasasi |
+**Secenek B — Rust persistence servisi:**
+- `rusqlite` **0.40.2** (bundled SQLite 3.53.2, MIT) + `rusqlite_migration` **2.6.0**
+  (`PRAGMA user_version`, up/down gercekten calisiyor)
+- SQL `src-tauri` disina cikmaz; webview'e dar amacli, kaba taneli `#[tauri::command]`'lar
+  (`memory_create`, `memory_search`, ...) — komut hicbir zaman SQL string'i almaz
+- Komut basina ACL: `src-tauri/permissions/*.toml` + capability dosyasi; okuma/yazma ayri izin
+- `memories` + `tool_events` tek `rusqlite::Transaction`'da (audit atomikligi)
+- DB konumu: `app_data_dir()` → `~/Library/Application Support/com.omergungor.asuna/asuna.db`;
+  WAL + foreign_keys + busy_timeout acilista; yol renderer'dan asla parametre alinmaz
+- SQLCipher gecisi tek feature degisikligi (`bundled-sqlcipher`) + `PRAGMA key`
 
-Secim kriterleri: (1) memory ve `tool_events` yazimi guvenilir process'te mi kaliyor,
-(2) path sandbox / secret redaksiyon nerede uygulaniyor, (3) Phase 1 hizina etkisi,
-(4) sifreli DB'ye (SQLCipher) ileride gecis maliyeti.
-**On egilim: B** — PROJECT.md 19'un guvenlik modeliyle en tutarli olan o; ama Phase 0'da
-A'nin permission scope'u olcup karar verilecek.
+`tauri-plugin-sql` olcumle elendi: scope'suz ACL (`allow-execute` = renderer'dan `DROP TABLE`
+calisiyor), path sandbox yok (mutlak path + `ATTACH DATABASE` kacisi), transaction yok,
+down migration sessizce atiliyor. Detayli olcumler ADR-005'te.
+
+DIKKAT (spike'ta olculen iki Tauri tuzagi): (1) yeni capability identifier'i
+`tauri.conf.json → app.security.capabilities` dizisine DE eklenmeli, yoksa sessiz red;
+(2) `src-tauri/permissions/` dizini olustugu anda TUM uygulama komutlari ACL'e tabi olur.
 
 ---
 
@@ -280,8 +287,8 @@ Phase 0'da (teknik arastirma + scaffold) kapatilir. Karar cikan her madde
 
 | ID | Soru | Secenekler / Not | Faz |
 |----|------|------------------|-----|
-| OQ-1 | SQLite'a hangi yoldan erisilecek? | A: `tauri-plugin-sql` · B: Rust servis + `#[tauri::command]` (on egilim) · C: Node sidecar + better-sqlite3 | Phase 0 |
-| OQ-2 | Migration araci ne olacak? | Plugin'in kendi migration'lari / elle versiyonlu SQL / Rust tarafinda `refinery` — OQ-1'e bagli | Phase 0 |
+| OQ-1 | ~~SQLite erisim yolu~~ **KAPANDI** (ASU-005): B — Rust servis, `rusqlite` 0.40.2; `tauri-plugin-sql` olcumle elendi (`docs/decisions/ADR-005-sqlite-access.md`) | — | Kapandi |
+| OQ-2 | ~~Migration araci~~ **KAPANDI** (ASU-005): `rusqlite_migration` 2.6.0 (`user_version`, up/down, `validate()` CI testi) | — | Kapandi |
 | OQ-3 | ~~Porcupine lisans modeli~~ **KAPANDI** (ASU-008): Free Tier kapatildi, non-commercial tier yok → Porcupine elendi, sherpa-onnx secildi (`docs/decisions/ADR-004`). Kalan tek lisans sorusu KWS model agirliklari — spike'ta (ASU-008b) | — | Kapandi |
 | OQ-4 | ~~Wake word hangi tarafta?~~ **KAPANDI** (ASU-008): Rust tarafinda (sherpa-onnx + cpal); idle'da mikrofon renderer'a hic acilmiyor | — | Kapandi |
 | OQ-5 | Agents SDK'nin WebRTC transport'u Tauri WKWebView'inde sorunsuz calisiyor mu? | `getUserMedia` izinleri, WKWebView WebRTC destegi — Phase 1'in en buyuk teknik riski (ASU-007 spike). Not: SDK `window.RTCPeerConnection` yoksa sessizce WebSocket'e duser — spike ham WebRTC ile yapilmali | Phase 0 |

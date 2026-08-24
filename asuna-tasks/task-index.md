@@ -8,16 +8,16 @@
 
 | Phase | Ad | Total | Done | In Progress | Review | Pending | Blocked |
 |-------|----|-------|------|-------------|--------|---------|---------|
-| 0 | Arastirma + Scaffold | 11 | 7 | 0 | 0 | 4 | 0 |
+| 0 | Arastirma + Scaffold | 11 | 8 | 0 | 0 | 3 | 0 |
 | 1 | Realtime Voice (dikey dilim) | 10 | 0 | 0 | 0 | 10 | 0 |
 | 2 | Wake Word | 8 | 0 | 0 | 0 | 8 | 0 |
 | 3 | Memory | 10 | 0 | 0 | 0 | 10 | 0 |
 | 4 | Project Context | 8 | 0 | 0 | 0 | 8 | 0 |
 | 5 | One Useful Action (Tools) | 9 | 0 | 0 | 0 | 9 | 0 |
 | 6 | Focus Recovery (MVP) | 8 | 0 | 0 | 0 | 8 | 0 |
-| **Total** | | **64** | **7** | **0** | **0** | **57** | **0** |
+| **Total** | | **64** | **8** | **0** | **0** | **56** | **0** |
 
-**Progress**: 7/64 (11%)
+**Progress**: 8/64 (13%)
 
 > ASU-008 "RESEARCH DONE" olarak Done sayilir: arastirma ve ADR-004 tamam, calisan detection spike'i
 > ayri task (**ASU-008b**, PENDING).
@@ -43,7 +43,7 @@
 | R1 | **Realtime API maliyeti** — surekli acik ses oturumu faturayi hizla buyutur; ChatGPT aboneligi API kredisi vermez (PROJECT.md Bolum 28) | H | H | Idle'da oturum yok (Phase 2), inactivity timeout + max session duration (ASU-025), dev'de `gpt-realtime-2.1-mini`, oturum suresi/maliyet metadata takibi | OPEN |
 | R2 | **sherpa-onnx KWS tespit kalitesi + model lisansi** — "Hey Asuna" detection rate / false-accept orani ve KWS model agirliklarinin dagitim lisansi henuz dogrulanmadi. (Porcupine lisans riski **KAPANDI**: saglayici elendi — Free Tier 2026-06-30'da kapatildi, Rust binding yanked, AccessKey online dogrulaniyor; ADR-004) | M | M | ASU-008b spike'i (>%95 detection, <1 FP/8 saat, model lisansi netlestirme); `WakeWordProvider` adapter arkasinda tutulur (ASU-021), fake provider ile Phase 2 gelistirmesi vendor'dan bagimsiz ilerler. Exit: Silero VAD kapisi → tetikleyici ifadeyi uzatma → `oww-rs` / `rustpotter` yedekleri | OPEN |
 | R3 | **Tauri webview'da WebRTC / mikrofon izni** — WKWebView'da `getUserMedia` ve macOS mikrofon entitlement'i calismayabilir; bu Phase 1'i tumden bloklar | M | H | ASU-007 spike'i Phase 0'da, feature kodundan once; calismazsa fallback: Rust tarafinda WebSocket transport veya ayri yerel audio process (ADR ile karar) | OPEN |
-| R4 | **SQLite erisim mimarisi belirsiz (ACIK SORU)** — `tauri-plugin-sql` mi, Rust tarafinda servis mi; secim memory/tool/audit katmanlarinin tamamini etkiler | H | M | ASU-005 arastirma + ADR-005; karar verilene kadar Phase 3'e baslanmaz; MemoryService interface arkasinda kalir | OPEN |
+| R4 | ~~SQLite erisim mimarisi~~ KAPANDI (ASU-005): B — Rust servis (rusqlite), ADR-005 accepted; tauri-plugin-sql olcumle elendi | - | - | Karar docs/decisions/ADR-005-sqlite-access.md | CLOSED |
 | R5 | **Tek gelistirici odak riski** — TRANSCRIPT.md Bolum 1/6: projeyi bitirememe, dikkat dagilmasi urun probleminin ta kendisi | H | H | Dikey dilim disiplini (bir phase bitmeden digerine gecme), her phase sonunda calisir demo, kucuk task boyutlari, `asuna-tasks/active/session-notes.md` ile oturum devamliligi | OPEN |
 | R6 | **Model ID / SDK degisimi** — `gpt-realtime-2.1` erisilemez olabilir, Agents SDK realtime API'si degisebilir | M | M | Model ID asla hard-code degil (`ASUNA_REALTIME_MODEL`), SDK `AsunaRealtimeService` arkasinda izole (ASU-013), ASU-006'da surum pinlenir | OPEN |
 | R7 | **Kapsam kaymasi — dashboard'a donusme** — TRANSCRIPT.md Bolum 19'un acikca reddettigi sonuc | M | H | UI task'lari her phase'de minimum tutulur; MVP disi her fikir `backlog.md`'ye; PROJECT.md Bolum 4 non-goals listesi degismez | OPEN |
@@ -60,7 +60,7 @@
 | ASU-002 | Tauri 2 + React + TS + Vite scaffold (bos pencere acilir) | 0 | L | devops | COMPLETED |
 | ASU-003 | TypeScript strict + ESLint + Prettier | 0 | S | devops | COMPLETED |
 | ASU-004 | CI pipeline yesil | 0 | M | devops | COMPLETED |
-| ASU-005 | [ARASTIRMA] SQLite erisim mimarisi karari + ADR-005 | 0 | M | research | PENDING |
+| ASU-005 | [ARASTIRMA] SQLite erisim mimarisi karari + ADR-005 | 0 | M | research | COMPLETED |
 | ASU-006 | [ARASTIRMA] OpenAI Agents SDK realtime dogrulamasi + surum pinleme | 0 | M | research | COMPLETED |
 | ASU-007 | [ARASTIRMA] Tauri webview mikrofon + WebRTC spike | 0 | M | research | PENDING |
 | ASU-008 | [ARASTIRMA] Wake word saglayicisi (sherpa-onnx KWS) + lisans | 0 | M | research | RESEARCH DONE |

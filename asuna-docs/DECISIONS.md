@@ -69,7 +69,15 @@ gevsetilmez.
 
 ## ADR-005: Persistence = SQLite; erisim katmani ACIK — 2026-08-24
 
-**Durum**: **proposed** (kismen acik — Phase 0 arastirma task'ina bagli)
+**Durum**: **accepted** — `docs/decisions/ADR-005-sqlite-access.md` ile kapatildi (2026-08-24, ASU-005)
+
+> **KARAR (ASU-005 spike'i):** Secenek **B** — SQLite'a yalnizca Rust process'inden erisim
+> (`rusqlite` 0.40.2 bundled + `rusqlite_migration` 2.6.0, dar amacli `#[tauri::command]`'lar,
+> komut basina ACL). `tauri-plugin-sql` olcumle elendi: ACL'i scope'suz (`allow-execute` =
+> renderer'dan `DROP TABLE` calisiyor — test edildi), path sandbox'i yok (mutlak path app
+> dizinini eziyor + `ATTACH DATABASE` kacisi), transaction'i yok, down migration'lari sessizce
+> atiyor. DB konumu: `~/Library/Application Support/com.omergungor.asuna/asuna.db` (WAL).
+> OQ-1 ve OQ-2 kapandi. Detay ve tum olcumler: `docs/decisions/ADR-005-sqlite-access.md`.
 
 **Karar (kesin olan)**: Kalici depolama **SQLite**. Memory, transcript, project registry, tool audit
 hepsi tek local veritabaninda tutulur. Bulut veritabani yok — local-first ilkesi (PROJECT.md Bolum 5.1).

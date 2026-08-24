@@ -112,7 +112,7 @@ yuzeyini genisletmemek icin bilerek kullanilmadi.
 
 ## ASU-005: [ARASTIRMA] SQLite Erisim Mimarisi Karari + ADR-005
 
-**Scope**: research | **Boyut**: M | **Durum**: PENDING | **Bagimlilik**: ASU-002
+**Scope**: research | **Boyut**: M | **Durum**: COMPLETED (2026-08-24) — karar: B (rusqlite), `docs/decisions/ADR-005-sqlite-access.md` | **Bagimlilik**: ASU-002
 
 ### Aciklama
 **ACIK SORU.** Asuna'nin SQLite'a nasil erisecegi henuz kararlastirilmadi. Iki aday:
@@ -125,12 +125,11 @@ Bu karar Phase 3 (memory), Phase 4 (projects), Phase 5 (tool_events audit) katma
 etkiler. **Phase 3 baslamadan karar verilmis olmali.**
 
 ### Acceptance Criteria
-- [ ] Her iki secenek icin calisan minimal spike (tek tablo yaz/oku)
-- [ ] Karsilastirma kriterleri degerlendirilmis: migration destegi, tip guvenligi, transaction,
-      renderer'a SQL sizmasi, ileride sifreli DB (SQLCipher) gecisi, test edilebilirlik
-- [ ] `docs/decisions/ADR-005-sqlite-access.md` yazilmis: baglam, secenekler, karar, sonuclar
-- [ ] Secilen yaklasimda DB dosya konumu kararlastirilmis (macOS app data dizini)
-- [ ] Spike kodu ana koda karistirilmamis (branch'te birakilir veya silinir)
+- [x] Her iki secenek icin calisan minimal spike (tek tablo yaz/oku) — A 6/6, B 8/8 test, gercek IPC uzerinden
+- [x] Karsilastirma kriterleri degerlendirilmis (ADR-005 kriter tablosu)
+- [x] `docs/decisions/ADR-005-sqlite-access.md` yazilmis (Durum: accepted)
+- [x] DB dosya konumu: `~/Library/Application Support/com.omergungor.asuna/asuna.db` (app_data_dir, WAL)
+- [x] Spike kodu ana koda karistirilmadi (izole worktree, discard edildi)
 
 ### Notlar
 PROJECT.md Bolum 12: "Do not start with a complex vector platform unless required." Embedding/vektor
