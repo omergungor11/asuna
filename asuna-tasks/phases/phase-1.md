@@ -38,19 +38,28 @@ MVP kabul checklist'inde iki madde bu task'a bagli: "API key never shipped in re
 
 ## ASU-012: Asuna Core Prompt / Instructions Dosyasi
 
-**Scope**: backend | **Boyut**: S | **Durum**: PENDING | **Bagimlilik**: ASU-002
+**Scope**: backend | **Boyut**: S | **Durum**: COMPLETED (2026-08-24) | **Bagimlilik**: ASU-002
 
 ### Aciklama
 PROJECT.md Bolum 10 (kimlik) + Bolum 11 (system prompt gereksinimleri) surumlenmis tek bir dosyada.
 
 ### Acceptance Criteria
-- [ ] `src/asuna/prompts/core.v1.ts` olusturulmus (versiyonlu prompt dosyasi — `conventions.md` "Prompt Dosyalari")
-- [ ] Prompt PROJECT.md Bolum 11'deki tum ilkeleri iceriyor: uydurmama, tek somut sonraki adim,
+- [x] `src/asuna/prompts/core.v1.ts` olusturulmus (versiyonlu prompt dosyasi — `conventions.md` "Prompt Dosyalari")
+- [x] Prompt PROJECT.md Bolum 11'deki tum ilkeleri iceriyor: uydurmama, tek somut sonraki adim,
       memory'yi durust kullanma, tool risk politikasi, Turkce + Ingilizce teknik terim karisimi
-- [ ] Prompt **statik ilkeler** iceriyor; degisken veri (memory, proje) sonraki phase'lerde
+- [x] Prompt **statik ilkeler** iceriyor; degisken veri (memory, proje) sonraki phase'lerde
       `buildAsunaInstructions(context)` ile enjekte edilecek sekilde ayrilmis
-- [ ] Prompt kod icine gomulu string olarak dagitilmamis — tek kaynaktan okunuyor
-- [ ] Prompt uzunlugu makul (PROJECT.md Bolum 39: "Avoid giant prompts")
+- [x] Prompt kod icine gomulu string olarak dagitilmamis — tek kaynaktan okunuyor
+      (`src/asuna/prompts/index.ts` aktif versiyonu secer, cagiranlar oradan alir)
+- [x] Prompt uzunlugu makul (PROJECT.md Bolum 39: "Avoid giant prompts") — 45 satir, ~2.5K karakter
+
+### Notlar
+Prompt metni Ingilizce (PROJECT.md Bolum 11'deki kavramsal prompt ile ayni dil), icindeki dil
+politikasi Turkce agirlikli konusmayi ve Ingilizce teknik terim korumasini tarif ediyor. Sesli
+kanal icin ek kisit: kisa turlar, kod/URL okumama, kisa aktivasyon cevabi (Bolum 9.2), kesilmeye
+hazir olma. `buildAsunaInstructions(context)` Phase 1'de bos context ile cagrilir ve yalnizca
+cekirdek prompt'u doner; `additionalSections` Phase 3 (memory) ve Phase 4 (proje) enjeksiyonu icin
+tek giris noktasi. Test: `src/asuna/prompts/core.v1.spec.ts` (14 test).
 
 ---
 
