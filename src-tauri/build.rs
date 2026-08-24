@@ -11,6 +11,9 @@ fn main() {
             "get_frontend_config",
             // ASU-011: ephemeral Realtime token (capabilities/asuna-realtime.json)
             "mint_realtime_token",
+            // ASU-029: hafiza alt sisteminin durumu (capabilities/asuna-db.json).
+            // Salt okunur; hicbir hafiza kaydi ya da SQL bu komuttan gecmez.
+            "db_status",
         ]));
 
     if let Err(error) = tauri_build::try_build(attributes) {

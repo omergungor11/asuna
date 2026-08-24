@@ -57,7 +57,33 @@ reqwest = { version = "=0.13.4", default-features = false, features = [
 # Tipli hata varyantlari (PROJECT.md Bolum 30). Zaten agacta vardi; exact pinli.
 thiserror = "=2.0.20"
 
+# --- ASU-029: SQLite kalici depolama (ADR-005 secenek B) -------------------
+# SQLite'a **yalnizca** bu process'ten erisilir; `tauri-plugin-sql` bilerek YOK
+# (renderer'a ham SQL yuzeyi acardi, path sandbox'i olmazdi, transaction
+# veremezdi — ADR-005 "Spike Bulgulari" A/1-9).
+#
+# Surumler **exact** pinli: bundled SQLite surumu (3.53.2) makineden ve
+# macOS'tan bagimsiz, tekrarlanabilir olmali. Yukseltme bilincli bir commit.
+#
+# Feature secimi:
+#   bundled : SQLite kaynagi crate ile derlenir. Sistem SQLite'ina bagimlilik
+#             yok → surum surprizi yok, imzalama/notarization tarafinda ek
+#             dylib yok. Ileride sifreleme icin tek degisiklik:
+#             `bundled` → `bundled-sqlcipher` + acilista `PRAGMA key` (ADR-005).
+# Bilerek KAPALI: `chrono`/`serde_json`/`uuid` tip koprulerinin hicbiri —
+# donusum repository sinirinda elle yapilir, tip yuzeyi dar kalir.
+rusqlite = { version = "=0.40.2", features = ["bundled"] }
+# Migration'lar Rust'ta gomulu (`M::up(...).down(...)`), `PRAGMA user_version`
+# ile izlenir, acilista `to_latest()` ile idempotent uygulanir (ADR-005 OQ-2).
+# Ek sema tablosu yok; `down` gercekten calisir.
+rusqlite_migration = "=2.6.0"
+
 [dev-dependencies]
+# ASU-029: ACL regresyon testi. `tauri::test::mock_builder` + `get_ipc_response`
+# ile renderer'in gonderdigi `InvokeRequest`'in aynisi, **gercek** capability
+# dosyalari uzerinden kosturulur. `test` feature'i yalnizca test hedeflerinde
+# acilir; `cargo build`/`cargo tauri build` bu yuzeyi tasimaz.
+tauri = { version = "=2.11.5", features = ["test"] }
 # Yalnizca test icin: `#[tokio::test]`. Runtime'i tauri zaten tasiyor,
 # burada ek olarak sadece test makrolari aciliyor. Gercek API'ye cikan test
 # YOK — testler yerelde acilan bir TCP sunucusuna vurur (bkz. realtime_token.rs).

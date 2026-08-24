@@ -20,10 +20,17 @@ coverage/
 # Tool caches
 .eslintcache
 
-# Local data
+# Local data — kullanicinin gercek hafizasi, asla commit edilmez (ASU-029)
 *.sqlite
 *.sqlite3
 *.db
+# WAL modu iki kardes dosya uretir ve bunlar `*.db` desenine UYMAZ
+# (`asuna.db-wal`, `asuna.db-shm`). Yedekleme/export ucunu birden alir ya da
+# `VACUUM INTO` kullanir (ADR-005 "DB Dosya Konumu").
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
 .asuna/
 
 # OS / editor
@@ -34,3 +41,6 @@ coverage/
 .claude/settings.local.json.bak
 # Paralel agent'larin git worktree'leri — repo'nun tam kopyalari, asla commit edilmez.
 .claude/worktrees/
+
+# Graphify (lokal gelistirme araci — uretilmis)
+graphify-out/

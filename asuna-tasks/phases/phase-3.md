@@ -18,21 +18,41 @@
 
 ## ASU-029: SQLite Bootstrap + Migration Altyapisi
 
-**Scope**: db | **Boyut**: L | **Durum**: PENDING | **Bagimlilik**: ASU-005
+**Scope**: db | **Boyut**: L | **Durum**: DONE (2026-08-25) | **Bagimlilik**: ASU-005
 
 ### Aciklama
 ADR-005'te secilen erisim yaklasimini gercek kod haline getir. Bu task'ta henuz Asuna tablolari yok —
 sadece DB acilir, migration calisir, saglik kontrolu yapilir.
 
 ### Acceptance Criteria
-- [ ] DB dosyasi macOS uygulama veri dizininde olusuyor (yol dokumante)
-- [ ] Migration altyapisi kurulu: versiyonlu, ileri yonlu, tekrar calistirilabilir
-- [ ] Uygulama acilisinda migration otomatik calisiyor; hata durumunda uygulama **cokmuyor**,
+- [x] DB dosyasi macOS uygulama veri dizininde olusuyor (yol dokumante)
+      — `app_data_dir()/asuna.db`, `db::resolve_db_path`; renderer parametre veremez.
+      Dev override `ASUNA_DB_PATH` yalnizca `#[cfg(debug_assertions)]`
+- [x] Migration altyapisi kurulu: versiyonlu, ileri yonlu, tekrar calistirilabilir
+      — `rusqlite_migration` + `PRAGMA user_version`, `src-tauri/src/db/migrations/`
+- [x] Uygulama acilisinda migration otomatik calisiyor; hata durumunda uygulama **cokmuyor**,
       hafizasiz modda devam ediyor ve durumu gosteriyor (PROJECT.md Bolum 30)
-- [ ] Renderer dogrudan SQL calistirmiyor — servis katmani zorunlu (CLAUDE.md kurali)
-- [ ] Test icin in-memory / gecici DB destegi var
-- [ ] DB dosyasi `.gitignore`'da
-- [ ] `docs/architecture/memory.md` erisim mimarisini anlatiyor
+      — `DbState::{Ready,Disabled,Unavailable}` + `db_status` komutu
+- [x] Renderer dogrudan SQL calistirmiyor — servis katmani zorunlu (CLAUDE.md kurali)
+      — `src/asuna/memory/db-status-service.ts`; `acl_regression::the_renderer_has_no_sql_surface`
+        gercek ACL uzerinde `execute` / `plugin:sql|execute` reddini olcuyor
+- [x] Test icin in-memory / gecici DB destegi var
+      — `AsunaDb::open_in_memory()` + `AsunaDb::open_at(path)`; testler `std::env::temp_dir()`
+        altinda calisir, gercek uygulama veri dizinine yazmaz
+- [x] DB dosyasi `.gitignore`'da — `*.db` zaten vardi; WAL kardes dosyalari (`*.db-wal`,
+      `*.db-shm`) `*.db` desenine UYMADIGI icin ayrica eklendi
+- [x] `docs/architecture/memory.md` erisim mimarisini anlatiyor — Bolum 3.1 (uygulanan hal)
+
+### Notlar
+- **ACL gecisi**: uygulama komutlari ASU-009'dan beri deny-by-default (`build.rs` icindeki acik
+  `AppManifest`), yani ADR-005'in "`permissions/` dizini acilinca her sey ACL'e tabi olur" tuzagi
+  zaten yasanmisti. Yeni `asuna-db` capability'si mevcut iki komutu kirmiyor — kanit:
+  `acl_regression::existing_commands_still_pass_the_acl_after_the_db_capability_is_added`
+  (gercek `generate_context!()`, gercek capability dosyalari, renderer'in gonderdigi
+  `InvokeRequest`'in aynisi).
+- **Gecici**: `migrations::apply` bos migration listesini "yapacak is yok" sayiyor
+  (`rusqlite_migration::to_latest` bos listede `NoMigrationsDefined` hatasi verir).
+  Bu dal ASU-030'da ilk migration eklendiginde kalkti.
 
 ---
 

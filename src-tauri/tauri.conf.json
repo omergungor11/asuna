@@ -57,7 +57,7 @@
         "enable": false,
         "scope": []
       },
-      "capabilities": ["default", "asuna-config", "asuna-realtime"]
+      "capabilities": ["default", "asuna-config", "asuna-realtime", "asuna-db"]
     }
   },
   "bundle": {

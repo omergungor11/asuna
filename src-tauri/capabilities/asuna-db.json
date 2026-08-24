@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "asuna-db",
+  "description": "Hafiza (SQLite) alt sistemine acilan komutlar (ADR-005 secenek B). Bu capability yalnizca `db_status` komutunu acar: hafizanin hazir / kapali / kullanilamaz oldugunu, sema surumunu ve gomulu SQLite surumunu dondurur. Hicbir hafiza kaydi, dosya yolu ya da SQL bu komuttan gecmez ve komut argument almaz — DB yolu her zaman Rust tarafinda `app_data_dir()`'den turetilir, renderer parametre veremez. Yazma yetkisi bu dosyada YOKTUR; okuma ve yazma ayri izinlerdir (ASU-031 ayri bir izin ekleyecek). Kapsam ana pencere ile sinirlidir; wildcard izin yoktur.",
+  "platforms": ["macOS"],
+  "windows": ["main"],
+  "permissions": ["allow-db-status"]
+}
