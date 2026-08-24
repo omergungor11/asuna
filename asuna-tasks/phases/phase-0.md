@@ -72,8 +72,7 @@ Ihtiyac dogdukca izin ac, bastan hepsini acma.
 
 ## ASU-004: CI Pipeline Yesil
 
-**Scope**: devops | **Boyut**: M | **Durum**: IN_REVIEW (2026-08-24) — lokal dogrulama tamam,
-gercek CI run'i push sonrasi | **Bagimlilik**: ASU-003
+**Scope**: devops | **Boyut**: M | **Durum**: COMPLETED (2026-08-24, commit e99240a; run 32719706364 yesil, 8dk13sn) | **Bagimlilik**: ASU-003
 
 ### Aciklama
 `.github/workflows/ci.yml` iskeletini doldur. macOS runner gerekiyor (Tauri + Apple Silicon hedefi).
@@ -81,10 +80,9 @@ gercek CI run'i push sonrasi | **Bagimlilik**: ASU-003
 ### Acceptance Criteria
 - [x] PR'da calisan adimlar: install -> lint -> typecheck -> test -> build
 - [x] Rust adimlari: `cargo fmt --check`, `cargo clippy`, `cargo test`
-- [ ] `macos-latest` runner uzerinde tam build en az bir kez yesil
-      — **push sonrasi dogrulanacak.** Ayni komut (`pnpm tauri build`) lokal macOS 26.5 / arm64'te
-      imzasiz yesil: `Asuna.app` + `Asuna_0.1.0_aarch64.dmg`, release derlemesi ~1 dk 12 sn
-      (sicak cargo cache). Runner'da gercek run henuz yok.
+- [x] `macos-latest` runner uzerinde tam build en az bir kez yesil
+      — dogrulandi: run 32719706364 (2026-08-24, 8dk13sn, quality + bundle yesil).
+      Lokal esdeger de yesil: `Asuna.app` + `Asuna_0.1.0_aarch64.dmg` (macOS 26.5 / arm64).
 - [x] pnpm store + cargo registry cache'i acik (CI suresi kontrol altinda)
 - [x] Bagimlilik audit adimi aktif (high+ fail)
 - [x] CI'da hicbir gercek secret gerekmiyor (OPENAI_API_KEY olmadan yesil)
@@ -263,27 +261,59 @@ global kisayol/tray butonunu kalici sekonder aktivasyon olarak birak.
 
 ## ASU-009: Konfigurasyon Katmani + `.env.example`
 
-**Scope**: backend | **Boyut**: S | **Durum**: PENDING | **Bagimlilik**: ASU-002
+**Scope**: backend | **Boyut**: S | **Durum**: COMPLETED (2026-08-24) | **Bagimlilik**: ASU-002
 
 ### Aciklama
 PROJECT.md Bolum 23'teki konfigurasyonu tek merkezden okuyan, tipli bir config katmani.
 
 ### Acceptance Criteria
-- [ ] `.env.example` tum degiskenlerle: `OPENAI_API_KEY`, `ASUNA_REALTIME_MODEL`,
+- [x] `.env.example` tum degiskenlerle: `OPENAI_API_KEY`, `ASUNA_REALTIME_MODEL`,
       `ASUNA_REALTIME_VOICE`, `ASUNA_WAKE_WORD`, `ASUNA_MEMORY_ENABLED`,
       `ASUNA_TRANSCRIPT_STORAGE`, `ASUNA_TOOL_APPROVAL_MODE`, `ASUNA_IDLE_TIMEOUT_SECONDS`,
       `ASUNA_LOG_LEVEL`, `ASUNA_WAKE_WORD_PROVIDER`, `ASUNA_WAKE_WORD_MODEL_DIR`,
       `ASUNA_WAKE_WORD_THRESHOLD`
-- [ ] `.env.example`'da gercek secret yok, her degisken icin tek satir aciklama var
-- [ ] Tipli config okuyucu; eksik/gecersiz deger baslangicta net hata veriyor (sessizce default'lamiyor)
-- [ ] **`OPENAI_API_KEY` yalnizca Rust/guvenilir process tarafindan okunuyor** — renderer bundle'ina
+- [x] `.env.example`'da gercek secret yok, her degisken icin tek satir aciklama var
+- [x] Tipli config okuyucu; eksik/gecersiz deger baslangicta net hata veriyor (sessizce default'lamiyor)
+- [x] **`OPENAI_API_KEY` yalnizca Rust/guvenilir process tarafindan okunuyor** — renderer bundle'ina
       hicbir kosulda girmiyor
-- [ ] Frontend'e gecen config alt kumesi acikca ayrilmis (whitelist, blacklist degil)
-- [ ] Build ciktisinda `OPENAI_API_KEY` string'inin bulunmadigi grep ile dogrulanmis
+- [x] Frontend'e gecen config alt kumesi acikca ayrilmis (whitelist, blacklist degil)
+- [x] Build ciktisinda `OPENAI_API_KEY` string'inin bulunmadigi grep ile dogrulanmis
 
 ### Notlar
 Bu, guvenlik modelinin temeli (PROJECT.md Bolum 19). Yanlis yapilirsa MVP checklist maddesi
 "API key never shipped in renderer bundle" bastan dusuyor.
+
+### Uygulama notlari (2026-08-24)
+
+**Rust (guvenilir taraf), yeni bagimlilik yok:**
+
+- `src-tauri/src/env_file.rs` — bagimliliksiz `.env` okuyucu. **`dotenvy` bilerek eklenmedi:**
+  `dotenvy::dotenv()` degerleri `std::env::set_var` ile tum process'e yazar; Asuna ileride tool
+  katmaninda alt process calistiracagi icin `OPENAI_API_KEY` her cocuk process'e miras kalirdi.
+  Buradaki okuyucu `BTreeMap` dondurur, deger yalnizca `AsunaConfig` icinde yasar.
+- `src-tauri/src/config.rs` — 12 degiskenin tamami zorunlu (yalnizca `ASUNA_REALTIME_VOICE` ve
+  `ASUNA_WAKE_WORD_MODEL_DIR` **bos** birakilabilir = "belirtilmedi"). Gecersiz deger -> `ConfigError`;
+  `run()` net mesajla `exit(1)` (panic yok). Process environment `.env`'i ezer.
+- `AsunaConfig` bilerek `Serialize` **turetmez** -> API key'in bir command donusunde yer almasi
+  **derleme zamaninda** imkansiz. Key `SecretString` icinde; `Debug` `<redacted>` basar.
+- `#[tauri::command] get_frontend_config` yalnizca 8 alanlik whitelist'i doner.
+
+**Yetki (ACL):** `build.rs` artik `AppManifest::commands([...])` tanimliyor — bu, uygulama
+komutlarini Tauri'nin varsayilan "app command'lari serbest" davranisindan cikarip
+**deny-by-default** yapiyor. `capabilities/asuna-config.json` yalnizca `allow-get-frontend-config`
+iznini, yalnizca `main` penceresine veriyor.
+
+**Renderer:** `src/asuna/config/frontend-config.ts` (elle sema dogrulama — zod henuz bagimlilik
+degil; beklenmeyen alan **reddedilir**, hata mesajlari deger degil yalnizca alan adi tasir) +
+`config.service.ts` (tek okuma noktasi, onbellekli `invoke`).
+
+**Kanit:** `pnpm build` sonrasi `grep -r "OPENAI_API_KEY" dist/` -> eslesme yok (exit 1). Ayrica
+`OPENAI_API_KEY=sk-proj-BUILD-LEAK-CANARY-... pnpm build` ile tekrarlandi: ne degisken adi ne
+canary deger bundle'a girdi. Bundle'da hard-code model ID'si de yok.
+
+**Test:** `cargo test` 31 test (eksik anahtar x12, gecersiz deger, `Debug` redaksiyonu, hata
+mesajinda deger sizmamasi, whitelist alan kumesi, komut<->capability<->build.rs tutarliligi);
+Vitest 13 yeni test (sema dogrulama + whitelist reddi + servis onbellegi).
 
 ---
 

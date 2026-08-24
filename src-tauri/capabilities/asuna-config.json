@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "asuna-config",
+  "description": "Renderer'in yalnizca `get_frontend_config` komutunu cagirmasina izin verir (ASU-009). Bu komut config'in whitelist'lenmis alt kumesini dondurur (model, ses, wake word metni, idle timeout, log seviyesi, memory/transcript bayraklari, tool onay modu). `OPENAI_API_KEY` ve wake-word motoru detaylari bu kumede YOKTUR ve Rust tarafinda kalir. Kapsam ana pencere ile sinirlidir; wildcard izin yoktur.",
+  "platforms": ["macOS"],
+  "windows": ["main"],
+  "permissions": ["allow-get-frontend-config"]
+}

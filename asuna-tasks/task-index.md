@@ -8,16 +8,16 @@
 
 | Phase | Ad | Total | Done | In Progress | Review | Pending | Blocked |
 |-------|----|-------|------|-------------|--------|---------|---------|
-| 0 | Arastirma + Scaffold | 11 | 5 | 0 | 1 | 5 | 0 |
+| 0 | Arastirma + Scaffold | 11 | 7 | 0 | 0 | 4 | 0 |
 | 1 | Realtime Voice (dikey dilim) | 10 | 0 | 0 | 0 | 10 | 0 |
 | 2 | Wake Word | 8 | 0 | 0 | 0 | 8 | 0 |
 | 3 | Memory | 10 | 0 | 0 | 0 | 10 | 0 |
 | 4 | Project Context | 8 | 0 | 0 | 0 | 8 | 0 |
 | 5 | One Useful Action (Tools) | 9 | 0 | 0 | 0 | 9 | 0 |
 | 6 | Focus Recovery (MVP) | 8 | 0 | 0 | 0 | 8 | 0 |
-| **Total** | | **64** | **5** | **0** | **1** | **58** | **0** |
+| **Total** | | **64** | **7** | **0** | **0** | **57** | **0** |
 
-**Progress**: 5/64 (8%)
+**Progress**: 7/64 (11%)
 
 > ASU-008 "RESEARCH DONE" olarak Done sayilir: arastirma ve ADR-004 tamam, calisan detection spike'i
 > ayri task (**ASU-008b**, PENDING).
@@ -59,13 +59,13 @@
 | ASU-001 | Repo iskeleti + pnpm workspace | 0 | S | devops | COMPLETED |
 | ASU-002 | Tauri 2 + React + TS + Vite scaffold (bos pencere acilir) | 0 | L | devops | COMPLETED |
 | ASU-003 | TypeScript strict + ESLint + Prettier | 0 | S | devops | COMPLETED |
-| ASU-004 | CI pipeline yesil | 0 | M | devops | IN_REVIEW |
+| ASU-004 | CI pipeline yesil | 0 | M | devops | COMPLETED |
 | ASU-005 | [ARASTIRMA] SQLite erisim mimarisi karari + ADR-005 | 0 | M | research | PENDING |
 | ASU-006 | [ARASTIRMA] OpenAI Agents SDK realtime dogrulamasi + surum pinleme | 0 | M | research | COMPLETED |
 | ASU-007 | [ARASTIRMA] Tauri webview mikrofon + WebRTC spike | 0 | M | research | PENDING |
 | ASU-008 | [ARASTIRMA] Wake word saglayicisi (sherpa-onnx KWS) + lisans | 0 | M | research | RESEARCH DONE |
 | ASU-008b | [SPIKE] sherpa-onnx KWS detection spike (macOS arm64) | 0 | L | research | PENDING |
-| ASU-009 | Konfigurasyon katmani + `.env.example` | 0 | S | backend | PENDING |
+| ASU-009 | Konfigurasyon katmani + `.env.example` | 0 | S | backend | COMPLETED |
 | ASU-010 | `docs/architecture` + ADR dizini + README local run | 0 | S | docs | PENDING |
 | ASU-011 | Ephemeral Realtime token minting (Rust) | 1 | L | backend | PENDING |
 | ASU-012 | Asuna core prompt / instructions dosyasi | 1 | S | backend | PENDING |
