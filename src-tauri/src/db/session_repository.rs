@@ -369,6 +369,55 @@ pub fn attach_summary(
     record.ok_or(StoreError::NotFound)
 }
 
+/// Kapanmis bir oturumun `usage_json` alanina **tek bir alt agac** yamalar
+/// (ASU-034).
+///
+/// [`attach_summary`] ozet metnini yazarken `$.summary` altini dolduruyor;
+/// cikarim adiminin kendi maliyeti ise ozetten **sonra** olusuyor ve ozeti
+/// yeniden yazmasi gerekmiyor. Ayri bir fonksiyon olmasinin nedeni bu: ayni
+/// isi `attach_summary` ile yapmak, ozet metnini gereksiz yere ikinci kez
+/// yazmak (ve yanlislikla ezmek) anlamina gelirdi.
+///
+/// `key` **sabit metindir** (`"extraction"` gibi); kullanici girdisi buraya
+/// gelmez. Yine de JSON yolu SQL'e gomulmez, parametre olarak baglanir.
+/// Var olan diger anahtarlar (`$.summary`, realtime kirilimi) korunur.
+pub fn attach_usage(
+    db: &AsunaDb,
+    id: i64,
+    key: &'static str,
+    usage_patch: &str,
+) -> Result<SessionRecord, StoreError> {
+    if id <= 0 {
+        return Err(StoreError::invalid("`sessionId` pozitif olmali"));
+    }
+    if serde_json::from_str::<serde_json::Value>(usage_patch).is_err() {
+        return Err(StoreError::invalid("`usagePatch` gecerli JSON olmali"));
+    }
+
+    let path = format!("$.{key}");
+    let record = db
+        .with_connection(|connection| {
+            let transaction = connection.transaction()?;
+            let updated = transaction.execute(
+                "UPDATE sessions
+                    SET usage_json = json_set(COALESCE(usage_json, '{}'), ?1, json(?2))
+                  WHERE id = ?3 AND ended_at IS NOT NULL",
+                params![path, usage_patch, id],
+            )?;
+
+            let record = if updated == 0 {
+                None
+            } else {
+                load(&transaction, id)?
+            };
+            transaction.commit()?;
+            Ok(record)
+        })
+        .map_err(|error| StoreError::storage(error, "session_usage"))?;
+
+    record.ok_or(StoreError::NotFound)
+}
+
 /// Tek oturumu kimligiyle okur.
 pub fn get_by_id(db: &AsunaDb, id: i64) -> Result<Option<SessionRecord>, StoreError> {
     db.with_connection(|connection| load(connection, id))
@@ -801,6 +850,88 @@ mod tests {
         let usage: serde_json::Value =
             serde_json::from_str(&updated.usage_json.expect("usage_json")).expect("gecerli JSON");
         assert_eq!(usage["summary"]["totalTokens"], 120);
+    }
+
+    /// Cikarim maliyeti kendi anahtarina yazilir; ozet ve realtime kirilimi
+    /// **ezilmez** (ASU-034).
+    #[test]
+    fn attach_usage_patches_one_key_without_touching_the_others() {
+        let db = fresh_db();
+        let session = start(&db, MODEL, None, START).expect("oturum");
+        finalize(
+            &db,
+            session.id,
+            &SessionFinalizeInput {
+                usage: Some(SessionUsage {
+                    requests: Some(3),
+                    input_tokens: None,
+                    output_tokens: None,
+                    total_tokens: None,
+                    input_token_details: Vec::new(),
+                    output_token_details: Vec::new(),
+                }),
+                ..SessionFinalizeInput::default()
+            },
+            None,
+            END,
+        )
+        .expect("kapanis");
+        attach_summary(
+            &db,
+            session.id,
+            "Konusulanlar: Sema kararlari.",
+            Some(r#"{"totalTokens":120}"#),
+        )
+        .expect("ozet");
+
+        let updated = attach_usage(
+            &db,
+            session.id,
+            "extraction",
+            r#"{"model":"gpt-4o-mini","totalTokens":500,"created":2}"#,
+        )
+        .expect("maliyet yazilmali");
+
+        assert_eq!(
+            updated.summary.as_deref(),
+            Some("Konusulanlar: Sema kararlari."),
+            "ozet metni korunmali"
+        );
+        let usage: serde_json::Value =
+            serde_json::from_str(&updated.usage_json.expect("usage_json")).expect("gecerli JSON");
+        assert_eq!(usage["requests"], 3, "realtime kirilimi korunmali");
+        assert_eq!(
+            usage["summary"]["totalTokens"], 120,
+            "ozet maliyeti korunmali"
+        );
+        assert_eq!(usage["extraction"]["totalTokens"], 500);
+        assert_eq!(usage["extraction"]["created"], 2);
+    }
+
+    #[test]
+    fn attach_usage_refuses_open_sessions_and_broken_json() {
+        let db = fresh_db();
+        let open = start(&db, MODEL, None, START).expect("oturum");
+        assert_eq!(
+            attach_usage(&db, open.id, "extraction", "{}")
+                .expect_err("acik oturum")
+                .code(),
+            StoreErrorCode::NotFound
+        );
+
+        finalize(&db, open.id, &SessionFinalizeInput::default(), None, END).expect("kapanis");
+        assert_eq!(
+            attach_usage(&db, open.id, "extraction", "{ bozuk")
+                .expect_err("bozuk JSON")
+                .code(),
+            StoreErrorCode::Invalid
+        );
+        assert_eq!(
+            attach_usage(&db, 0, "extraction", "{}")
+                .expect_err("gecersiz id")
+                .code(),
+            StoreErrorCode::Invalid
+        );
     }
 
     /// Hala acik bir oturuma ozet yazilmaz — ozet kapanmis konusmanin ozetidir.

@@ -571,13 +571,23 @@ pub fn spawn_for_session<R: tauri::Runtime>(
             }
         };
 
-        let Some(state) = app.try_state::<DbState>() else {
-            return;
+        let stored = {
+            let Some(state) = app.try_state::<DbState>() else {
+                return;
+            };
+            let Some(db) = state.database() else {
+                return;
+            };
+            store(db, session_id, &outcome)
         };
-        let Some(db) = state.database() else {
-            return;
-        };
-        store(db, session_id, &outcome);
+
+        // ASU-034: hafiza cikarimi ozetin **ustune** kurulur ve ancak ozet
+        // gercekten yazildiysa calisir (yazilmamis bir ozetten hafiza uretmek
+        // kaynagi izlenemez bir kayit birakirdi). Buradan sonrasi ozeti
+        // etkilemez: cikarim hata verse de `sessions.summary` yerinde kalir.
+        if stored == SummaryOutcome::Stored {
+            crate::extraction::extract_after_summary(&app, session_id, &outcome.text, &lines).await;
+        }
     });
 }
 

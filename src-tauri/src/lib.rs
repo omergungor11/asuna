@@ -15,6 +15,7 @@ pub mod commands;
 pub mod config;
 pub mod db;
 pub mod env_file;
+pub mod extraction;
 pub mod pricing;
 pub mod realtime_token;
 pub mod summary;
@@ -65,6 +66,10 @@ pub fn run() {
         // hicbir komutu yok; yalnizca `session_finalize` kapanistan sonra arka
         // planda tetikler. `Arc` cunku is arka plan gorevine tasiniyor.
         .manage(std::sync::Arc::new(summary::SummaryService::new()))
+        // ASU-034: hafiza cikarimi. Ozet yazildiktan sonra ayni arka plan
+        // gorevinde calisir; renderer'a **acilmaz** (komutu yok) ve
+        // `ASUNA_MEMORY_ENABLED=false` iken hic cagrilmaz.
+        .manage(std::sync::Arc::new(extraction::ExtractionService::new()))
         // Webview'e acilan her komut ayri bir yetki yuzeyidir ve kendi
         // capability kaydiyla birlikte eklenir (`capabilities/`).
         .invoke_handler(tauri::generate_handler![

@@ -275,27 +275,78 @@ de ASU-034'un girdisidir.
 
 ## ASU-034: Memory Extraction Pipeline
 
-**Scope**: backend | **Boyut**: L | **Durum**: PENDING | **Bagimlilik**: ASU-033, ASU-031
+**Scope**: backend | **Boyut**: L | **Durum**: DONE (2026-08-25) | **Bagimlilik**: ASU-033, ASU-031
 
 ### Aciklama
 PROJECT.md Bolum 26'daki boru hatti:
 `konusma -> oturum ozeti -> aday hafizalar -> dogrulama/dedup -> kalici depolama`
 
 ### Acceptance Criteria
-- [ ] Aday hafiza yapisi uretiliyor: kind, content, importance (0-1), confidence (0-1), projectId (opsiyonel)
-- [ ] Sema dogrulamasi: gecersiz kind / aralik disi skor / bos content reddediliyor
-- [ ] Deduplication: mevcut benzer hafiza varsa yeni kayit acmak yerine guncelleniyor
+- [x] Aday hafiza yapisi uretiliyor: kind, content, importance (0-1), confidence (0-1), projectId (opsiyonel)
+      — `src-tauri/src/extraction.rs`, `MemoryCandidate`. Model `title` de verebilir; vermezse
+        `content`'in ilk cumlesinden turetilir (`derive_title`)
+- [x] Sema dogrulamasi: gecersiz kind / aralik disi skor / bos content reddediliyor
+      — `validate_candidate`; **aday basina** calisir, bir red digerlerini dusurmez. Eksik skor
+        varsayilana cekilmez, reddedilir ("never invent"). Test:
+        `invalid_candidates_are_rejected_without_dropping_the_valid_one`
+- [x] Deduplication: mevcut benzer hafiza varsa yeni kayit acmak yerine guncelleniyor
       (Phase 3'te deterministik/metin tabanli yeterli, semantik dedup backlog'da)
-- [ ] Onem esigi altindaki adaylar kaydedilmiyor (esik konfigurabilir)
-- [ ] Working context tipi bilgiler (guncel dosya, terminal hatasi) durable memory'ye terfi etmiyor
+      — `normalize_for_dedup` + `is_duplicate`: kucuk harf, noktalama -> bosluk, tam esitlik ya da
+        >= 12 karakterlik alt dize. Ayni `kind` **ve** ayni `project_id` sarti. Eslesirse
+        `importance` **max** alinir, `updated_at` tazelenir; icerik/metadata ezilmez
+- [x] Onem esigi altindaki adaylar kaydedilmiyor (esik konfigurabilir)
+      — `MIN_IMPORTANCE = 0.5` (dahil). Yeni bir **zorunlu** env anahtari acilmadi (bkz. Notlar);
+        deger tek bir `const`'ta, config'e tasinmasi tek satirlik
+- [x] Working context tipi bilgiler (guncel dosya, terminal hatasi) durable memory'ye terfi etmiyor
       (PROJECT.md Bolum 14)
-- [ ] Hassas/kisisel kategorilerde kalici kayit oncesi acik onay isteniyor (PROJECT.md Bolum 26 sonu)
-- [ ] Uretilen hafiza `source_session_id` ile oturuma bagli — kaynagi izlenebilir
-- [ ] Unit testler: dogrulama reddi, dedup, esik filtresi
+      — `NON_DURABLE_KINDS` = `working_context`, `tool_state`. Iki kat: talimatta gecerli kind
+        listesinde **yok**, gelse bile `CandidateRejection::NonDurableKind` ile duser
+- [x] Hassas/kisisel kategorilerde kalici kayit oncesi acik onay isteniyor (PROJECT.md Bolum 26 sonu)
+      — `SENSITIVE_KINDS` = `profile`, `relationship`: kayit `metadata_json.pendingApproval = true`
+        ile yazilir. Sema degismedi. Retrieval sozlesmesi ASU-035'te (bkz. Notlar)
+- [x] Uretilen hafiza `source_session_id` ile oturuma bagli — kaynagi izlenebilir
+      — `MemoryDraft.source_session_id`; cikarim yalnizca ozeti **yazilmis** bir oturumdan calisir
+- [x] Unit testler: dogrulama reddi, dedup, esik filtresi
+      — 26 test (`extraction::tests`), mock HTTP sunucusu `summary.rs`'teki `TcpListener` deseni.
+        **Gercek API'ye cagri yok**; `ASUNA_MEMORY_ENABLED=false` testinde ag'a hic cikilmadigi
+        ayrica dogrulaniyor
 
 ### Notlar
 Realtime modele dogrudan "veritabanina yaz" yetkisi verilmez. Cikarim ayri, denetlenebilir bir adimdir.
 Bu, "never invent memories" ilkesinin muhendislik karsiligidir.
+
+- **Kanca: ozetin ustunde, ozetin sahibi degil.** Cikarim `summary::spawn_for_session` icindeki
+  ayni arka plan gorevinde, `store(...)` `SummaryOutcome::Stored` dondukten **sonra** calisir.
+  Gerekce: (1) ozet cikarimin girdisi — yazilmamis bir ozetten uretilen hafizanin kaynagi
+  izlenemez; (2) cikarim hatasi ozeti geri almaz, `sessions.summary` yerinde kalir
+  (test: `an_extraction_failure_leaves_the_summary_and_session_intact`); (3) ikinci bir kuyruk/
+  retry mekanizmasi gerekmiyor.
+- **Yeni env anahtari yok.** Model olarak `ASUNA_SUMMARY_MODEL` yeniden kullaniliyor: cikarim da
+  kisa, ucuz bir metin cagrisi ve her adim icin zorunlu bir anahtar acmak mevcut `.env`'leri
+  kirardi. Ayni gerekceyle esik `const`. Ikisi de olculdukten sonra config'e tasinabilir.
+- **Hassas kategoriler: atmak yerine bekletmek.** Aday sessizce silinseydi kullanici onun var
+  oldugunu hic bilemezdi (PROJECT.md Bolum 20 "storage is inspectable"). Kayit yazilir ama
+  `pendingApproval = true` ile isaretlenir: Memory ekraninda gorunur/silinebilir, retrieval'a
+  **girmez**. Onay `memory_update` ile `metadata_json`'daki bayragin `false` yapilmasidir —
+  sema degismedi, yeni komut acilmadi.
+- **`pendingApproval` her kayitta acikca yazilir** (`false` da). "Anahtar yoksa ne demek?"
+  belirsizligi retrieval tarafinda sessiz bir hataya donusurdu. Elle (Memory UI) olusturulan
+  kayitlarda anahtar yoktur ve bu dogrudur: kullanicinin kendi yazdigi hafiza onay beklemez.
+- **Dedup arsivi de tarar.** Kullanici bir hafizayi arsivlediyse ayni bilgiyi yeni bir satir
+  olarak geri getirmek onun kararini gecersiz kilardi; guncelleme arsiv durumuna dokunmaz.
+  Tarama ayni kind + proje altinda en yeni 200 kayitla sinirli — tam tarama her oturum
+  kapanisinda tum tabloyu okumak demekti (Stage C konsolidasyonu zaten backlog'da).
+- **Model cevabi savunmaci ayristirilir.** Govde `summary.rs` gibi minimum (`model` + `messages`);
+  `response_format` gonderilmiyor cunku bu hesap/model icin davranisi dogrulanmadi. Buna karsilik
+  ` ```json ` blogu ve `{"memories": [...]}` sarmalayicisi **tolere edilir**, baska her sey hata
+  olur. Bos dizi hata degil: "hatirlanacak bir sey yok" gecerli bir cevaptir.
+- **Maliyet `usage_json.$.extraction`.** Yeni `session_repository::attach_usage` yalnizca tek bir
+  alt agaci `json_set` ile yamalar; `$.summary` ve realtime kirilimi **ezilmez**. USD yine `null`
+  (ASU-033 ile ayni gerekce: `gpt-4o-mini` fiyati dogrulanmadi). Yamaya sayimlar da yazilir
+  (`created`/`updated`/`rejected`/`failed`) — cikarimin ne yaptigi oturum kaydindan denetlenebilir.
+- **ASU-037 ile kesisim.** `ASUNA_MEMORY_ENABLED` artik calisma zamaninda da kapatilabiliyor;
+  cikarim ikisini birden okur (`config.memory_enabled && privacy::process_memory_enabled()`).
+  Kapaliyken model **hic cagrilmaz** — ne istek, ne maliyet, ne DB dokunusu.
 
 ---
 
@@ -315,6 +366,12 @@ PROJECT.md Bolum 13 Stage A + Bolum 25. Embedding **yok** — Phase 3 determinis
 - [ ] Baglam `buildAsunaInstructions(context)` uzerinden prompt'a enjekte ediliyor (ASU-012 ile birlesir)
 - [ ] Hicbir hafiza yoksa Asuna "hatirliyorum" gibi davranmiyor — baglam bos gecerse prompt bunu belirtiyor
 - [ ] Unit testler: siralama/oncelik kurallari, boyut siniri, bos durum
+
+### Notlar
+- **ASU-034 sozlesmesi**: onay bekleyen hafizalar retrieval'a **girmez**. Stage A filtresi
+  `json_extract(metadata_json, '$.pendingApproval') IS NOT 1` (anahtar adi:
+  `extraction::PENDING_APPROVAL_KEY`). Elle olusturulan kayitlarda anahtar yoktur ve bu kayitlar
+  onay beklemez — kosul `IS NOT 1` bilerek boyle yazildi, `= 0` degil.
 
 ---
 
