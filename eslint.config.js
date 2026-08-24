@@ -21,6 +21,11 @@ export default tseslint.config(
       'node_modules/**',
       'src-tauri/target/**',
       'src-tauri/gen/**',
+      // Agent calisma alani. `.claude/worktrees/` altinda repo'nun tam git worktree
+      // kopyalari olusuyor; bunlar lint edilirse typescript-eslint birden fazla
+      // tsconfig kok adayi gorup "No tsconfigRootDir was set" ile patliyor.
+      // `.prettierignore` de `.claude/` disliyor — iki arac tutarli. (ASU-004)
+      '.claude/**',
     ],
   },
 

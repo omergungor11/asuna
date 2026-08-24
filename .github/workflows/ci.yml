@@ -1,4 +1,24 @@
-# CI iskeleti — CUSTOMIZE: paket yoneticisi ve komutlari projeye gore doldur (ASU-004).
+# Asuna CI — ASU-004 (Phase 0).
+#
+# RUNNER KARARI: tek job, `macos-latest`.
+#   Asuna bir macOS masaustu uygulamasi. `src-tauri` crate'i `tauri` 2.x'e baglidir ve
+#   Linux'ta derlenmesi icin webkit2gtk/gtk sistem paketleri gerekir — yani `cargo clippy`
+#   ve `cargo test` adimlari ubuntu'da ya kurulum yuku ile ya da hic calismaz. Ustelik
+#   `rust-toolchain.toml` hedefi `aarch64-apple-darwin` olarak pinliyor.
+#   Lint/typecheck/test'i ucuz olsun diye ayri bir `ubuntu-latest` job'a bolmek, ~1 dk'lik
+#   kazanc icin ikinci bir runner + ikinci bir pnpm install/cache restore maliyeti getirirdi;
+#   Rust gate'leri zaten macOS'ta kalmak zorunda oldugundan tek job daha ucuz ve daha basit.
+#   macos-latest = Apple Silicon (arm64), yani gelistirme makinesiyle ayni mimari.
+#
+# BUILD KARARI (phase-0.md ASU-004 notu): tam `pnpm tauri build` PR'da calismaz.
+#   Release profili (lto=true, codegen-units=1) tum bagimlilik agacini yeniden derler ve
+#   .app + .dmg bundle'i uretir — dakikalar suren, macOS runner dakikasi yakan bir adim.
+#   PR'da `pnpm build` (Vite/renderer) + `cargo clippy --all-targets` zaten "derleniyor mu"
+#   sorusunu cevapliyor. Tam bundle yalnizca `main` push'unda (asagidaki `bundle` job'i).
+#
+# SECRET: bu workflow hicbir secret kullanmaz. OPENAI_API_KEY olmadan tamamen yesildir;
+#   hicbir adim runtime API cagrisi yapmaz.
+
 name: CI
 
 on:
@@ -6,29 +26,143 @@ on:
   push:
     branches: [main]
 
+# macOS runner dakikasi pahali: ayni ref'e art arda push gelirse eskisini iptal et.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # CI'da incremental derleme cache'i sisirir, hiz kazandirmaz.
+  CARGO_INCREMENTAL: '0'
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: '1'
+
 jobs:
   quality:
-    runs-on: ubuntu-latest
+    name: Quality (lint + typecheck + test + rust)
+    runs-on: macos-latest
+    timeout-minutes: 30
+
     steps:
       - uses: actions/checkout@v4
 
-      # CUSTOMIZE: runtime kurulumu (ornek Node + pnpm)
-      # - uses: pnpm/action-setup@v4
-      # - uses: actions/setup-node@v4
-      #   with: { node-version: 22, cache: pnpm }
-      # - run: pnpm install --frozen-lockfile
+      # pnpm surumu package.json `packageManager` alanindan okunur (pnpm@10.25.0).
+      - uses: pnpm/action-setup@v4
 
-      # Gate 1 — statik
-      # - run: pnpm lint
-      # - run: pnpm typecheck
+      - uses: actions/setup-node@v4
+        with:
+          # engines.node >= 22.12.0 — 22 satirinin son surumu.
+          node-version: '22'
+          cache: pnpm
 
-      # Gate 2 — test
-      # - run: pnpm test
+      # rust-toolchain.toml'daki pin (1.96.1 + rustfmt/clippy + aarch64-apple-darwin)
+      # rustup tarafindan otomatik kurulur. `show` sadece kurulu ise bilgi verir,
+      # kurulu degilse `toolchain install` toolchain dosyasindan kurar.
+      - name: Setup Rust toolchain (pinned)
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustc --version
+          cargo --version
+          cargo clippy --version
+          cargo fmt --version
 
-      # Build
-      # - run: pnpm build
+      # Cargo cache'i actions/cache ile: ucuncu parti action yuzeyini bilerek kullanmiyoruz
+      # (PROJECT.md Bolum 19 — tedarik zinciri yuzeyi minimum). Key: lockfile + toolchain pini;
+      # ikisi de degismediyse registry + debug target dizini aynen geri yuklenir.
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            src-tauri/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'src-tauri/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
 
-      # Guvenlik — bagimlilik audit (high+ fail)
-      # - run: pnpm audit --audit-level high
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
 
-      - run: echo "CUSTOMIZE ci.yml adimlarini doldur (ASU-004)" && exit 1
+      # --- Gate 1: statik analiz ---
+      - name: Lint (ESLint)
+        run: pnpm lint
+
+      - name: Typecheck (tsc --build)
+        run: pnpm typecheck
+
+      - name: Format check (Prettier)
+        run: pnpm format:check
+
+      # --- Gate 2: test ---
+      - name: Test (Vitest)
+        run: pnpm test
+
+      # --- Rust tarafi ---
+      - name: Rust format check
+        run: pnpm rust:fmt
+
+      - name: Rust lint (clippy -D warnings)
+        run: pnpm rust:lint
+
+      - name: Rust test
+        run: pnpm rust:test
+
+      # Renderer bundle'i (ucuz). Tam Tauri bundle'i asagidaki `bundle` job'inda.
+      - name: Build renderer (Vite)
+        run: pnpm build
+
+      # --- Guvenlik: bagimlilik audit'i, high+ fail ---
+      - name: Dependency audit (high+)
+        run: pnpm audit --audit-level high
+
+  bundle:
+    name: Tauri bundle (macOS, main only)
+    # PR'da calismaz — yukaridaki BUILD KARARI. Sadece main'e push'ta.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: quality
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Setup Rust toolchain (pinned)
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustc --version
+
+      # Release profili ayri bir target alt dizini kullanir; quality job'inin debug
+      # cache'iyle karismamasi icin ayri key.
+      - name: Cache cargo registry + release target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            src-tauri/target
+          key: cargo-release-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'src-tauri/Cargo.lock') }}
+          restore-keys: |
+            cargo-release-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # `tauri.conf.json` -> build.beforeBuildCommand zaten `pnpm build` calistirir.
+      # Imzalama/notarization YOK: APPLE_SIGNING_IDENTITY vb. tanimli olmadigi icin
+      # tauri-bundler imzalama adimini atlar. Cikan .app/.dmg dagitilabilir degil;
+      # bu adimin amaci "release profili derleniyor + bundle uretiliyor mu" dogrulamasi.
+      # Imzali/notarize edilmis release surumu ASU-063'un konusu.
+      - name: Tauri build (unsigned)
+        run: pnpm tauri build

@@ -32,3 +32,5 @@ coverage/
 
 # Claude Code local
 .claude/settings.local.json.bak
+# Paralel agent'larin git worktree'leri — repo'nun tam kopyalari, asla commit edilmez.
+.claude/worktrees/

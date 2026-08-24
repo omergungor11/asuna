@@ -8,14 +8,14 @@
 
 | Phase | Ad | Total | Done | In Progress | Review | Pending | Blocked |
 |-------|----|-------|------|-------------|--------|---------|---------|
-| 0 | Arastirma + Scaffold | 11 | 2 | 0 | 0 | 9 | 0 |
+| 0 | Arastirma + Scaffold | 11 | 2 | 0 | 1 | 8 | 0 |
 | 1 | Realtime Voice (dikey dilim) | 10 | 0 | 0 | 0 | 10 | 0 |
 | 2 | Wake Word | 8 | 0 | 0 | 0 | 8 | 0 |
 | 3 | Memory | 10 | 0 | 0 | 0 | 10 | 0 |
 | 4 | Project Context | 8 | 0 | 0 | 0 | 8 | 0 |
 | 5 | One Useful Action (Tools) | 9 | 0 | 0 | 0 | 9 | 0 |
 | 6 | Focus Recovery (MVP) | 8 | 0 | 0 | 0 | 8 | 0 |
-| **Total** | | **64** | **2** | **0** | **0** | **62** | **0** |
+| **Total** | | **64** | **2** | **0** | **1** | **61** | **0** |
 
 **Progress**: 2/64 (3%)
 
@@ -59,7 +59,7 @@
 | ASU-001 | Repo iskeleti + pnpm workspace | 0 | S | devops | PENDING |
 | ASU-002 | Tauri 2 + React + TS + Vite scaffold (bos pencere acilir) | 0 | L | devops | PENDING |
 | ASU-003 | TypeScript strict + ESLint + Prettier | 0 | S | devops | PENDING |
-| ASU-004 | CI pipeline yesil | 0 | M | devops | PENDING |
+| ASU-004 | CI pipeline yesil | 0 | M | devops | IN_REVIEW |
 | ASU-005 | [ARASTIRMA] SQLite erisim mimarisi karari + ADR-005 | 0 | M | research | PENDING |
 | ASU-006 | [ARASTIRMA] OpenAI Agents SDK realtime dogrulamasi + surum pinleme | 0 | M | research | COMPLETED |
 | ASU-007 | [ARASTIRMA] Tauri webview mikrofon + WebRTC spike | 0 | M | research | PENDING |

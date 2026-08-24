@@ -72,23 +72,43 @@ Ihtiyac dogdukca izin ac, bastan hepsini acma.
 
 ## ASU-004: CI Pipeline Yesil
 
-**Scope**: devops | **Boyut**: M | **Durum**: PENDING | **Bagimlilik**: ASU-003
+**Scope**: devops | **Boyut**: M | **Durum**: IN_REVIEW (2026-08-24) — lokal dogrulama tamam,
+gercek CI run'i push sonrasi | **Bagimlilik**: ASU-003
 
 ### Aciklama
 `.github/workflows/ci.yml` iskeletini doldur. macOS runner gerekiyor (Tauri + Apple Silicon hedefi).
 
 ### Acceptance Criteria
-- [ ] PR'da calisan adimlar: install -> lint -> typecheck -> test -> build
-- [ ] Rust adimlari: `cargo fmt --check`, `cargo clippy`, `cargo test`
+- [x] PR'da calisan adimlar: install -> lint -> typecheck -> test -> build
+- [x] Rust adimlari: `cargo fmt --check`, `cargo clippy`, `cargo test`
 - [ ] `macos-latest` runner uzerinde tam build en az bir kez yesil
-- [ ] pnpm store + cargo registry cache'i acik (CI suresi kontrol altinda)
-- [ ] Bagimlilik audit adimi aktif (high+ fail)
-- [ ] CI'da hicbir gercek secret gerekmiyor (OPENAI_API_KEY olmadan yesil)
-- [ ] `.github/workflows/ci.yml`'deki placeholder `exit 1` adimi kaldirilmis
+      — **push sonrasi dogrulanacak.** Ayni komut (`pnpm tauri build`) lokal macOS 26.5 / arm64'te
+      imzasiz yesil: `Asuna.app` + `Asuna_0.1.0_aarch64.dmg`, release derlemesi ~1 dk 12 sn
+      (sicak cargo cache). Runner'da gercek run henuz yok.
+- [x] pnpm store + cargo registry cache'i acik (CI suresi kontrol altinda)
+- [x] Bagimlilik audit adimi aktif (high+ fail)
+- [x] CI'da hicbir gercek secret gerekmiyor (OPENAI_API_KEY olmadan yesil)
+- [x] `.github/workflows/ci.yml`'deki placeholder `exit 1` adimi kaldirilmis
 
 ### Notlar
 Tam macOS build yavas ve pahali; gerekirse build adimi sadece `main` push'unda calissin, PR'da
 lint/typecheck/test yeterli. Karari CI dosyasinda yorumla belgele.
+
+**Uygulama (2026-08-24).** Iki job:
+- `quality` (`macos-latest`, PR + push): install -> lint -> typecheck -> format:check -> test ->
+  rust fmt/clippy/test -> `pnpm build` (renderer) -> `pnpm audit --audit-level high`.
+- `bundle` (`macos-latest`, yalnizca `main` push, `needs: quality`): tam `pnpm tauri build` (imzasiz).
+
+Tek job `macos-latest`: `src-tauri` crate'i Linux'ta webkit2gtk/gtk sistem paketleri olmadan
+derlenmez ve toolchain `aarch64-apple-darwin` hedefine pinli — Rust gate'leri zaten macOS'ta kalmak
+zorunda. JS gate'lerini ubuntu'ya bolmek ikinci runner + ikinci install/cache maliyeti getirirdi.
+
+Cache: pnpm store `actions/setup-node@v4 (cache: pnpm)`; cargo registry/git + `src-tauri/target`
+`actions/cache@v4` ile, key = `hashFiles(rust-toolchain.toml, src-tauri/Cargo.lock)`. Debug ve
+release target'lari icin ayri key'ler. Ucuncu parti cache action'i (rust-cache) tedarik zinciri
+yuzeyini genisletmemek icin bilerek kullanilmadi.
+
+`continue-on-error` hicbir adimda yok — yesil, gercekten yesil.
 
 ---
 
