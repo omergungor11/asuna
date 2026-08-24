@@ -8,16 +8,16 @@
 
 | Phase | Ad | Total | Done | In Progress | Review | Pending | Blocked |
 |-------|----|-------|------|-------------|--------|---------|---------|
-| 0 | Arastirma + Scaffold | 11 | 9 | 0 | 0 | 2 | 0 |
+| 0 | Arastirma + Scaffold | 11 | 10 | 0 | 0 | 1 | 0 |
 | 1 | Realtime Voice (dikey dilim) | 10 | 0 | 0 | 0 | 10 | 0 |
 | 2 | Wake Word | 8 | 0 | 0 | 0 | 8 | 0 |
 | 3 | Memory | 10 | 0 | 0 | 0 | 10 | 0 |
 | 4 | Project Context | 8 | 0 | 0 | 0 | 8 | 0 |
 | 5 | One Useful Action (Tools) | 9 | 0 | 0 | 0 | 9 | 0 |
 | 6 | Focus Recovery (MVP) | 8 | 0 | 0 | 0 | 8 | 0 |
-| **Total** | | **64** | **9** | **0** | **0** | **55** | **0** |
+| **Total** | | **64** | **10** | **0** | **0** | **54** | **0** |
 
-**Progress**: 9/64 (14%)
+**Progress**: 10/64 (16%)
 
 > ASU-008 "RESEARCH DONE" olarak Done sayilir: arastirma ve ADR-004 tamam, calisan detection spike'i
 > ayri task (**ASU-008b**, PENDING).
@@ -66,7 +66,7 @@
 | ASU-008 | [ARASTIRMA] Wake word saglayicisi (sherpa-onnx KWS) + lisans | 0 | M | research | RESEARCH DONE |
 | ASU-008b | [SPIKE] sherpa-onnx KWS detection spike (macOS arm64) | 0 | L | research | PENDING |
 | ASU-009 | Konfigurasyon katmani + `.env.example` | 0 | S | backend | COMPLETED |
-| ASU-010 | `docs/architecture` + ADR dizini + README local run | 0 | S | docs | PENDING |
+| ASU-010 | `docs/architecture` + ADR dizini + README local run | 0 | S | docs | COMPLETED |
 | ASU-011 | Ephemeral Realtime token minting (Rust) | 1 | L | backend | PENDING |
 | ASU-012 | Asuna core prompt / instructions dosyasi | 1 | S | backend | PENDING |
 | ASU-013 | `AsunaRealtimeService` (SDK wrapper) | 1 | L | backend | PENDING |

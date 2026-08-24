@@ -13,6 +13,35 @@
 **Etki**: [Neyi degistiriyor, geri donus maliyeti]
 -->
 
+## Phase 0 ozeti (2026-08-24)
+
+Phase 0'da verilen kararlarin tek satirlik listesi. Detay icin ilgili ADR'ye bak.
+
+| ADR | Karar | Durum |
+|-----|-------|-------|
+| [ADR-001](#adr-001-desktop-shell--tauri-2--2026-08-24) | Desktop shell = **Tauri 2 + React + TS (strict) + Vite + pnpm**, macOS | accepted |
+| [ADR-002](#adr-002-ses-mimarisi--openai-agents-sdk-realtimeagentrealtimesession--webrtc--2026-08-24) | Ses = **`@openai/agents-realtime`** (`RealtimeAgent`/`RealtimeSession`), transport **WebRTC** | accepted |
+| [ADR-003](#adr-003-realtime-model-konfigurasyonu--asuna_realtime_model-env--2026-08-24) | Model ID hard-code edilmez — **`ASUNA_REALTIME_MODEL`** (`gpt-realtime-2.1`, dev `-mini`) | accepted |
+| [ADR-004](#adr-004-wake-word--picovoice-porcupine-wakewordprovider-adapter-arkasinda--2026-08-24) → **`docs/decisions/ADR-004-wake-word-provider.md`** | Wake word = **sherpa-onnx `KeywordSpotter`** (Rust + `cpal`, offline), `WakeWordProvider` adapter arkasinda. Porcupine elendi (Free Tier kapandi, crate yanked, AccessKey online) | **proposed** — ASU-008b detection spike'i suruyor |
+| [ADR-005](#adr-005-persistence--sqlite-erisim-katmani-acik--2026-08-24) → **`docs/decisions/ADR-005-sqlite-access.md`** | Persistence = **SQLite**, erisim yalnizca Rust'tan (`rusqlite` 0.40.2 + `rusqlite_migration` 2.6.0). `tauri-plugin-sql` olcumle elendi | accepted |
+| [ADR-006](#adr-006-api-key-guvenligi--ephemeral-token-minting-tauri-rust-tarafinda--2026-08-24) | API key yalnizca Rust'ta; renderer **ephemeral `ek_` token** ile baglanir | accepted |
+| [ADR-007](#adr-007-claude-code-gelistirme-modeli--fable-orchestrator--opus-subagentlar--2026-08-24) | Gelistirme modeli = Fable orchestrator + `opus` subagent'lar, `ASU-XXX` task ID'leri | accepted |
+
+Ayrica ADR'ye donusmeden karara baglanan uygulama detaylari (ASU-009, Phase 0 scaffold):
+
+- **ACL deny-by-default**: `src-tauri/build.rs` icinde `AppManifest::commands([...])` —
+  listelenmeyen komut renderer'dan cagrilamaz.
+- **`.env` okuma**: `dotenvy` bilerek kullanilmadi (`set_var` ile secret'i tum alt
+  process'lere mirasliyor); kendi okuyucumuz deger'i `AsunaConfig` icinde tutuyor.
+- **CSP**: `connect-src`'a `https://api.openai.com` eklendi — dev'de gorunmeyen, paketlenmis
+  build'de sesi olduren blocker (ASU-007).
+- **DB konumu**: `~/Library/Application Support/com.omergungor.asuna/asuna.db` (WAL).
+
+Acik sorularin guncel durumu `asuna-config/tech-stack.md` → **ACIK SORULAR** tablosunda.
+Katman mimarileri: `docs/architecture/{voice,memory,tools,security}.md`.
+
+---
+
 ## ADR-007: Claude Code gelistirme modeli = Fable orchestrator + opus subagent'lar — 2026-08-24
 
 **Durum**: accepted

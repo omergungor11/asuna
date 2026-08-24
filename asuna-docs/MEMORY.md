@@ -10,11 +10,12 @@
 - `asuna-docs/DECISIONS.md` — verilmis mimari kararlar (ADR-001..ADR-007).
 
 ## Project Status
-- **Phase 0**: IN PROGRESS — teknik arastirma + scaffold.
-  - Template audit kismi TAMAMLANDI sayiliyor: repoda **uygulama kodu yok**, sadece Claude Code
-    workflow meta-template'i var (`asuna-tasks/`, `asuna-docs/`, `asuna-config/`, `asuna-plans/`, `.claude/`).
-  - Kalan Phase 0 cikti: Tauri 2 iskeleti ayakta, bos pencere aciliyor, CI yesil.
-- Phase 1-6 (PROJECT.md Bolum 32) henuz baslamadi.
+- **Phase 0**: KAPANIYOR (10/11) — Tauri 2 iskeleti ayakta, bos pencere aciliyor, CI yesil,
+  ASU-005..008 arastirmalari ADR'ye baglandi, dokumantasyon (ASU-010) tamam.
+  - Kalan tek task: **ASU-008b** — sherpa-onnx KWS detection spike'i. Phase 1'i **bloklamaz**,
+    ama Phase 2 (wake word) baslamadan bitmeli; ADR-004 o zamana kadar `proposed`.
+- **Sirada Phase 1: realtime voice** (ASU-011 ephemeral token minting ile baslar).
+- Katman mimarileri: `docs/architecture/{voice,memory,tools,security}.md`.
 
 ## Important Patterns
 - **Urun dongusu**: wake → sesli konusma → baglamsal yardim → memory/tool kullanimi → guvenli oturum kapanisi → idle.
@@ -39,8 +40,13 @@
   memory incelenebilir ve silinebilir olmali.
 
 ## Known Issues / Gotchas
-- **ACIK SORU (ADR-005)**: SQLite'a erisim `tauri-plugin-sql` ile mi, Rust tarafi servis + Tauri
-  command'lari ile mi? Phase 0 arastirma task'inda netlesecek. Karar verilmeden DB kodu yazilmaz.
+- **SQLite'a erisim yalnizca Rust'tan** (ADR-005 accepted): `rusqlite` + dar `#[tauri::command]`'lar.
+  Renderer SQL yazmaz, DB yolunu vermez. `tauri-plugin-sql` olcumle elendi.
+- **Yeni `#[tauri::command]` = 3 adim**, atlanirsa **sessiz red**: `build.rs` `AppManifest`
+  listesi + `src-tauri/permissions/` izni + capability, ayrica capability identifier'i
+  `tauri.conf.json → app.security.capabilities` dizisine de eklenir.
+- **CSP `pnpm tauri dev`'de uygulanmaz.** `connect-src` hatasi sadece paketlenmis build'de
+  gorunur — ses dev'de calisip `tauri build` sonrasi sessizce olebilir (ASU-007'de yasandi).
 - ChatGPT aboneligi ile OpenAI API kredisi ayri faturalanir — Realtime kullanimi ayrica ucretlendirilir.
   Gelistirmede `gpt-realtime-2.1-mini` kullan.
 - Wake word icin API anahtari/ucret yok (sherpa-onnx, Apache-2.0). KWS model dosyalari indirilir;

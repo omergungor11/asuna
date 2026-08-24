@@ -318,19 +318,41 @@ Vitest 13 yeni test (sema dogrulama + whitelist reddi + servis onbellegi).
 
 ## ASU-010: `docs/architecture` + ADR Dizini + README Local Run
 
-**Scope**: docs | **Boyut**: S | **Durum**: PENDING | **Bagimlilik**: ASU-005, ASU-006, ASU-007, ASU-008
+**Scope**: docs | **Boyut**: S | **Durum**: COMPLETED (2026-08-24) | **Bagimlilik**: ASU-005, ASU-006, ASU-007, ASU-008
 
 ### Acceptance Criteria
-- [ ] `docs/architecture/` altinda `voice.md`, `memory.md`, `tools.md`, `security.md` iskeletleri
+- [x] `docs/architecture/` altinda `voice.md`, `memory.md`, `tools.md`, `security.md` iskeletleri
       (Phase 0 bulgulariyla doldurulmus, geri kalani TODO isaretli)
-- [ ] `docs/decisions/` altinda ADR-005 (SQLite) ve ADR-004 (wake word) mevcut
-- [ ] `README.md`: kurulum, `pnpm tauri dev`, gerekli harici setup (OpenAI API billing, KWS model
+- [x] `docs/decisions/` altinda ADR-005 (SQLite) ve ADR-004 (wake word) mevcut
+- [x] `README.md`: kurulum, `pnpm tauri dev`, gerekli harici setup (OpenAI API billing, KWS model
       dosyalarini indir — sherpa-onnx `kws-models`)
-- [ ] `asuna-config/tech-stack.md` gercek surumlerle doldurulmus
-- [ ] `asuna-docs/RUNBOOK.md`'deki kalan CUSTOMIZE/template kalintilari temizlenmis
+- [x] `asuna-config/tech-stack.md` gercek surumlerle doldurulmus
+- [x] `asuna-docs/RUNBOOK.md`'deki kalan CUSTOMIZE/template kalintilari temizlenmis
       (deploy/rollback komutlari gercek degerlerle dolduruldu)
-- [ ] `asuna-docs/DECISIONS.md` Phase 0 kararlarinin ozetini ve ADR linklerini iceriyor
+- [x] `asuna-docs/DECISIONS.md` Phase 0 kararlarinin ozetini ve ADR linklerini iceriyor
 
 ### Notlar
 Bu task Phase 0'in kapanis kaydidir. Bitmeden Phase 1'e gecilmez — cunku Phase 1 ASU-006/ASU-007
 bulgularina dogrudan bagimlidir.
+
+### Uygulama notlari (2026-08-24)
+
+- `docs/architecture/` uc yeni iskelet: `memory.md` (katman ayrimi, sema rolleri, ADR-005
+  erisim mimarisi, Stage A retrieval, 8 TODO), `tools.md` (risk 0-3, ilk tool seti, "ince
+  backchannel" deseni, shell politikasi, `tool_events` akisi, 9 TODO), `security.md`
+  (guven siniri diyagrami, ephemeral token akisi, `SecretString`/`dotenvy` karari,
+  deny-by-default ACL, CSP bulgulari, path sandbox plani, 10 TODO).
+  `voice.md` (ASU-006/007 ciktisi) degistirilmedi.
+- `asuna-config/security.md` **checklist** olarak kaldi; `docs/architecture/security.md`
+  mimariyi anlatiyor ve ona isaret ediyor — icerik cogaltilmadi.
+- `README.md`: "Local Kurulum" bolumu (gereksinim tablosu, `.env`, harici setup, komut
+  tablosu, CSP-dev uyarisi) + dokumantasyon tablosu genisletildi; Durum -> "Phase 0
+  kapaniyor, sirada Phase 1".
+- `asuna-docs/RUNBOOK.md` bastan yazildi: Docker/staging/health-endpoint varsayimlari
+  cikarildi; lokal masaustu gercegi (dev vs paketlenmis fark, build + secret grep kontrolu,
+  CI, `git revert` rollback, WAL yedekleme, sik karsilasilanlar tablosu).
+- `asuna-docs/DECISIONS.md` en uste "Phase 0 ozeti" tablosu (ADR-001..007 + ADR'ye
+  donusmeyen 4 uygulama karari).
+- **Kapsam disi birakildi:** `asuna-config/tech-stack.md` zaten ASU-005..009 sirasinda
+  gercek surumlerle dolduruldu (madde dogrulandi, degisiklik gerekmedi).
+- ASU-008b hala PENDING — ADR-004 `proposed` kaliyor, Phase 2 oncesi kapanmali.

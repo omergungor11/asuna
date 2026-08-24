@@ -34,7 +34,18 @@ All notable changes to this project will be documented in this file.
   (`ASUNA_WAKE_WORD_PROVIDER`, `ASUNA_WAKE_WORD_MODEL_DIR`, `ASUNA_WAKE_WORD_THRESHOLD`),
   her degisken icin aciklama satiri ile eklendi.
 
+- ASU-010: `docs/architecture/` altina `memory.md`, `tools.md` ve `security.md` iskeletleri
+  eklendi (Phase 0 bulgulariyla dolu, kalan maddeler TODO tablolarinda). `README.md`'ye
+  "Local Kurulum" bolumu geldi: gereksinimler, `.env`, OpenAI API billing notu
+  (ChatGPT aboneligi API kredisi vermez), KWS model dosyalarinin indirilmesi, komut tablosu.
+- ASU-010: `asuna-docs/DECISIONS.md` en uste "Phase 0 ozeti" tablosu — ADR-001..007 tek
+  satirlik ozetleri + `docs/decisions/` altindaki detayli ADR-004/005 linkleri.
+
 ### Changed
+- ASU-010: `asuna-docs/RUNBOOK.md` template kalintilarindan (Docker/staging/health endpoint)
+  temizlenip Asuna gercegine gore yeniden yazildi: `pnpm tauri dev` / `pnpm tauri build`,
+  GitHub Actions (`ci.yml`), `git revert` + yeniden build ile geri alma, DB dosyasi konumu ve
+  WAL yedekleme (`VACUUM INTO`). "Deploy" kavrami yok; release ASU-063'te.
 - ASU-008: **Wake word: Porcupine → sherpa-onnx KWS** (ADR-004 revize; Picovoice Free Tier
   2026-06-30'da kapandi, non-commercial tier yok, `pv_porcupine` crate yanked, AccessKey init'te
   online dogrulaniyor). Motor artik Tauri'nin **Rust** process'inde (`cpal` + `KeywordSpotter`);
