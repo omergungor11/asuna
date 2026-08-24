@@ -38,6 +38,7 @@ import {
 import type {
   AsunaRealtimeEvent,
   AsunaRealtimeEventListener,
+  RealtimeUsageSnapshot,
   TranscriptEntry,
 } from './realtime-events';
 import { AsunaRealtimeService } from './realtime-service';
@@ -45,6 +46,7 @@ import { registerWindowCloseHandler } from './window-lifecycle';
 import { probeMicrophoneAccess, type MicrophoneProbe } from '../audio/microphone-access';
 import { loadFrontendConfig } from '../config/config.service';
 import { describeTurnDetection, type FrontendConfig } from '../config/frontend-config';
+import { SessionRecorder, type SessionOutcome } from '../memory/session-service';
 import {
   createLoggedVoiceStateMachine,
   isAsunaErrorKind,
@@ -60,6 +62,7 @@ import type {
   VoiceStateMachine,
   VoiceTransitionReason,
 } from '../state/voice-state-machine';
+import type { SessionUsageInput, TranscriptLineInput } from '../../shared/session';
 
 // ---------------------------------------------------------------------------
 // Servis sinirlari
@@ -272,6 +275,63 @@ function markLastAssistantInterrupted(
 }
 
 // ---------------------------------------------------------------------------
+// Oturum kaydi (ASU-032)
+// ---------------------------------------------------------------------------
+
+/**
+ * Kalici kayda gidecek dokumu biriktirir.
+ *
+ * Reducer state'i `dispatch` sonrasi bir render bekler; oturum kapanisi ise
+ * senkron gelir. Kapanista "en son ne konusuldu"yu kaybetmemek icin dokum ayrica
+ * burada, ref benzeri bir yapida tutulur.
+ *
+ * TEMPORARY (ASU-026): Phase 2'de oturum kapanis akisi wake word/idle timeout
+ * ile birlestiginde bu toplayici oradan beslenecek; sozlesmesi degismeyecek.
+ */
+export class TranscriptCollector {
+  private lines: readonly TranscriptLine[] = [];
+
+  /** Item ilk gorulduğu an — dosyaya yazilan zaman. Uydurulmaz, olculur. */
+  private readonly firstSeen = new Map<string, string>();
+
+  public reset(): void {
+    this.lines = [];
+    this.firstSeen.clear();
+  }
+
+  public observe(entry: TranscriptEntry, atMs: number): void {
+    if (!this.firstSeen.has(entry.itemId)) {
+      this.firstSeen.set(entry.itemId, new Date(atMs).toISOString());
+    }
+    this.lines = upsertTranscript(this.lines, entry);
+  }
+
+  /** Kalici kayda uygun hale getirir: bos metinli (henuz gelmemis) satirlar atilir. */
+  public toInput(): TranscriptLineInput[] {
+    return this.lines
+      .filter((line) => line.text.trim().length > 0)
+      .map((line) => {
+        const at = this.firstSeen.get(line.itemId);
+        return at === undefined
+          ? { role: line.role, text: line.text }
+          : { role: line.role, text: line.text, at };
+      });
+  }
+}
+
+/** SDK'nin usage anlik goruntusunu kalici kayit sozlesmesine cevirir. */
+export function toSessionUsageInput(usage: RealtimeUsageSnapshot): SessionUsageInput {
+  return {
+    requests: usage.requests,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    totalTokens: usage.totalTokens,
+    inputTokenDetails: usage.inputTokenDetails,
+    outputTokenDetails: usage.outputTokenDetails,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Event -> UI olgulari
 // ---------------------------------------------------------------------------
 
@@ -292,6 +352,8 @@ interface SessionFacts {
   readonly lastLatencyMs: number | null;
   /** Canli dokum — yalnizca bellekte (ASU-017). */
   readonly transcript: readonly TranscriptLine[];
+  /** Kapanan oturumun kalici kaydi: sure + token (ASU-032, R1 takibi). */
+  readonly sessionOutcome: SessionOutcome | null;
 }
 
 const INITIAL_FACTS: SessionFacts = {
@@ -302,12 +364,14 @@ const INITIAL_FACTS: SessionFacts = {
   bargeIn: false,
   lastLatencyMs: null,
   transcript: [],
+  sessionOutcome: null,
 };
 
 type SessionAction =
   | { readonly type: 'activation_started' }
   | { readonly type: 'activation_failed'; readonly error: UserFacingError }
   | { readonly type: 'latency_measured'; readonly latencyMs: number }
+  | { readonly type: 'session_recorded'; readonly outcome: SessionOutcome }
   | { readonly type: 'realtime_event'; readonly event: AsunaRealtimeEvent };
 
 function reduceRealtimeEvent(state: SessionFacts, event: AsunaRealtimeEvent): SessionFacts {
@@ -365,11 +429,20 @@ function reduceSession(state: SessionFacts, action: SessionAction): SessionFacts
   switch (action.type) {
     case 'activation_started':
       // Yeni oturum yeni dokum: onceki oturumun satirlari modelin baglaminda da yok.
-      return { ...state, error: null, activeTool: null, bargeIn: false, transcript: [] };
+      return {
+        ...state,
+        error: null,
+        activeTool: null,
+        bargeIn: false,
+        transcript: [],
+        sessionOutcome: null,
+      };
     case 'activation_failed':
       return { ...state, connected: false, error: action.error };
     case 'latency_measured':
       return { ...state, lastLatencyMs: action.latencyMs };
+    case 'session_recorded':
+      return { ...state, sessionOutcome: action.outcome };
     case 'realtime_event':
       return reduceRealtimeEvent(state, action.event);
   }
@@ -392,6 +465,11 @@ export interface UseAsunaSessionOptions {
    * @returns kancayi soken fonksiyon.
    */
   readonly registerCloseHandler?: (handler: () => void) => () => void;
+  /**
+   * Oturumu kalici kayda baglar (ASU-032). Testlerde sahte kayitci verilir;
+   * varsayilan `session_start` / `session_finalize` komutlarini cagirir.
+   */
+  readonly createSessionRecorder?: () => SessionRecorder;
 }
 
 export interface AsunaSession {
@@ -416,6 +494,14 @@ export interface AsunaSession {
   readonly lastLatencyMs: number | null;
   /** Canli dokum: kayit/log, sohbet gecmisi degil (ASU-017). */
   readonly transcript: readonly TranscriptLine[];
+  /**
+   * Kapanan oturumun kalici kaydi (ASU-032): sure, token ve tahmini maliyet.
+   *
+   * `null` = henuz kapanmis bir oturum yok ya da hafiza kapali oldugu icin
+   * kayit tutulmadi. `estimatedCostUsd` su an her zaman `null` — dogrulanmamis
+   * bir fiyat tablosundan sayi uydurulmuyor (ASU-033).
+   */
+  readonly sessionOutcome: SessionOutcome | null;
   /** "Talk to Asuna" — izin -> config -> connect. Hata icerde yakalanir. */
   readonly start: () => void;
   /** "Stop" — oturumu kapatir. */
@@ -431,6 +517,8 @@ interface ResolvedDeps {
   readonly now: () => number;
   readonly latency: TurnLatencyTracker;
   readonly registerCloseHandler: (handler: () => void) => () => void;
+  readonly recorder: SessionRecorder;
+  readonly transcriptCollector: TranscriptCollector;
 }
 
 function defaultCreateService(context: AsunaSessionContext): AsunaSessionPort {
@@ -442,7 +530,19 @@ function defaultCreateService(context: AsunaSessionContext): AsunaSessionPort {
 
 function resolveDeps(options: UseAsunaSessionOptions): ResolvedDeps {
   const log = options.logger ?? defaultLogger;
+  const recorderLog = log.child('session-record');
   return {
+    recorder:
+      options.createSessionRecorder?.() ??
+      new SessionRecorder({
+        // Kayit hatasi konusmayi dusurmez ama gorunur olur (PROJECT.md Bolum 30).
+        onError: (error: unknown): void => {
+          recorderLog.warn('Oturum kaydi yazilamadi; konusma etkilenmedi.', {
+            detail: error instanceof Error ? error.message : String(error),
+          });
+        },
+      }),
+    transcriptCollector: new TranscriptCollector(),
     loadConfig: options.loadConfig ?? loadFrontendConfig,
     createService: options.createService ?? defaultCreateService,
     probeMicrophone:
@@ -472,6 +572,8 @@ export function useAsunaSession(options: UseAsunaSessionOptions = {}): AsunaSess
   /** Servis tarafinda kapatilmasi gereken bir oturum var mi (baglanma asamasi dahil). */
   const sessionOpenRef = useRef(false);
   const mountedRef = useRef(true);
+  /** Kapanistan hemen once gelen `usage` — kalici kayda yazilir (ASU-032). */
+  const usageRef = useRef<SessionUsageInput | null>(null);
 
   const state = useSyncExternalStore(
     useCallback(
@@ -595,12 +697,81 @@ export function useAsunaSession(options: UseAsunaSessionOptions = {}): AsunaSess
     transition('ERROR', 'ERROR_OCCURRED');
   }, [closeSession, deps, transition]);
 
+  /**
+   * Kalici oturum kaydi (ASU-032).
+   *
+   * `usage` event'i kapanistan hemen once gelir (ASU-013); `disconnected`
+   * senkron olarak onu izler. Bu yuzden kullanim burada bir ref'te tutulur ve
+   * kapanista tuketilir.
+   *
+   * TEMPORARY: kapanis tetigi su an Phase 1'in `disconnected` event'i. ASU-026
+   * (idle timeout / wake word ile oturum kapanisi) geldiginde tetik oraya
+   * tasinacak; `SessionRecorder` sozlesmesi degismeyecek.
+   */
+  const recordSessionEvent = useCallback(
+    (event: AsunaRealtimeEvent): void => {
+      const { recorder, transcriptCollector, now } = deps;
+
+      switch (event.type) {
+        case 'connected':
+          transcriptCollector.reset();
+          usageRef.current = null;
+          // `projectId` Phase 4'te (ASU-039+) dolacak.
+          recorder.begin(now());
+          return;
+
+        case 'transcript':
+          transcriptCollector.observe(event.entry, now());
+          return;
+
+        case 'usage':
+          usageRef.current = toSessionUsageInput(event.usage);
+          return;
+
+        case 'disconnected': {
+          const usage = usageRef.current;
+          usageRef.current = null;
+          void recorder
+            .end(now(), {
+              ...(usage === null ? {} : { usage }),
+              transcript: transcriptCollector.toInput(),
+            })
+            .then((outcome) => {
+              if (outcome !== null && mountedRef.current) {
+                dispatch({ type: 'session_recorded', outcome });
+              }
+            });
+          return;
+        }
+
+        // Kalan event'ler kalici kayda girmiyor. Liste acikca yaziliyor:
+        // yeni bir event turu eklendiginde "kaydedilmeli mi?" sorusu derleme
+        // zamaninda sorulsun.
+        case 'connecting':
+        case 'reconnecting':
+        case 'error':
+        case 'agent_thinking':
+        case 'agent_audio_started':
+        case 'agent_audio_stopped':
+        case 'agent_interrupted':
+        case 'turn_ended':
+        case 'tool_call_started':
+        case 'tool_call_completed':
+        case 'tool_approval_requested':
+        case 'unexpected_signal':
+          return;
+      }
+    },
+    [deps],
+  );
+
   const handleEvent = useCallback(
     (event: AsunaRealtimeEvent): void => {
       if (event.type === 'connected') {
         connectedRef.current = true;
       }
       trackLatency(event);
+      recordSessionEvent(event);
       dispatch({ type: 'realtime_event', event });
 
       if (event.type === 'disconnected') {
@@ -612,7 +783,7 @@ export function useAsunaSession(options: UseAsunaSessionOptions = {}): AsunaSess
         handleSessionFailure();
       }
     },
-    [handleSessionFailure, trackLatency],
+    [handleSessionFailure, recordSessionEvent, trackLatency],
   );
 
   const ensureService = useCallback(
@@ -759,6 +930,7 @@ export function useAsunaSession(options: UseAsunaSessionOptions = {}): AsunaSess
     bargeIn: facts.bargeIn,
     lastLatencyMs: facts.lastLatencyMs,
     transcript: facts.transcript,
+    sessionOutcome: facts.sessionOutcome,
     start,
     stop,
   };

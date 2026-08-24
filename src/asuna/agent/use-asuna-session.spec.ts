@@ -20,9 +20,15 @@ import {
   type UseAsunaSessionOptions,
 } from './use-asuna-session';
 import { MicrophoneAccessError, type MicrophoneProbe } from '../audio/microphone-access';
+import { SessionRecorder } from '../memory/session-service';
 import type { FrontendConfig } from '../config/frontend-config';
 import { AsunaLogger, type LogEntry } from '../observability';
 import { VoiceStateMachine } from '../state/voice-state-machine';
+import type {
+  SessionFinalizeInput,
+  SessionRecord,
+  SessionWriteResult,
+} from '../../shared/session';
 
 const CONFIG: FrontendConfig = {
   realtimeModel: 'gpt-realtime-2.1-mini',
@@ -849,5 +855,188 @@ describe('useAsunaSession — temiz disconnect ve kaynak temizligi (ASU-018)', (
     });
     expect(result.current.state).toBe('LISTENING');
     expect(service.connectCalls()).toBe(2);
+  });
+});
+
+describe('useAsunaSession — oturum kaydi (ASU-032)', () => {
+  const OPEN_SESSION: SessionRecord = {
+    id: 12,
+    startedAt: '2026-08-25T10:00:00Z',
+    endedAt: null,
+    projectId: null,
+    summary: null,
+    transcriptPath: null,
+    model: CONFIG.realtimeModel,
+    inputTokens: null,
+    outputTokens: null,
+    totalTokens: null,
+    estimatedCostUsd: null,
+    usageJson: null,
+    createdAt: '2026-08-25T10:00:00Z',
+  };
+
+  const CLOSED_SESSION: SessionRecord = {
+    ...OPEN_SESSION,
+    endedAt: '2026-08-25T10:04:00Z',
+    inputTokens: 120,
+    outputTokens: 80,
+    totalTokens: 200,
+  };
+
+  type StartMock = ReturnType<
+    typeof vi.fn<(projectId?: string) => Promise<SessionWriteResult>>
+  >;
+  type FinalizeMock = ReturnType<
+    typeof vi.fn<
+      (sessionId: number, input: SessionFinalizeInput) => Promise<SessionWriteResult>
+    >
+  >;
+
+  interface RecordingHarness {
+    readonly harness: Harness;
+    readonly options: UseAsunaSessionOptions;
+    readonly start: StartMock;
+    readonly finalize: FinalizeMock;
+  }
+
+  function createRecordingHarness(
+    overrides: { readonly start?: StartMock } = {},
+  ): RecordingHarness {
+    const start: StartMock =
+      overrides.start ??
+      vi
+        .fn<(projectId?: string) => Promise<SessionWriteResult>>()
+        .mockResolvedValue({ status: 'recorded', session: OPEN_SESSION });
+    const finalize: FinalizeMock = vi
+      .fn<(sessionId: number, input: SessionFinalizeInput) => Promise<SessionWriteResult>>()
+      .mockResolvedValue({ status: 'recorded', session: CLOSED_SESSION });
+
+    // Deterministik saat: her okuma +1000 ms.
+    let tick = 0;
+    const harness = createHarness({
+      now: (): number => {
+        const value = tick;
+        tick += 1_000;
+        return value;
+      },
+    });
+
+    return {
+      harness,
+      options: {
+        ...harness.options,
+        createSessionRecorder: (): SessionRecorder => new SessionRecorder({ start, finalize }),
+      },
+      start,
+      finalize,
+    };
+  }
+
+  it('oturum acilinca kayit acar, kapanista kullanim ve dokumu yazar', async () => {
+    const { harness, options, start, finalize } = createRecordingHarness();
+    const { result } = renderHook(() => useAsunaSession(options));
+
+    await flush(() => {
+      result.current.start();
+    });
+    expect(start).toHaveBeenCalledOnce();
+
+    act(() => {
+      harness.service().emit({
+        type: 'transcript',
+        entry: {
+          itemId: 'item-1',
+          role: 'user',
+          text: 'Wake word yerel kalsin.',
+          status: 'completed',
+        },
+      });
+      harness.service().emit({
+        type: 'usage',
+        usage: {
+          requests: 2,
+          inputTokens: 120,
+          outputTokens: 80,
+          totalTokens: 200,
+          inputTokenDetails: [{ audio_tokens: 90 }],
+          outputTokenDetails: [],
+        },
+      });
+    });
+
+    await flush(() => {
+      result.current.stop();
+    });
+
+    expect(finalize).toHaveBeenCalledOnce();
+    const [sessionId, input] = finalize.mock.calls[0] ?? [0, {}];
+    expect(sessionId).toBe(12);
+    expect(input.usage).toEqual({
+      requests: 2,
+      inputTokens: 120,
+      outputTokens: 80,
+      totalTokens: 200,
+      inputTokenDetails: [{ audio_tokens: 90 }],
+      outputTokenDetails: [],
+    });
+    expect(input.transcript).toEqual([
+      {
+        role: 'user',
+        text: 'Wake word yerel kalsin.',
+        at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/) as unknown,
+      },
+    ]);
+
+    // Sure ve token UI'ya dusuyor (R1 takibi); maliyet uydurulmuyor.
+    expect(result.current.sessionOutcome).toEqual({
+      id: 12,
+      durationMs: expect.any(Number) as unknown,
+      totalTokens: 200,
+      estimatedCostUsd: null,
+    });
+  });
+
+  /** Hafiza kapali: oturum kaydi yok, ama konusma sorunsuz calisti. */
+  it('kayit atlandiginda konusma akisi etkilenmez', async () => {
+    const { options, finalize } = createRecordingHarness({
+      start: vi
+        .fn<(projectId?: string) => Promise<SessionWriteResult>>()
+        .mockResolvedValue({ status: 'skipped', reason: 'memory-disabled' }),
+    });
+    const { result } = renderHook(() => useAsunaSession(options));
+
+    await flush(() => {
+      result.current.start();
+    });
+    expect(result.current.state).toBe('LISTENING');
+
+    await flush(() => {
+      result.current.stop();
+    });
+
+    expect(finalize).not.toHaveBeenCalled();
+    expect(result.current.sessionOutcome).toBeNull();
+    expect(result.current.error).toBeNull();
+  });
+
+  /** Kayit hatasi sesli oturumu dusurmez (PROJECT.md Bolum 30). */
+  it('kayit hatasi oturumu dusurmez', async () => {
+    const { options } = createRecordingHarness({
+      start: vi
+        .fn<(projectId?: string) => Promise<SessionWriteResult>>()
+        .mockRejectedValue(new Error('disk dolu')),
+    });
+    const { result } = renderHook(() => useAsunaSession(options));
+
+    await flush(() => {
+      result.current.start();
+    });
+    expect(result.current.state).toBe('LISTENING');
+
+    await flush(() => {
+      result.current.stop();
+    });
+    expect(result.current.error).toBeNull();
+    expect(result.current.sessionOutcome).toBeNull();
   });
 });

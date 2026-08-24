@@ -12,6 +12,7 @@
  */
 
 import { useAsunaSession, type UseAsunaSessionOptions } from '../asuna/agent/use-asuna-session';
+import { describeSessionOutcome } from '../asuna/memory/session-service';
 
 import { ErrorNotice } from './error-notice';
 import { MicIndicator } from './mic-indicator';
@@ -66,6 +67,11 @@ export function VoicePanel({ options }: VoicePanelProps): React.JSX.Element {
           <dd>
             {session.lastLatencyMs === null ? '—' : `${session.lastLatencyMs.toString()} ms`}
           </dd>
+        </div>
+        {/* Kapanan oturumun suresi ve token kullanimi (ASU-032 / R1 takibi). */}
+        <div className="asuna-panel__fact">
+          <dt>Oturum</dt>
+          <dd>{describeSessionOutcome(session.sessionOutcome)}</dd>
         </div>
       </dl>
     </section>

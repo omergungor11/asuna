@@ -147,17 +147,57 @@ PROJECT.md Bolum 12.2'deki iki tablo. `projects`, `tasks`, `tool_events` sonraki
 
 ## ASU-032: Session Kaydi + Opsiyonel Transcript Persist
 
-**Scope**: backend | **Boyut**: M | **Durum**: PENDING | **Bagimlilik**: ASU-030, ASU-026
+**Scope**: backend | **Boyut**: M | **Durum**: DONE (2026-08-25) | **Bagimlilik**: ASU-030, ASU-026
 
 ### Acceptance Criteria
-- [ ] Oturum acilinca `sessions` kaydi olusuyor (started_at, model)
-- [ ] Oturum kapaninca ended_at + kullanilan model + varsa token/sure/maliyet metadata yaziliyor
-- [ ] `ASUNA_TRANSCRIPT_STORAGE=true` iken transcript dosyaya yaziliyor ve `transcript_path` doluyor
-- [ ] `ASUNA_TRANSCRIPT_STORAGE=false` iken transcript diske hic yazilmiyor (dogrulanmis)
-- [ ] Transcript dosyalari uygulama veri dizininde, oturum id'siyle isimlendirilmis
-- [ ] Cokme/anormal kapanista yarim kalan oturum kaydi bir sonraki acilista kapatiliyor
-      (ended_at null kalmiyor)
-- [ ] Oturum suresi ve tahmini maliyet UI'da gorunebiliyor (R1 takibi)
+- [x] Oturum acilinca `sessions` kaydi olusuyor (started_at, model)
+      — `session_start`; **model renderer'dan gelmez**, `ASUNA_REALTIME_MODEL` config
+        degerinden alinir. Tetik: `AsunaRealtimeService`'in `connected` event'i
+- [x] Oturum kapaninca ended_at + kullanilan model + varsa token/sure/maliyet metadata yaziliyor
+      — `session_finalize`; skalerler (`input/output/total_tokens`) + ham kirilim `usage_json`.
+        `estimated_cost_usd` icin bkz. Notlar (dogrulanmis fiyat tablosu yok)
+- [x] `ASUNA_TRANSCRIPT_STORAGE=true` iken transcript dosyaya yaziliyor ve `transcript_path` doluyor
+      — `transcript::persist_if_enabled`, JSONL (satir basina bir replik), dosya `0600` / dizin `0700`
+- [x] `ASUNA_TRANSCRIPT_STORAGE=false` iken transcript diske hic yazilmiyor (dogrulanmis)
+      — davranissal test: `writes_absolutely_nothing_to_disk_when_storage_is_disabled` gecici
+        dizinde **dosya sistemi** kontrolu yapar (dizin bile olusmuyor). IPC ucundan da
+        dogrulandi: `session_commands_record_a_session_end_to_end_over_the_real_acl`
+        (`transcriptPath: null`)
+- [x] Transcript dosyalari uygulama veri dizininde, oturum id'siyle isimlendirilmis
+      — `app_data_dir()/transcripts/session-<id>.jsonl`; yol **Rust tarafinda** cozulur,
+        renderer yol veremez (`deny_unknown_fields` ile de reddedilir)
+- [x] Cokme/anormal kapanista yarim kalan oturum kaydi bir sonraki acilista kapatiliyor
+      — `session_repository::close_abandoned`, `lib.rs` acilis akisinda; `idx_sessions_open`
+        kismi index'i kullanilir, islem idempotent
+- [x] Oturum suresi ve tahmini maliyet UI'da gorunebiliyor (R1 takibi)
+      — voice-panel'de tek satir: `3 dk 12 sn · 1.240 token · maliyet: bilinmiyor`.
+        **Maliyet su an her zaman "bilinmiyor"** — bkz. Notlar
+
+### Notlar
+- **Maliyet neden bos.** Dogrulanmis bir fiyat tablosu yok; `gpt-realtime-2.1` icin
+  token basina fiyati koda gomduğumuz anda "uydurulmus maliyet" gostermis oluruz
+  (PROJECT.md "never invent" ilkesinin fatura karsiligi). Yeni bir zorunlu env anahtari
+  eklemek de mevcut `.env`'leri kirar (config'te sessiz default yok). Bu yuzden:
+  kolon ve tum boru hatti hazir, deger `NULL`, UI "bilinmiyor" yaziyor. **ASU-033**
+  ozetleme maliyetini de hesaplayacagi icin fiyat tablosu orada tek seferde cozulmeli.
+- **Yarim oturumun `ended_at` degeri `started_at`.** Gercek bitis bilinmiyor; "simdi"
+  yazmak 20 saatlik sahte bir oturum ve sahte bir maliyet penceresi uretirdi. Sifir sure
+  "bilmiyoruz"un en az yaniltici hali; neden `summary` alanina insan diliyle yaziliyor
+  (`ABANDONED_SESSION_SUMMARY`). Ayri bir `end_reason` kolonu daha temiz olurdu ama yeni
+  migration + uc katmanli tip aynasi bu task'in kapsamini asiyordu — ASU-033 kolon acarken
+  birlikte degerlendirilecek.
+- **TEMPORARY (ASU-026).** Kapanis tetigi su an Phase 1'in `disconnected` event'i.
+  Idle timeout / wake word ile kapanis geldiginde tetik oraya tasinacak; `SessionRecorder`
+  sozlesmesi (begin/end) degismeyecek.
+- **Yaris kosulu.** `session_start` asenkron, `disconnected` senkron gelir. `SessionRecorder`
+  kapanista acilis cagrisini **bekler**; aksi halde kisa oturumlar `ended_at = NULL` kalir ve
+  her acilista "yarim oturum" olarak kurtarilirdi. Test: `kapanis, ucusta olan acilis
+  cagrisini bekler`.
+- **Kayit hatasi konusmayi dusurmez.** `session_start`/`session_finalize` hatalari
+  yakalanir, log'lanir; sesli oturum devam eder. Hafiza kapaliyken kayit hic olusmaz ve
+  kapanista uydurulmus bir oturum kimligiyle yazma denenmez.
+- **ACL**: `capabilities/asuna-session.json` — hafiza yazma izinlerinden **ayri**. Oturum
+  kaydi ile durable memory farkli katmanlar (PROJECT.md Bolum 14); izinleri de ayri.
 
 ---
 

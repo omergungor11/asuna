@@ -24,6 +24,11 @@ fn main() {
             "memory_update",
             "memory_archive",
             "memory_delete",
+            // ASU-032: oturum kaydi (capabilities/asuna-session.json). Model
+            // config'ten gelir, transcript yolu Rust tarafinda cozulur —
+            // renderer ikisini de veremez.
+            "session_start",
+            "session_finalize",
         ]));
 
     if let Err(error) = tauri_build::try_build(attributes) {

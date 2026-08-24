@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "asuna-session",
+  "description": "Oturum kaydi yuzeyi (ASU-032): `session_start` ve `session_finalize`. Ikisi de yazma komutudur ve hafiza yazma izinlerinden ayri tutulur — oturum kaydi ile hafiza kayitlari farkli katmanlardir (PROJECT.md Bolum 14). Renderer oturumun modelini SECEMEZ: `model` her zaman `ASUNA_REALTIME_MODEL` config degerinden gelir. Renderer transcript DOSYA YOLU da veremez: yol Rust tarafinda uygulama veri dizininden turetilir ve dosya yalnizca `ASUNA_TRANSCRIPT_STORAGE=true` iken yazilir; kapaliyken diske hicbir sey dusmez. `ASUNA_MEMORY_ENABLED=false` iken oturum kaydi hic olusmaz. Kapsam ana pencere ile sinirlidir; wildcard izin yoktur.",
+  "platforms": ["macOS"],
+  "windows": ["main"],
+  "permissions": ["allow-session-start", "allow-session-finalize"]
+}

@@ -69,7 +69,9 @@ pub fn run() {
             db::memory_repository::memory_create,
             db::memory_repository::memory_update,
             db::memory_repository::memory_archive,
-            db::memory_repository::memory_delete
+            db::memory_repository::memory_delete,
+            db::session_repository::session_start,
+            db::session_repository::session_finalize
         ])
         .build(app_context())
         .expect("Tauri uygulamasi baslatilamadi");
@@ -77,7 +79,23 @@ pub fn run() {
     // SQLite acilisi + migration (ASU-029). Hata halinde **cikilmaz**:
     // `DbState::Unavailable` yonetilir, `db_status` komutu durumu bildirir ve
     // konusma hafizasiz devam eder (PROJECT.md Bolum 30).
-    app.manage(db::DbState::initialize(app.handle(), memory_enabled));
+    let db_state = db::DbState::initialize(app.handle(), memory_enabled);
+
+    // ASU-032: cokme/kill sonrasi `ended_at` NULL kalmis oturumlar burada
+    // kapatilir. Hata halinde uygulama yine acilir — kurtarma bir kolaylik,
+    // acilis kosulu degil.
+    if let Some(database) = db_state.database() {
+        match db::session_repository::close_abandoned(database) {
+            Ok(0) => {}
+            Ok(count) => eprintln!(
+                "[asuna] Yarim kalmis {count} oturum kaydi kapatildi (onceki calisma \
+                 beklenmedik sekilde sonlanmis)."
+            ),
+            Err(error) => eprintln!("[asuna] Yarim oturum kaydi kapatilamadi: {error}"),
+        }
+    }
+
+    app.manage(db_state);
 
     app.run(|_app_handle, _event| {});
 }

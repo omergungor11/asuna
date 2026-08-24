@@ -112,3 +112,81 @@ export function parseSessionRecords(value: unknown): SessionRecord[] {
 export function isSessionOpen(session: SessionRecord): boolean {
   return session.endedAt === null;
 }
+
+// ---------------------------------------------------------------------------
+// Istek sozlesmeleri (ASU-032)
+// ---------------------------------------------------------------------------
+
+/** Dokum satiri. Yalnizca `ASUNA_TRANSCRIPT_STORAGE=true` iken diske yazilir. */
+export interface TranscriptLineInput {
+  readonly role: 'user' | 'assistant';
+  readonly text: string;
+  /** Verilmezse dosyaya da yazilmaz — zaman uydurulmaz. */
+  readonly at?: string;
+}
+
+/**
+ * Oturum kapanisinda raporlanan kullanim.
+ *
+ * Skalerler `sessions` kolonlarina, tamami `usageJson`'a yazilir. Ayrintili
+ * kirilimin anahtarlari runtime'da dogrulanmadi (memory.md T5) — bu yuzden
+ * uydurulmus kolon acilmadi.
+ */
+export interface SessionUsageInput {
+  readonly requests?: number;
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  readonly totalTokens?: number;
+  readonly inputTokenDetails?: readonly Readonly<Record<string, number>>[];
+  readonly outputTokenDetails?: readonly Readonly<Record<string, number>>[];
+}
+
+export interface SessionFinalizeInput {
+  readonly usage?: SessionUsageInput;
+  readonly transcript?: readonly TranscriptLineInput[];
+}
+
+/**
+ * Oturum yazma sonucu. `skipped` = hafiza kapali; oturum kaydi hic olusmadi ve
+ * cagiran taraf elinde bir oturum kimligi oldugunu **sanmamali**.
+ */
+export type SessionWriteResult =
+  | { readonly status: 'recorded'; readonly session: SessionRecord }
+  | { readonly status: 'skipped'; readonly reason: 'memory-disabled' };
+
+const SESSION_SKIP_REASONS = ['memory-disabled'] as const;
+
+export function parseSessionWriteResult(value: unknown): SessionWriteResult {
+  if (!isRecord(value)) {
+    throw new SessionContractError('Oturum yazma sonucu bir nesne olmali.');
+  }
+
+  const read = readers(value, fail);
+
+  switch (value['status']) {
+    case 'recorded':
+      assertNoUnexpectedKeys(value, ['status', 'session'], failWith);
+      return { status: 'recorded', session: parseSessionRecord(value['session']) };
+
+    case 'skipped':
+      assertNoUnexpectedKeys(value, ['status', 'reason'], failWith);
+      return { status: 'skipped', reason: read.enumeration('reason', SESSION_SKIP_REASONS) };
+
+    default:
+      fail('status', 'su degerlerden biri: recorded, skipped');
+  }
+}
+
+/**
+ * Oturum suresi (ms) — kapanmamis oturumda `null`.
+ *
+ * Yarim kalan bir oturum acilista `endedAt = startedAt` ile kapatilir; bu
+ * durumda sure `0` doner. Bu bilincli: gercek bitis zamani bilinmiyor ve
+ * "simdi" yazmak saatler suren sahte bir oturum uretirdi (ASU-032).
+ */
+export function sessionDurationMs(session: SessionRecord): number | null {
+  if (session.endedAt === null) {
+    return null;
+  }
+  return Date.parse(session.endedAt) - Date.parse(session.startedAt);
+}

@@ -76,7 +76,9 @@ fn build_test_app_with(db_state: DbState) -> App<MockRuntime> {
             crate::db::memory_repository::memory_create,
             crate::db::memory_repository::memory_update,
             crate::db::memory_repository::memory_archive,
-            crate::db::memory_repository::memory_delete
+            crate::db::memory_repository::memory_delete,
+            crate::db::session_repository::session_start,
+            crate::db::session_repository::session_finalize
         ])
         .build(crate::app_context())
         .expect("mock app kurulmali");
@@ -438,4 +440,128 @@ fn invalid_memory_input_is_rejected_at_the_ipc_boundary() {
     let listed =
         invoke_with(&webview, "memory_list", serde_json::Value::Null).expect("okuma calismali");
     assert_eq!(listed, "[]");
+}
+
+// ---------------------------------------------------------------------------
+// ASU-032 — oturum kaydi
+// ---------------------------------------------------------------------------
+
+/// Oturum acilis/kapanis akisi gercek ACL uzerinden calisiyor mu?
+///
+/// GIZLILIK: test config'inde `ASUNA_TRANSCRIPT_STORAGE=false` — bu test
+/// **diske hicbir sey yazmaz** ve gercek uygulama veri dizinine dokunmaz.
+/// Yazma yolunun kendisi `db::transcript` icinde gecici dizinle test edilir.
+#[test]
+fn session_commands_record_a_session_end_to_end_over_the_real_acl() {
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+
+    let started = invoke_with(&webview, "session_start", serde_json::json!({}))
+        .expect("session_start calismali");
+    assert!(
+        started.contains("\"status\":\"recorded\""),
+        "yanit: {started}"
+    );
+    // Model renderer'dan degil, config'ten gelir.
+    assert!(
+        started.contains("\"model\":\"gpt-realtime-2.1\""),
+        "yanit: {started}"
+    );
+    assert!(started.contains("\"endedAt\":null"), "yanit: {started}");
+
+    let value: serde_json::Value = serde_json::from_str(&started).expect("JSON");
+    let session_id = value["session"]["id"].as_i64().expect("oturum kimligi");
+
+    let finalized = invoke_with(
+        &webview,
+        "session_finalize",
+        serde_json::json!({
+            "sessionId": session_id,
+            "input": {
+                "usage": { "requests": 2, "inputTokens": 120, "outputTokens": 80, "totalTokens": 200 },
+                "transcript": [{ "role": "user", "text": "merhaba" }]
+            }
+        }),
+    )
+    .expect("session_finalize calismali");
+
+    assert!(
+        finalized.contains("\"totalTokens\":200"),
+        "yanit: {finalized}"
+    );
+    assert!(
+        !finalized.contains("\"endedAt\":null"),
+        "yanit: {finalized}"
+    );
+    // `ASUNA_TRANSCRIPT_STORAGE=false` — dokum diske yazilmadi.
+    assert!(
+        finalized.contains("\"transcriptPath\":null"),
+        "transcript kapaliyken yol yazilmis: {finalized}"
+    );
+}
+
+/// Renderer oturum modelini secemez: sozlesmede boyle bir alan yok, gonderirse
+/// istek reddedilir (`deny_unknown_fields`).
+#[test]
+fn the_renderer_cannot_choose_the_session_model_or_transcript_path() {
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+
+    for args in [
+        serde_json::json!({ "model": "gpt-4o-realtime-ucuz" }),
+        serde_json::json!({ "projectId": "asuna", "model": "baska-model" }),
+    ] {
+        let response = invoke_with(&webview, "session_start", args);
+        // Fazladan alan komut imzasinda yok: ya yok sayilir ya reddedilir —
+        // her iki durumda da model config'ten gelen deger olmali.
+        if let Ok(body) = response {
+            assert!(
+                body.contains("\"model\":\"gpt-realtime-2.1\""),
+                "renderer modeli ezdi: {body}"
+            );
+        }
+    }
+
+    let started = invoke_with(&webview, "session_start", serde_json::json!({}))
+        .expect("session_start calismali");
+    let value: serde_json::Value = serde_json::from_str(&started).expect("JSON");
+    let session_id = value["session"]["id"].as_i64().expect("oturum kimligi");
+
+    let error = invoke_with(
+        &webview,
+        "session_finalize",
+        serde_json::json!({
+            "sessionId": session_id,
+            "input": { "transcriptPath": "/Users/kurban/.ssh/id_ed25519" }
+        }),
+    )
+    .expect_err("renderer transcript yolu veremez");
+    assert!(!is_acl_denial(&error), "hata: {error}");
+}
+
+/// **ASU-032 kabul kriteri**: hafiza kapaliyken oturum kaydi olusmaz ve
+/// uygulama calismaya devam eder.
+#[test]
+fn session_commands_are_no_ops_when_memory_is_disabled() {
+    let app = build_test_app(); // DbState::Disabled
+    let webview = main_webview(&app);
+
+    let started = invoke_with(&webview, "session_start", serde_json::json!({}))
+        .expect("kapali hafiza hata degil");
+    assert!(
+        started.contains("\"status\":\"skipped\"")
+            && started.contains("\"reason\":\"memory-disabled\""),
+        "yanit: {started}"
+    );
+
+    let finalized = invoke_with(
+        &webview,
+        "session_finalize",
+        serde_json::json!({ "sessionId": 1 }),
+    )
+    .expect("kapali hafiza hata degil");
+    assert!(
+        finalized.contains("\"status\":\"skipped\""),
+        "yanit: {finalized}"
+    );
 }

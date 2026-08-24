@@ -25,7 +25,7 @@ pub fn get_frontend_config(config: State<'_, AsunaConfig>) -> FrontendConfig {
 /// etkinlestirme) ve `lib.rs` (`generate_handler!`) ile karsilastirir. Yeni bir
 /// `#[tauri::command]` eklerken dort yerin hepsi guncellenmeli.
 #[cfg(test)]
-pub const EXPOSED_COMMANDS: [&str; 8] = [
+pub const EXPOSED_COMMANDS: [&str; 10] = [
     "get_frontend_config",
     "mint_realtime_token",
     "db_status",
@@ -34,6 +34,8 @@ pub const EXPOSED_COMMANDS: [&str; 8] = [
     "memory_update",
     "memory_archive",
     "memory_delete",
+    "session_start",
+    "session_finalize",
 ];
 
 /// Hafizayi **okuyan** komutlar (ASU-031).

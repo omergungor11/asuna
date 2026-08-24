@@ -63,7 +63,8 @@
         "asuna-realtime",
         "asuna-db",
         "asuna-memory-read",
-        "asuna-memory-write"
+        "asuna-memory-write",
+        "asuna-session"
       ]
     }
   },
