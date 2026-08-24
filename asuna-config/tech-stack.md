@@ -16,7 +16,7 @@
 | AI / orchestration | `@openai/agents-realtime` **0.17.0** (exact pin) — RealtimeAgent / RealtimeSession | Karar (ASU-006) |
 | Ses transport | WebRTC (`transport: 'webrtc'` acikca) | Karar — WKWebView'de dogrulandi (ASU-007) |
 | Realtime model | `gpt-realtime-2.1` (dev: `gpt-realtime-2.1-mini`) — env ile | Karar — dogrulandi (ASU-006) |
-| Wake word | **sherpa-onnx `KeywordSpotter`** (Rust, `cpal`), `WakeWordProvider` adapter arkasinda | Karar (proposed — spike bekliyor, `docs/decisions/ADR-004`) |
+| Wake word | **sherpa-onnx `KeywordSpotter`** (Rust, `cpal`), `WakeWordProvider` adapter arkasinda | Motor: Karar (ASU-008b: %2.3 CPU/38MB, lisans OK). **Model+ifade ACIK** — gigaspeech-3.3M "Hey Asuna"yi tasimiyor (`docs/decisions/ADR-004`) |
 | Veritabani | SQLite — Rust servis (`rusqlite`), `docs/decisions/ADR-005` | Karar (ASU-005) |
 | Secret / auth | Ephemeral Realtime token, key Rust tarafinda | Karar |
 | Test | Vitest (unit/integration) + Rust `cargo test` | Karar |

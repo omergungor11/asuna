@@ -8,6 +8,14 @@
 > **Onkosul:** Phase 1 ASU-020 gecmis olmali. Ses dongusu calismadan wake word eklenmez
 > (TRANSCRIPT.md Bolum 20).
 >
+> **⛔ EK BLOKAJ (ASU-008b, 2026-08-24):** Motor karari kesin (sherpa-onnx, Rust/cpal) ama
+> **model + ifade secimi ACIK** — gigaspeech-3.3M sozlugu "ASUNA"yi tasimiyor (%0 tespit).
+> Bu faz baslamadan cozum sirasi: (1) gercek mikrofon + insan sesi testi (30 dk, harness
+> `spike/asu-008b-kws` branch'inde), (2) daha buyuk model, (3) vocabulary-aware ifade,
+> (4) yedek motorlar. Detay: ADR-004 "Model + Ifade Secimi" bolumu. ASU-022 icin kritik
+> spike notlari (surum pinleme tuzagi `=1.13.6`, segfault onlemi — keyword token dogrulamasi
+> sart, resampler, ASUNA_WAKE_WORD_BOOST onerisi) ADR-004 ve spike raporunda.
+>
 > **Phase cikisi:** ASU-028. Gizlilik dogrulamasi (ASU-024) bu phase'in pazarlik disi maddesidir.
 
 ---

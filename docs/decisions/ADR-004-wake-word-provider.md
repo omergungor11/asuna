@@ -1,6 +1,9 @@
 # ADR-004: Wake Word Saglayicisi
 
-**Durum**: proposed (spike sonrasi accepted'a cekilecek — bkz. "Acik Kalanlar")
+**Durum**: accepted — **kapsami daraltilmis** (2026-08-24, ASU-008b spike'i): motor (sherpa-onnx
+`KeywordSpotter`) + yerlesim (Tauri Rust process, `cpal`) + lisans/maliyet kararlari KESIN;
+**model + tetikleyici ifade secimi ACIK** — `gigaspeech-3.3M` modeli "Hey Asuna"yi tasimiyor
+(sozlukte yok, ortografik tespit %0). Phase 2 baslamadan cozulmeli; Phase 1 etkilenmez.
 **Tarih**: 2026-08-24
 **Iliskili**: ASU-008, OQ-3, OQ-4, OQ-6 · PROJECT.md Bolum 8 · `asuna-config/tech-stack.md` Bolum 4
 **Onceki karari degistirir**: `asuna-docs/DECISIONS.md` icindeki ADR-004 (Porcupine, accepted, 2026-08-24)
@@ -260,35 +263,101 @@ idle yoluna bulasma ihtimali ortadan kalkar. Risk sadece aktif oturum yoluna sin
 
 ---
 
-## Acik Kalanlar (spike ile kapatilacak — durum: **SPIKE BEKLIYOR**)
+## Acik Kalanlar (ASU-008b spike sonucu — durum: **4/5 KAPANDI, 1 MADDE BLOKER**)
 
-Bu ADR `proposed`. Asagidaki 5 madde yesil donmeden `accepted` yapilmaz.
-(ASU-008'in "calisan detection spike'i" akseptans kriteri **ASU-008b** olarak ayri task'tir.)
+Spike tarihi: 2026-08-24 · macOS 26.5.2 arm64 · rustc 1.96.1
+Spike kodu ana koda tasinmadi — harness `spike/asu-008b-kws` branch'inde korunuyor
+(buyuk dosyalar haric; ses korpusu `spike/tools/gen_audio.sh` ile yeniden uretilir).
 
-1. **"HEY ASUNA" tespit kalitesi.** 50 farkli soyleyis uzerinde detection rate ve 8 saatlik
-   gercek ortam idle'da false-accept sayisi. Boosting score / threshold taramasi.
-   _Kabul esigi onerisi: >%95 detection, <1 FP / 8 saat._
-   Bilinmeyen: "Asuna" OOV bir ozel isim — BPE subword'lerinin bunu tasiyip tasimadigi.
-2. **Idle CPU/RAM (Apple Silicon).** cpal 16kHz mono + KeywordSpotter, `num_threads=1`,
-   int8 model, 30 dk olcum. Silero VAD ile kapili (VAD-gated) varyant ayrica olculur.
-   Kiyas referansi yok — Porcupine'in tek resmi rakami RPi3 uzerinde <%4/1MB.
-3. **Mikrofon devir teslimi (OQ-6).** Rust cpal → renderer `getUserMedia` gecis suresi;
-   macOS TCC bunu tek izin olarak mi iki ayri prompt olarak mi soruyor; turuncu mikrofon
-   gostergesinin idle davranisi UX olarak kabul edilebilir mi.
-4. **Build / bundle / imzalama.** Build script'in GitHub'dan arsiv indirmesi CI'da ve
-   offline build'de nasil davraniyor; static link ile `.app` boyut delta'si; `codesign` +
-   notarization sorunsuz mu; ONNX model dosyalarinin Tauri resource olarak paketlenmesi.
-5. **Model agirliklarinin lisansi.** gigaspeech-3.3M KWS modelinin dagitim/ticari kullanim
-   lisansi dokumante degil. k2-fsa release notu / HuggingFace model card / issue ile netlestirilecek.
-   Olumsuz cikarsa: zh-en 2025-12-20 modeli veya kendi KWS modelini egitme yoluna bakilir.
+1. **"HEY ASUNA" tespit kalitesi.** ❌ **BASARISIZ — bu model bu ifadeyi tasimiyor.**
+   `bpe.model` aslinda **500 parcalik SentencePiece UNIGRAM** sozlugu (icefall `unigram_500`),
+   BPE degil. `▁ASUNA`, `▁HEY`, `UNA`, `NA`, `SU` sozlukte **yok**.
+   `HEY ASUNA` → `▁HE Y ▁AS UN A` tokenlaniyor, fakat akustik model bu diziyi **hic uretmiyor**;
+   ayni transducer duz ASR olarak calistirildiginda "HEY AS SOONER" / "AS SOON" / "HEY ASSUMED"
+   duyuyor (36 TTS orneginde tutarli).
+   - 36 pozitif (30 en + 6 tr) x 5 threshold x 6 boosting score = 30 kombinasyon:
+     `HEY ASUNA` icin **en iyi %25** (score 4.0 / thr 0.05), varsayilanda **%0**.
+   - Fonetik workaround (`HEY AS SOON` + varyantlari): **%67 @ 3.7 FA/saat**,
+     **%81 @ 54.8 FA/saat** (985 s surekli negatif konusma akisindan).
+     Kabul esigi >%95 detection **ve** <0.125 FA/saat idi → **~440x uzakta**.
+   - **Turkce telaffuzda (Yelda TTS) 36 kombinasyonun 35'inde 0/6.**
+   - Harness dogrulandi: modelin kendi test_wavs'i 2/2; ayni TTS hattiyla uretilen
+     "Hey Alexa"→`ALEXA`, "Hey Siri"→`HEY SIRI` varsayilan ayarda tetikleniyor.
+     Yani basarisizlik TTS artefakti degil, ifade/model uyusmazligi.
+   - **Sinirlama:** macOS `say` "Asuna"yi /əˈsuːnər/ okuyor. Gercek (Turkce aksanli) insan
+     konusmasiyla dogrulama **yapilmadi** — sonucu degistirebilecek en buyuk belirsizlik.
 
-**Geri donus (exit) plani.** Spike (1) veya (2) kalirsa sirasiyla:
-(a) KWS'yi Silero VAD ile kapila — CPU ve false-accept birlikte duser (ayni crate'te
-`VoiceActivityDetector` var); (b) tetikleyici ifadeyi uzat; (c) `oww-rs` (MIT) veya
-`rustpotter` (Apache-2.0) adapter'in arkasinda dene; (d) son care olarak global
-kisayol/tray butonunu kalici sekonder aktivasyon olarak birak (Phase 1'de zaten var).
-Her durumda `WakeWordProvider` arayuzu degismez — degisim `src-tauri` icinde tek modul,
-tahmini **~1 gun**.
+2. **Idle CPU/RAM (Apple Silicon).** ✅ **GECTI.** Gercek mikrofon, 10'ar dk, 120 ornek,
+   `num_threads=1`, int8, 48kHz→16kHz (sherpa dahili resampler):
+
+   | Varyant | CPU% ort / p95 | RSS med / max |
+   |---|---|---|
+   | KWS (VAD yok) | **2.34 / 3.70** | **38.4 MB** / 70.3 MB |
+   | Silero VAD ile kapili | **1.63 / 2.40** | **75.7 MB** / 86.7 MB |
+
+   VAD gating CPU'yu ~%30 dusuruyor ama RAM'i ~2x'liyor ve segment-sonu gecikmesi ekliyor.
+   **MVP'de VAD gating gerekmiyor.**
+
+3. **Mikrofon devir teslimi (OQ-6).** ⚠️ **KISMEN — manuel adim acik.**
+   - `cpal` 0.16 varsayilan girisi acti: 48000 Hz / 1 kanal / F32. **16kHz'e zorlamaya gerek yok**,
+     sherpa `accept_waveform`'da otomatik resampler kuruyor.
+   - **TCC prompt'u test EDILEMEDI**: spike binary'si, mikrofon izni zaten olan bir parent
+     process'ten calisti. Imzali `.app` icindeki davranis dogrulanmadi.
+   - Rust→renderer gecis suresi olculmedi (renderer tarafi henuz yok).
+   - Not: `NSMicrophoneUsageDescription` + `Entitlements.plist` ASU-007 ile ana koda eklendi.
+
+4. **Build / bundle / imzalama.** ✅ **GECTI (bir tuzakla).**
+   - 🔴 **`sherpa-onnx = "1.13.5"` tek basina DERLENMIYOR.** Wrapper `sherpa-onnx-sys`'e caret
+     bagimli, Cargo 1.13.6'ya cozuyor, `E0063: missing field window_shift_ratio` ile patliyor.
+     Cozum: `sherpa-onnx-sys = "=1.13.5"` de pinle **veya** `sherpa-onnx = "=1.13.6"` kullan
+     (1.13.6 cifti temiz derlendi — **onerilen**).
+     Native arsiv surumunu **sys crate'inin** versiyonu belirler, wrapper'inki degil.
+   - Arsiv: `sherpa-onnx-v1.13.5-osx-arm64-static-lib.tar.bz2` = **18.9 MiB** (acilmis ~101 MB;
+     `libonnxruntime.a` tek basina 69.4 MB).
+   - Temiz `target/` + ag ile build **17 s**; `SHERPA_ONNX_ARCHIVE_DIR` ile **10 s, indirme yok**;
+     ag+vendor yoksa build script net mesajla panic ediyor.
+     **CI notu:** 2 temiz denemeden 1'i "connection timed out" ile dustu → arsiv vendor'lanmali
+     veya cache + retry sart.
+   - Binary delta (src-tauri ile ayni profil): 302,704 B → **16,784,800 B = +15.7 MB**.
+   - `otool -L`: yalnizca sistem dylib'leri, **ucuncu parti dylib yok**.
+     `codesign --options runtime` **basarili** → static link notarization'i basitlestiriyor.
+   - Runtime model dosyalari (`bundle.resources`): encoder+decoder+joiner int8 + tokens.txt =
+     **5,253,530 B (5.01 MiB)**. **Toplam .app deltasi ≈ 20.7 MB.**
+
+5. **Model agirliklarinin lisansi.** ✅ **NETLESTI: Apache-2.0 — bir uyari ile.**
+   - ModelScope API, `pkufool/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01`:
+     `"License": "Apache License 2.0"`. Modelin kendi `README.md` front-matter'i da ayni.
+   - ⚠️ **Egitim verisi katmani ayri:** GigaSpeech (`speechcolab/gigaspeech`) gated erisim metni
+     "non-commercial research and educational purposes" sarti tasiyor.
+   - **Yargi:** Asuna'nin bugunku konumu (kisisel, MIT, ticari degil) icin **sorun yok**.
+     **Ticarilesme** senaryosunda yayincinin Apache-2.0 beyani ile veri setinin non-commercial
+     sarti celisir; o noktada hukuki gorus veya kendi modelini egitmek gerekir.
+
+---
+
+## Model + Ifade Secimi — ACIK KARAR (Phase 2 oncesi)
+
+Motor karari kesin; asagidaki secenekler maliyet sirasiyla degerlendirilecek:
+
+1. **Gercek mikrofon + insan sesi testi (30 dk, sifir kod — EN YUKSEK ONCELIK).**
+   Harness hazir (`spike/asu-008b-kws` branch'i). Gercek Turkce telaffuzda model `▁AS UN A`
+   uretiyorsa tablo tamamen degisir. Bu yapilmadan model degistirmek erken.
+2. Daha yeni/buyuk KWS modeli dene (`zh-en-3M-2025-12-20` — dogru release yolu bulunmali,
+   ModelScope'ta o isimle 404). Daha buyuk sozluk "ASUNA"yi tasiyabilir.
+3. Tetikleyici ifadeyi modelin sozlugunde iyi temsil edilen bir ifadeye cevir
+   (**vocabulary-aware** secim — sadece uzatmak degil).
+4. icefall ile kendi KWS modelini egit (agir; GigaSpeech lisans sorusunu geri getirir).
+5. Exit plani: `oww-rs` (MIT) / `rustpotter` — `WakeWordProvider` arkasinda, ~1 gun.
+
+**Geri donus (exit) plani** onceki halinden degismedi: her durumda `WakeWordProvider`
+arayuzu sabit; motor/model degisimi `src-tauri` icinde tek modul.
+
+---
+
+**Sonuc.** Motor / yerlesim / lisans / kaynak tuketimi / paketleme iddialarinin tamami dogrulandi
+→ bu ADR **accepted** (kapsami: motor + yerlesim). Curuyen tek sey **`gigaspeech-3.3M` +
+"Hey Asuna" kombinasyonu** — model + ifade secimi yukaridaki acik karara devredildi.
+Phase 1 etkilenmez; Phase 2 bu karar cozulmeden baslamaz.
 
 ---
 

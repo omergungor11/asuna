@@ -224,7 +224,7 @@ implementasyon adi `SherpaKwsProvider` (ASU-022). Asuna'nin geri kalani vendor a
 
 ## ASU-008b: [SPIKE] sherpa-onnx KWS Detection Spike (macOS arm64)
 
-**Scope**: research | **Boyut**: L | **Durum**: PENDING | **Bagimlilik**: ASU-002, ASU-008
+**Scope**: research | **Boyut**: L | **Durum**: COMPLETED (2026-08-24) — motor/lisans/CPU/bundle YESIL; detection BASARISIZ (model+ifade secimi acik karar, ADR-004) | **Bagimlilik**: ASU-002, ASU-008
 
 ### Aciklama
 ADR-004'u `proposed`'dan `accepted`'a cekmek icin gereken calisan kanit. Apple Silicon uzerinde

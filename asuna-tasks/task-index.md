@@ -8,19 +8,19 @@
 
 | Phase | Ad | Total | Done | In Progress | Review | Pending | Blocked |
 |-------|----|-------|------|-------------|--------|---------|---------|
-| 0 | Arastirma + Scaffold | 11 | 10 | 0 | 0 | 1 | 0 |
+| 0 | Arastirma + Scaffold | 11 | 11 | 0 | 0 | 0 | 0 |
 | 1 | Realtime Voice (dikey dilim) | 10 | 0 | 0 | 0 | 10 | 0 |
 | 2 | Wake Word | 8 | 0 | 0 | 0 | 8 | 0 |
 | 3 | Memory | 10 | 0 | 0 | 0 | 10 | 0 |
 | 4 | Project Context | 8 | 0 | 0 | 0 | 8 | 0 |
 | 5 | One Useful Action (Tools) | 9 | 0 | 0 | 0 | 9 | 0 |
 | 6 | Focus Recovery (MVP) | 8 | 0 | 0 | 0 | 8 | 0 |
-| **Total** | | **64** | **10** | **0** | **0** | **54** | **0** |
+| **Total** | | **64** | **11** | **0** | **0** | **53** | **0** |
 
-**Progress**: 10/64 (16%)
+**Progress**: 11/64 (17%)
 
-> ASU-008 "RESEARCH DONE" olarak Done sayilir: arastirma ve ADR-004 tamam, calisan detection spike'i
-> ayri task (**ASU-008b**, PENDING).
+> ASU-008b spike tamamlandi (2026-08-24): motor/lisans/CPU/bundle dogrulandi, ADR-004 accepted
+> (kapsami daraltilmis). ACIK: model+ifade secimi — gigaspeech-3.3M "Hey Asuna"yi tasimiyor (R2).
 
 > Not: PROJECT.md Bolum 32'deki "Phase 0 — Template audit" tamamlanmis sayilir. Repo'da uygulama kodu
 > yok, sadece Claude Code workflow meta-template'i var (`asuna-tasks/`, `asuna-docs/`, `asuna-config/`,
@@ -41,7 +41,7 @@
 | ID | Risk | Olasilik | Etki | Azaltma | Durum |
 |----|------|----------|------|---------|-------|
 | R1 | **Realtime API maliyeti** — surekli acik ses oturumu faturayi hizla buyutur; ChatGPT aboneligi API kredisi vermez (PROJECT.md Bolum 28) | H | H | Idle'da oturum yok (Phase 2), inactivity timeout + max session duration (ASU-025), dev'de `gpt-realtime-2.1-mini`, oturum suresi/maliyet metadata takibi | OPEN |
-| R2 | **sherpa-onnx KWS tespit kalitesi + model lisansi** — "Hey Asuna" detection rate / false-accept orani ve KWS model agirliklarinin dagitim lisansi henuz dogrulanmadi. (Porcupine lisans riski **KAPANDI**: saglayici elendi — Free Tier 2026-06-30'da kapatildi, Rust binding yanked, AccessKey online dogrulaniyor; ADR-004) | M | M | ASU-008b spike'i (>%95 detection, <1 FP/8 saat, model lisansi netlestirme); `WakeWordProvider` adapter arkasinda tutulur (ASU-021), fake provider ile Phase 2 gelistirmesi vendor'dan bagimsiz ilerler. Exit: Silero VAD kapisi → tetikleyici ifadeyi uzatma → `oww-rs` / `rustpotter` yedekleri | OPEN |
+| R2 | **KWS modeli "Hey Asuna"yi tasimiyor (ASU-008b OLCTU)** — gigaspeech-3.3M sozlugunde `ASUNA` yok; ortografik tespit %0, fonetik workaround en iyi %81 @ 54.8 FA/saat (hedef >%95 @ <0.125), Turkce telaffuz ~%0. Motor/lisans/CPU/bundle YESIL (%2.3 CPU, 38MB, Apache-2.0, +20.7MB app). | H | M | Once GERCEK MIKROFON testi (30 dk, harness `spike/asu-008b-kws` branch'inde — TTS telaffuz artefakti olabilir); sonra sirayla: daha buyuk model (zh-en-3M), vocabulary-aware ifade secimi, kendi model egitimi, `oww-rs`/`rustpotter`. Phase 2 bu cozulmeden baslamaz; Phase 1 etkilenmez | OPEN |
 | R3 | ~~WKWebView WebRTC riski~~ KAPANDI (ASU-007): calisiyor — gUM+kalici TCC, SDP/DTLS/srflx, autoplay engelsiz; fallback gerekmedi. Yeni bulgu: prod CSP'ye api.openai.com eklendi (dev'de gorunmeyen blocker, duzeltildi) | - | - | voice.md Bolum 11 | CLOSED |
 | R4 | ~~SQLite erisim mimarisi~~ KAPANDI (ASU-005): B — Rust servis (rusqlite), ADR-005 accepted; tauri-plugin-sql olcumle elendi | - | - | Karar docs/decisions/ADR-005-sqlite-access.md | CLOSED |
 | R5 | **Tek gelistirici odak riski** — TRANSCRIPT.md Bolum 1/6: projeyi bitirememe, dikkat dagilmasi urun probleminin ta kendisi | H | H | Dikey dilim disiplini (bir phase bitmeden digerine gecme), her phase sonunda calisir demo, kucuk task boyutlari, `asuna-tasks/active/session-notes.md` ile oturum devamliligi | OPEN |
@@ -64,7 +64,7 @@
 | ASU-006 | [ARASTIRMA] OpenAI Agents SDK realtime dogrulamasi + surum pinleme | 0 | M | research | COMPLETED |
 | ASU-007 | [ARASTIRMA] Tauri webview mikrofon + WebRTC spike | 0 | M | research | COMPLETED |
 | ASU-008 | [ARASTIRMA] Wake word saglayicisi (sherpa-onnx KWS) + lisans | 0 | M | research | RESEARCH DONE |
-| ASU-008b | [SPIKE] sherpa-onnx KWS detection spike (macOS arm64) | 0 | L | research | PENDING |
+| ASU-008b | [SPIKE] sherpa-onnx KWS detection spike (macOS arm64) | 0 | L | research | COMPLETED |
 | ASU-009 | Konfigurasyon katmani + `.env.example` | 0 | S | backend | COMPLETED |
 | ASU-010 | `docs/architecture` + ADR dizini + README local run | 0 | S | docs | COMPLETED |
 | ASU-011 | Ephemeral Realtime token minting (Rust) | 1 | L | backend | PENDING |
