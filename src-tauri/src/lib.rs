@@ -64,7 +64,12 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_frontend_config,
             realtime_token::mint_realtime_token,
-            db::state::db_status
+            db::state::db_status,
+            db::memory_repository::memory_list,
+            db::memory_repository::memory_create,
+            db::memory_repository::memory_update,
+            db::memory_repository::memory_archive,
+            db::memory_repository::memory_delete
         ])
         .build(app_context())
         .expect("Tauri uygulamasi baslatilamadi");

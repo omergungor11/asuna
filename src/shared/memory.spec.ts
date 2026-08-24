@@ -6,6 +6,8 @@ import {
   isMemoryKind,
   parseMemoryRecord,
   parseMemoryRecords,
+  parseMemoryWriteResult,
+  wasMemoryStored,
 } from './memory';
 
 const VALID = {
@@ -144,5 +146,43 @@ describe('parseMemoryRecords', () => {
     expect(() => parseMemoryRecords([VALID, { ...VALID, kind: 'nope' }])).toThrow(
       MemoryContractError,
     );
+  });
+});
+
+describe('parseMemoryWriteResult', () => {
+  it('yazilan kaydi dogrular', () => {
+    const result = parseMemoryWriteResult({ status: 'stored', record: VALID });
+    expect(result).toEqual({ status: 'stored', record: VALID });
+    expect(wasMemoryStored(result)).toBe(true);
+  });
+
+  it('silme sonucunu dogrular', () => {
+    expect(parseMemoryWriteResult({ status: 'deleted', id: 3 })).toEqual({
+      status: 'deleted',
+      id: 3,
+    });
+  });
+
+  /**
+   * `ASUNA_MEMORY_ENABLED=false` iken yazma yapilmaz. Bu sonuc sessizce
+   * "basarili" sayilamaz — cagiran taraf "kaydettim" diyemesin.
+   */
+  it('atlanan yazmayi ayirt eder', () => {
+    const result = parseMemoryWriteResult({ status: 'skipped', reason: 'memory-disabled' });
+    expect(result).toEqual({ status: 'skipped', reason: 'memory-disabled' });
+    expect(wasMemoryStored(result)).toBe(false);
+  });
+
+  it('bilinmeyen durum ya da neden reddedilir', () => {
+    for (const value of [
+      { status: 'ok', record: VALID },
+      { status: 'skipped', reason: 'because' },
+      { status: 'stored' },
+      { status: 'deleted', id: 0 },
+      { status: 'stored', record: VALID, extra: 1 },
+      'stored',
+    ]) {
+      expect(() => parseMemoryWriteResult(value)).toThrow(MemoryContractError);
+    }
   });
 });

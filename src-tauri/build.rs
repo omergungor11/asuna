@@ -14,6 +14,16 @@ fn main() {
             // ASU-029: hafiza alt sisteminin durumu (capabilities/asuna-db.json).
             // Salt okunur; hicbir hafiza kaydi ya da SQL bu komuttan gecmez.
             "db_status",
+            // ASU-031: hafiza okuma (capabilities/asuna-memory-read.json).
+            // Okuma ve yazma AYRI izinlerdir: ileride "salt okunur hafiza"
+            // moduna gecmek, yazma capability'sini `tauri.conf.json`'dan
+            // cikarmak kadar basit olmali.
+            "memory_list",
+            // ASU-031: hafiza yazma (capabilities/asuna-memory-write.json).
+            "memory_create",
+            "memory_update",
+            "memory_archive",
+            "memory_delete",
         ]));
 
     if let Err(error) = tauri_build::try_build(attributes) {

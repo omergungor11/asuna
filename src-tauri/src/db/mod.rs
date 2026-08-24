@@ -22,13 +22,17 @@
 //! calisir; birim testleri gercek uygulama veri dizinine **hicbir zaman**
 //! yazmaz.
 
+pub mod clock;
+pub mod memory_repository;
 pub mod migrations;
 pub mod model;
 pub mod state;
+pub mod store_error;
 
 pub use migrations::EXPECTED_SCHEMA_VERSION;
 pub use model::{MemoryKind, MemoryRecord, SessionRecord};
 pub use state::{db_status, DbAvailability, DbState, DbStatus};
+pub use store_error::{StoreError, StoreErrorCode, StoreSkipReason};
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;

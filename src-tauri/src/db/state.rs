@@ -95,6 +95,23 @@ impl DbState {
         }
     }
 
+    /// Repository katmani icin DB erisimi — **"kapali" ile "bozuk" ayri**.
+    ///
+    /// [`DbState::database`] ikisini de `None` yapar; bu yeterli degil:
+    /// `Disabled` kullanicinin karari (sessizce no-op dogru davranis),
+    /// `Unavailable` ise bir arizadir ve cagiran taraf onu **hata** olarak
+    /// gostermek zorunda (PROJECT.md Bolum 30). Ayrim tip duzeyinde tutuluyor
+    /// ki bir cagri yanlislikla arizayi "hafiza kapali" gibi gostermesin.
+    ///
+    /// `Err` icindeki neden zaten redakte edilmistir (bkz. [`super::DbError`]).
+    pub fn access(&self) -> Result<Option<&AsunaDb>, &str> {
+        match self {
+            Self::Ready(db) => Ok(Some(db)),
+            Self::Disabled => Ok(None),
+            Self::Unavailable { reason } => Err(reason),
+        }
+    }
+
     pub fn availability(&self) -> DbAvailability {
         match self {
             Self::Ready(_) => DbAvailability::Ready,

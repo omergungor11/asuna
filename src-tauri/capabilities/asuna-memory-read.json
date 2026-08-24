@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "asuna-memory-read",
+  "description": "Hafiza OKUMA yuzeyi (ASU-031). Yalnizca `memory_list` komutunu acar: filtreye uyan `memories` kayitlarini dondurur. Ham SQL renderer'a gecmez — filtre kapali bir sozlesmedir (kind, proje, arsiv, metin aramasi, limit, siralama) ve bilinmeyen alan reddedilir. Yazma, guncelleme, arsivleme ve silme bu dosyada YOKTUR; onlar ayri bir capability'dedir (asuna-memory-write). Ayrim bilincli: hafizayi salt okunur moda almak, yazma capability'sini tauri.conf.json listesinden cikarmak kadar basit olmali. Kapsam ana pencere ile sinirlidir; wildcard izin yoktur.",
+  "platforms": ["macOS"],
+  "windows": ["main"],
+  "permissions": ["allow-memory-list"]
+}

@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "asuna-memory-write",
+  "description": "Hafiza YAZMA yuzeyi (ASU-031): `memory_create`, `memory_update`, `memory_archive`, `memory_delete`. Dort komut da kaba tanelidir — her SQL sorgusu icin ayri komut acilmaz (ADR-005). Girdi sema dogrulamasindan gecer: gecersiz kind, aralik disi importance/confidence, bos metin ve bozuk JSON DB'ye hic dokunmadan reddedilir. `ASUNA_MEMORY_ENABLED=false` iken bu komutlar hicbir sey yazmaz ve durumu acikca bildirir. Silme bilerek gercek DELETE'tir: kullanici hafizasini gercekten silebilmeli (PROJECT.md Bolum 20). Okuma bu dosyada YOKTUR (asuna-memory-read). Kapsam ana pencere ile sinirlidir; wildcard izin yoktur.",
+  "platforms": ["macOS"],
+  "windows": ["main"],
+  "permissions": [
+    "allow-memory-create",
+    "allow-memory-update",
+    "allow-memory-archive",
+    "allow-memory-delete"
+  ]
+}

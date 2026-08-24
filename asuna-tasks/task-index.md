@@ -11,13 +11,13 @@
 | 0 | Arastirma + Scaffold | 11 | 11 | 0 | 0 | 0 | 0 |
 | 1 | Realtime Voice (dikey dilim) | 11 | 11 | 0 | 0 | 0 | 0 |
 | 2 | Wake Word | 8 | 1 | 0 | 0 | 7 | 0 |
-| 3 | Memory | 10 | 2 | 0 | 0 | 8 | 0 |
+| 3 | Memory | 10 | 3 | 0 | 0 | 7 | 0 |
 | 4 | Project Context | 8 | 0 | 0 | 0 | 8 | 0 |
 | 5 | One Useful Action (Tools) | 9 | 0 | 0 | 0 | 9 | 0 |
 | 6 | Focus Recovery (MVP) | 8 | 0 | 0 | 0 | 8 | 0 |
-| **Total** | | **65** | **25** | **0** | **0** | **40** | **0** |
+| **Total** | | **65** | **26** | **0** | **0** | **39** | **0** |
 
-**Progress**: 25/65 (38%)
+**Progress**: 26/65 (40%)
 
 > ASU-008b spike tamamlandi (2026-08-24): motor/lisans/CPU/bundle dogrulandi, ADR-004 accepted
 > (kapsami daraltilmis). ACIK: model+ifade secimi — gigaspeech-3.3M "Hey Asuna"yi tasimiyor (R2).
@@ -87,7 +87,7 @@
 | ASU-028 | **M2 kabul testi** | 2 | S | test | PENDING |
 | ASU-029 | SQLite bootstrap + migration altyapisi | 3 | L | db | DONE |
 | ASU-030 | `memories` + `sessions` schema | 3 | M | db | DONE |
-| ASU-031 | `MemoryService` CRUD | 3 | M | backend | PENDING |
+| ASU-031 | `MemoryService` CRUD | 3 | M | backend | DONE |
 | ASU-032 | Session kaydi + opsiyonel transcript persist | 3 | M | backend | PENDING |
 | ASU-033 | Session summary pipeline | 3 | M | backend | PENDING |
 | ASU-034 | Memory extraction pipeline (PROJECT.md Bolum 26) | 3 | L | backend | PENDING |

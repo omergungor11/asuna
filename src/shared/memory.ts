@@ -139,3 +139,122 @@ export function parseMemoryRecords(value: unknown): MemoryRecord[] {
   }
   return value.map(parseMemoryRecord);
 }
+
+// ---------------------------------------------------------------------------
+// Istek sozlesmeleri (ASU-031) — Rust `memory_repository` girdi tiplerinin aynasi
+// ---------------------------------------------------------------------------
+
+/** Yeni hafiza kaydi. Sunucu tarafi ayrica dogrular; bu tip yalnizca sekli tarif eder. */
+export interface MemoryDraft {
+  readonly kind: MemoryKind;
+  readonly title: string;
+  readonly content: string;
+  readonly summary?: string;
+  readonly projectId?: string;
+  /** `[0, 1]` */
+  readonly importance: number;
+  /** `[0, 1]` */
+  readonly confidence: number;
+  readonly sourceSessionId?: number;
+  readonly expiresAt?: string;
+  readonly metadataJson?: string;
+}
+
+/**
+ * Kismi guncelleme.
+ *
+ * Nullable alanlarda uc durum vardir ve JSON'da da ayirt edilir:
+ * **alan yok** = dokunma · **`null`** = temizle · **deger** = ata.
+ * (Rust tarafinda `Option<Option<T>>`.)
+ */
+export interface MemoryPatch {
+  readonly kind?: MemoryKind;
+  readonly title?: string;
+  readonly content?: string;
+  readonly summary?: string | null;
+  readonly projectId?: string | null;
+  readonly importance?: number;
+  readonly confidence?: number;
+  readonly expiresAt?: string | null;
+  readonly metadataJson?: string;
+}
+
+/** Arsiv gorunumu. Varsayilan `active` — arsivlenmis kayitlar retrieval'a girmez. */
+export type MemoryArchiveFilter = 'active' | 'archived' | 'all';
+
+/** Siralama secenekleri; her biri semadaki bir index'e karsilik gelir. */
+export type MemorySort = 'recent' | 'oldest' | 'importance';
+
+/**
+ * Liste filtresi. Verilmeyen her alan icin sunucu tarafi **retrieval icin
+ * guvenli** varsayilani kullanir (arsivli yok, suresi dolmus yok, erisim izi
+ * birakilmaz).
+ */
+export interface MemoryFilter {
+  /** Tek kayit getirmek icin — ayri bir IPC komutu acmadan `getById`. */
+  readonly id?: number;
+  readonly kinds?: readonly MemoryKind[];
+  readonly projectId?: string;
+  readonly archived?: MemoryArchiveFilter;
+  /** `title` / `content` / `summary` icinde alt dize aramasi. */
+  readonly search?: string;
+  readonly includeExpired?: boolean;
+  readonly sort?: MemorySort;
+  readonly limit?: number;
+  /**
+   * Donen kayitlarin `lastAccessedAt` degeri guncellensin mi?
+   *
+   * Liste goruntulemek erisim degildir; Stage A retrieval'i (ASU-035) erisimdir.
+   */
+  readonly markAccessed?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Yazma sonucu
+// ---------------------------------------------------------------------------
+
+/** `ASUNA_MEMORY_ENABLED=false` — hicbir sey yazilmadi. */
+export type MemorySkipReason = 'memory-disabled';
+
+/**
+ * Yazma isleminin sonucu.
+ *
+ * `skipped` bir hata degil ama **sessiz de degil**: hafiza kapaliyken cagiran
+ * taraf "kaydettim" diyemesin diye durum acikca tasinir (PROJECT.md Bolum 20).
+ */
+export type MemoryWriteResult =
+  | { readonly status: 'stored'; readonly record: MemoryRecord }
+  | { readonly status: 'deleted'; readonly id: number }
+  | { readonly status: 'skipped'; readonly reason: MemorySkipReason };
+
+const MEMORY_SKIP_REASONS = ['memory-disabled'] as const;
+
+export function parseMemoryWriteResult(value: unknown): MemoryWriteResult {
+  if (!isRecord(value)) {
+    throw new MemoryContractError('Yazma sonucu bir nesne olmali.');
+  }
+
+  const read = readers(value, fail);
+
+  switch (value['status']) {
+    case 'stored':
+      assertNoUnexpectedKeys(value, ['status', 'record'], failWith);
+      return { status: 'stored', record: parseMemoryRecord(value['record']) };
+
+    case 'deleted':
+      assertNoUnexpectedKeys(value, ['status', 'id'], failWith);
+      return { status: 'deleted', id: read.id('id') };
+
+    case 'skipped':
+      assertNoUnexpectedKeys(value, ['status', 'reason'], failWith);
+      return { status: 'skipped', reason: read.enumeration('reason', MEMORY_SKIP_REASONS) };
+
+    default:
+      fail('status', 'su degerlerden biri: stored, deleted, skipped');
+  }
+}
+
+/** Yazma gercekten diske dustu mu? UI "kaydettim" demeden once buna bakar. */
+export function wasMemoryStored(result: MemoryWriteResult): boolean {
+  return result.status !== 'skipped';
+}

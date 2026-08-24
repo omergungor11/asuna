@@ -64,14 +64,19 @@ fn test_config() -> config::AsunaConfig {
 
 /// Uretimdeki `run()` ile **ayni** komut kumesi ve **ayni** context; tek fark
 /// runtime'in mock olmasi ve DB'nin bellege/kapaliya alinmasi.
-fn build_test_app() -> App<MockRuntime> {
+fn build_test_app_with(db_state: DbState) -> App<MockRuntime> {
     let app = mock_builder()
         .manage(test_config())
         // `RealtimeTokenService` BILEREK yok — bkz. modul dokumantasyonu.
         .invoke_handler(tauri::generate_handler![
             crate::commands::get_frontend_config,
             crate::realtime_token::mint_realtime_token,
-            crate::db::state::db_status
+            crate::db::state::db_status,
+            crate::db::memory_repository::memory_list,
+            crate::db::memory_repository::memory_create,
+            crate::db::memory_repository::memory_update,
+            crate::db::memory_repository::memory_archive,
+            crate::db::memory_repository::memory_delete
         ])
         .build(crate::app_context())
         .expect("mock app kurulmali");
@@ -79,11 +84,27 @@ fn build_test_app() -> App<MockRuntime> {
     // ADR-005 tuzagi (2): `Builder::setup` hook'u `build()` degil `App::run()`
     // icinde kosar. Test `run()` cagirmadigi icin state burada, build sonrasi,
     // elle manage edilir — uretimdeki `lib.rs` ile ayni sira.
-    app.manage(DbState::Disabled);
+    app.manage(db_state);
     app
 }
 
-fn invoke(webview: &tauri::WebviewWindow<MockRuntime>, command: &str) -> Result<String, String> {
+fn build_test_app() -> App<MockRuntime> {
+    build_test_app_with(DbState::Disabled)
+}
+
+/// Hafizasi acik bir uygulama. DB **bellek ici**: gercek uygulama veri dizinine
+/// hicbir sey yazilmaz.
+fn build_test_app_with_memory() -> App<MockRuntime> {
+    build_test_app_with(DbState::Ready(
+        crate::db::AsunaDb::open_in_memory().expect("bellek ici DB acilmali"),
+    ))
+}
+
+fn invoke_with(
+    webview: &tauri::WebviewWindow<MockRuntime>,
+    command: &str,
+    args: serde_json::Value,
+) -> Result<String, String> {
     let request = InvokeRequest {
         cmd: command.to_owned(),
         callback: CallbackFn(0),
@@ -97,7 +118,7 @@ fn invoke(webview: &tauri::WebviewWindow<MockRuntime>, command: &str) -> Result<
         }
         .parse()
         .expect("gecerli URL"),
-        body: InvokeBody::default(),
+        body: InvokeBody::Json(args),
         headers: Default::default(),
         invoke_key: INVOKE_KEY.to_string(),
     };
@@ -109,6 +130,23 @@ fn invoke(webview: &tauri::WebviewWindow<MockRuntime>, command: &str) -> Result<
             .to_string()),
         Err(error) => Err(error.to_string()),
     }
+}
+
+fn invoke(webview: &tauri::WebviewWindow<MockRuntime>, command: &str) -> Result<String, String> {
+    invoke_with(webview, command, serde_json::Value::Null)
+}
+
+/// ASU-031 testlerinde kullanilan gecerli bir hafiza taslagi.
+fn memory_draft_args() -> serde_json::Value {
+    serde_json::json!({
+        "draft": {
+            "kind": "decision",
+            "title": "Wake word yerel kalir",
+            "content": "Wake word tespiti bulutta degil, cihazda calisir.",
+            "importance": 0.9,
+            "confidence": 1.0
+        }
+    })
 }
 
 /// Tauri'nin her reddi `not allowed` ifadesini tasir. Olculen bicimler:
@@ -203,16 +241,201 @@ fn the_acl_is_actually_enforced_outside_the_permitted_window() {
 
 /// Renderer'a SQL yuzeyi acilmadi (ADR-005 karari). `tauri-plugin-sql`
 /// komutlari ya da genel bir `execute` kapisi bulunmamali.
+///
+/// ASU-031 ile hafiza komutlari acildi; bunlar **kaba taneli** ve kapali
+/// sozlesmeli komutlardir — ham SQL yuzeyi hala yok.
 #[test]
 fn the_renderer_has_no_sql_surface() {
     let app = build_test_app();
     let webview = main_webview(&app);
 
-    for command in ["execute", "select", "load", "plugin:sql|execute"] {
+    for command in [
+        "execute",
+        "select",
+        "load",
+        "plugin:sql|execute",
+        // "SQL'i komut adina gomme" denemesi de bir komut olarak aranir ve
+        // ACL'de bulunmaz.
+        "memory_query",
+        "memory_execute_sql",
+    ] {
         let error = invoke(&webview, command).expect_err("`{command}` var olmamali");
         assert!(
             is_acl_denial(&error),
             "`{command}` renderer'a acik: {error}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// ASU-031 — hafiza komutlari
+// ---------------------------------------------------------------------------
+
+/// Hafiza komutlari renderer'in gonderdigi gercek `InvokeRequest` ile, gercek
+/// ACL uzerinden ucdan uca calisiyor mu?
+#[test]
+fn memory_commands_work_end_to_end_over_the_real_acl() {
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+
+    let created = invoke_with(&webview, "memory_create", memory_draft_args())
+        .expect("memory_create calismali");
+    assert!(
+        created.contains("\"status\":\"stored\""),
+        "beklenmeyen yanit: {created}"
+    );
+
+    let listed = invoke_with(
+        &webview,
+        "memory_list",
+        serde_json::json!({ "filter": { "kinds": ["decision"], "search": "wake" } }),
+    )
+    .expect("memory_list calismali");
+    assert!(
+        listed.contains("Wake word yerel kalir"),
+        "beklenmeyen yanit: {listed}"
+    );
+
+    let value: serde_json::Value = serde_json::from_str(&created).expect("JSON");
+    let id = value["record"]["id"].as_i64().expect("kayit kimligi");
+
+    let archived = invoke_with(
+        &webview,
+        "memory_archive",
+        serde_json::json!({ "id": id, "archived": true }),
+    )
+    .expect("memory_archive calismali");
+    assert!(
+        archived.contains("\"isArchived\":true"),
+        "yanit: {archived}"
+    );
+
+    let deleted = invoke_with(&webview, "memory_delete", serde_json::json!({ "id": id }))
+        .expect("memory_delete calismali");
+    assert!(
+        deleted.contains("\"status\":\"deleted\""),
+        "yanit: {deleted}"
+    );
+
+    // Silinen kayit gercekten gitti — sonraki oturumun baglamina giremez.
+    let empty = invoke_with(&webview, "memory_list", serde_json::Value::Null)
+        .expect("memory_list calismali");
+    assert_eq!(empty, "[]", "yanit: {empty}");
+}
+
+/// **ASU-031 kabul kriteri**: `ASUNA_MEMORY_ENABLED=false` iken servis yazma
+/// yapmaz, okuma bos doner ve uygulama calismaya devam eder.
+///
+/// Kritik nokta: yazma sessizce "basarili" gorunmez — yanit `skipped` der.
+#[test]
+fn memory_writes_are_no_ops_and_reads_are_empty_when_memory_is_disabled() {
+    let app = build_test_app(); // DbState::Disabled
+    let webview = main_webview(&app);
+
+    let created = invoke_with(&webview, "memory_create", memory_draft_args())
+        .expect("kapali hafiza hata degil");
+    assert!(
+        created.contains("\"status\":\"skipped\"")
+            && created.contains("\"reason\":\"memory-disabled\""),
+        "yanit: {created}"
+    );
+
+    let listed =
+        invoke_with(&webview, "memory_list", serde_json::Value::Null).expect("okuma calismali");
+    assert_eq!(listed, "[]");
+
+    for (command, args) in [
+        (
+            "memory_update",
+            serde_json::json!({ "id": 1, "patch": { "title": "x" } }),
+        ),
+        (
+            "memory_archive",
+            serde_json::json!({ "id": 1, "archived": true }),
+        ),
+        ("memory_delete", serde_json::json!({ "id": 1 })),
+    ] {
+        let response = invoke_with(&webview, command, args)
+            .unwrap_or_else(|error| panic!("`{command}` kapali hafizada hata verdi: {error}"));
+        assert!(
+            response.contains("\"status\":\"skipped\""),
+            "`{command}` yaniti: {response}"
+        );
+    }
+
+    // Uygulamanin geri kalani calisiyor: hafizasiz mod urunun sonu degil.
+    assert!(invoke(&webview, "get_frontend_config").is_ok());
+}
+
+/// **ASU-031 kabul kriteri**: DB hatasinda hata **gorunur** olur; sessizce bos
+/// liste donmez. "Kapali" ile "bozuk" ayni gorunmemeli.
+#[test]
+fn memory_commands_surface_a_typed_error_when_the_database_is_unavailable() {
+    let app = build_test_app_with(DbState::Unavailable {
+        reason: "sema migration'lari uygulanamadi".to_owned(),
+    });
+    let webview = main_webview(&app);
+
+    let error = invoke_with(&webview, "memory_list", serde_json::Value::Null)
+        .expect_err("ariza hata olarak donmeli");
+    assert!(
+        !is_acl_denial(&error),
+        "ACL reddi degil, ariza bekleniyordu: {error}"
+    );
+    assert!(error.contains("unavailable"), "hata: {error}");
+    assert!(
+        error.contains("sema migration'lari uygulanamadi"),
+        "kullanici nedeni gormeli: {error}"
+    );
+
+    let error = invoke_with(&webview, "memory_create", memory_draft_args())
+        .expect_err("ariza hata olarak donmeli");
+    assert!(error.contains("unavailable"), "hata: {error}");
+}
+
+/// Gecersiz girdi DB'ye **hic dokunmadan** duser ve mesaj kullanici icerigini
+/// tekrarlamaz.
+#[test]
+fn invalid_memory_input_is_rejected_at_the_ipc_boundary() {
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+
+    let secret = "Kullanicinin banka sifresi 1234";
+    let error = invoke_with(
+        &webview,
+        "memory_create",
+        serde_json::json!({
+            "draft": {
+                "kind": "decision",
+                "title": "t",
+                "content": secret,
+                "importance": 9.0,
+                "confidence": 1.0
+            }
+        }),
+    )
+    .expect_err("aralik disi importance reddedilmeli");
+    assert!(!error.contains(secret), "hata icerigi sizdirdi: {error}");
+
+    // Uydurulmus bir `kind` serde sinirinda duser.
+    let error = invoke_with(
+        &webview,
+        "memory_create",
+        serde_json::json!({
+            "draft": {
+                "kind": "sql_injection",
+                "title": "t",
+                "content": "c",
+                "importance": 0.5,
+                "confidence": 0.5
+            }
+        }),
+    )
+    .expect_err("bilinmeyen kind reddedilmeli");
+    assert!(!is_acl_denial(&error), "hata: {error}");
+
+    // Hicbiri yazilmamis olmali.
+    let listed =
+        invoke_with(&webview, "memory_list", serde_json::Value::Null).expect("okuma calismali");
+    assert_eq!(listed, "[]");
 }

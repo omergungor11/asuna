@@ -99,16 +99,49 @@ PROJECT.md Bolum 12.2'deki iki tablo. `projects`, `tasks`, `tool_events` sonraki
 
 ## ASU-031: `MemoryService` CRUD
 
-**Scope**: backend | **Boyut**: M | **Durum**: PENDING | **Bagimlilik**: ASU-030
+**Scope**: backend | **Boyut**: M | **Durum**: DONE (2026-08-25) | **Bagimlilik**: ASU-030
 
 ### Acceptance Criteria
-- [ ] `create`, `getById`, `list(filter)`, `update`, `archive`, `delete` metodlari
-- [ ] `list` filtreleri: kind, project_id, arsivli/degil, metin aramasi, limit/siralama
-- [ ] Erisimde `last_accessed_at` guncelleniyor
-- [ ] `expires_at` gecmis kayitlar retrieval'da donmuyor
-- [ ] `ASUNA_MEMORY_ENABLED=false` iken servis yazma yapmiyor, okuma bos donuyor, uygulama calisiyor
-- [ ] DB hatasinda konusma devam ediyor, hata gorunur oluyor (sessiz yutma yok)
-- [ ] Unit testler: CRUD, filtre, expiry, disabled modu
+- [x] `create`, `getById`, `list(filter)`, `update`, `archive`, `delete` metodlari
+      — `src-tauri/src/db/memory_repository.rs` (`create` / `get_by_id` / `list` / `update` /
+        `set_archived` / `delete`), renderer yuzeyi `src/asuna/memory/memory-service.ts`
+- [x] `list` filtreleri: kind, project_id, arsivli/degil, metin aramasi, limit/siralama
+      — ayrica `id` (getById icin), `includeExpired`, `markAccessed`. `limit` varsayilan 50,
+        tavan 200 (asan istek reddedilmez, **kirpilir**)
+- [x] Erisimde `last_accessed_at` guncelleniyor — `markAccessed` ile, tek `UPDATE` icinde.
+      Liste **goruntulemek** erisim sayilmaz (bkz. Notlar)
+- [x] `expires_at` gecmis kayitlar retrieval'da donmuyor — varsayilan filtre; kayit
+      silinmez, `includeExpired: true` ile gorunur (memory.md T7 politikasi ayri is)
+- [x] `ASUNA_MEMORY_ENABLED=false` iken servis yazma yapmiyor, okuma bos donuyor, uygulama calisiyor
+      — yazma `{"status":"skipped","reason":"memory-disabled"}` doner (sessiz "kaydettim" yok);
+        `acl_regression::memory_writes_are_no_ops_and_reads_are_empty_when_memory_is_disabled`
+- [x] DB hatasinda konusma devam ediyor, hata gorunur oluyor (sessiz yutma yok)
+      — `DbState::Unavailable` iken okuma da yazma da `unavailable` kodlu tipli hata doner;
+        tam hata zinciri yerel log'a yazilir, IPC'ye yalnizca kisa neden gider
+- [x] Unit testler: CRUD, filtre, expiry, disabled modu — 26 Rust + 33 TS testi
+      (repository, `store_error`, `clock`, ACL/IPC regresyonu, servis + sozlesme)
+
+### Notlar
+- **ACL: okuma ve yazma ayri izinler.** `capabilities/asuna-memory-read.json` (`memory_list`)
+  ve `capabilities/asuna-memory-write.json` (`memory_create`/`update`/`archive`/`delete`)
+  ayri dosyalar; `asuna-db.json` sadece `db_status` ile kaldi. Ayrim testle bagli
+  (`commands::memory_reads_and_writes_are_separate_permissions`): okuma dosyasi hicbir yazma
+  izni tasiyamaz. Amac somut — "salt okunur hafiza" moduna gecmek, yazma capability'sini
+  `tauri.conf.json` listesinden cikarmak kadar basit olmali.
+- **Erisim izi kararı.** `last_accessed_at` her `list` cagrisinda guncellenseydi Memory UI'de
+  listeyi acmak tum kayitlarin erisim zamanini ezerdi — alan anlamsizlasir ve goruntuleme
+  yazma uretirdi. Karar cagirana birakildi: `markAccessed`. Stage A (ASU-035) `true` verecek.
+- **`null` = temizle, alan yok = dokunma.** `MemoryPatch` nullable alanlarda `Option<Option<T>>`
+  kullaniyor; tek `Option` ile "ozeti sil" istegi sessizce "dokunma"ya donusurdu.
+- **Zaman damgasi hassasiyeti.** `src-tauri/src/db/clock.rs` yalnizca `YYYY-MM-DDTHH:MM:SSZ`
+  uretir (yeni bagimlilik yok). Sebep: siralama metin siralamasi ve
+  `'...:00.500Z' < '...:00Z'` — karisik hassasiyet Stage A sirasini sessizce bozar. Ayni
+  saniyedeki kayitlarin sirasi `ORDER BY ..., id DESC` ile cozulur.
+- **Arama siniri**: SQLite `LIKE` buyuk/kucuk harf esitligi ASCII ile sinirli; Turkce'ye ozgu
+  katlama (`I`/`ı`) yapilmaz. `%` ve `_` kullanicinin aradigi **harf** olarak kacisliyor.
+  Dogru cozum FTS5/ICU — backlog.
+- **Uc kat dogrulama korundu**: serde (`deny_unknown_fields`, bilinmeyen `kind`) → repository
+  (aralik, bos metin, JSON, zaman damgasi) → sema CHECK'leri. Biri unutulursa digerleri tutar.
 
 ---
 
