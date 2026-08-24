@@ -1,0 +1,34 @@
+# CI iskeleti — CUSTOMIZE: paket yoneticisi ve komutlari projeye gore doldur (ASU-004).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # CUSTOMIZE: runtime kurulumu (ornek Node + pnpm)
+      # - uses: pnpm/action-setup@v4
+      # - uses: actions/setup-node@v4
+      #   with: { node-version: 22, cache: pnpm }
+      # - run: pnpm install --frozen-lockfile
+
+      # Gate 1 — statik
+      # - run: pnpm lint
+      # - run: pnpm typecheck
+
+      # Gate 2 — test
+      # - run: pnpm test
+
+      # Build
+      # - run: pnpm build
+
+      # Guvenlik — bagimlilik audit (high+ fail)
+      # - run: pnpm audit --audit-level high
+
+      - run: echo "CUSTOMIZE ci.yml adimlarini doldur (ASU-004)" && exit 1

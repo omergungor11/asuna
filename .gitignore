@@ -1,0 +1,25 @@
+# Secrets — asla commit etme
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+src-tauri/target/
+
+# Local data
+*.sqlite
+*.sqlite3
+*.db
+.asuna/
+
+# OS / editor
+.DS_Store
+*.log
+
+# Claude Code local
+.claude/settings.local.json.bak
