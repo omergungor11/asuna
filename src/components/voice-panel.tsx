@@ -1,0 +1,59 @@
+/**
+ * Ses paneli — Phase 1'in tum gorunur yuzeyi (ASU-015).
+ *
+ * # Bu bir sohbet penceresi DEGILDIR
+ *
+ * Mesaj balonu, "send" butonu, metin girisi yok (CLAUDE.md prime directive).
+ * Ses birincil; bu panelin isi sistemi **gorunur** kilmak: durum, mikrofon, aktif
+ * tool, hata ve her an erisilebilir bir durdurma yolu (PROJECT.md Bolum 19/21).
+ *
+ * Panel tek "container" bilesendir: servis erisimi yalnizca `useAsunaSession`
+ * uzerinden olur, alt bilesenler saf sunumdur (props in, event out).
+ */
+
+import { useAsunaSession, type UseAsunaSessionOptions } from '../asuna/agent/use-asuna-session';
+
+import { ErrorNotice } from './error-notice';
+import { MicIndicator } from './mic-indicator';
+import { TalkButton } from './talk-button';
+import { VoiceStatusBadge } from './voice-status-badge';
+
+export interface VoicePanelProps {
+  /** Testlerin sahte servis/mikrofon/config enjekte etmesi icin. */
+  readonly options?: UseAsunaSessionOptions;
+}
+
+export function VoicePanel({ options }: VoicePanelProps): React.JSX.Element {
+  const session = useAsunaSession(options);
+  const blocked = session.error !== null && !session.error.retryable;
+
+  return (
+    <section className="asuna-panel" aria-label="Asuna ses oturumu">
+      <div className="asuna-panel__row">
+        <VoiceStatusBadge state={session.state} />
+        <MicIndicator active={session.micActive} />
+      </div>
+
+      <TalkButton
+        connected={session.connected}
+        busy={session.busy}
+        disabled={blocked}
+        onStart={session.start}
+        onStop={session.stop}
+      />
+
+      {session.error !== null && <ErrorNotice error={session.error} />}
+
+      <dl className="asuna-panel__facts">
+        <div className="asuna-panel__fact">
+          <dt>Model</dt>
+          <dd>{session.model ?? '—'}</dd>
+        </div>
+        <div className="asuna-panel__fact">
+          <dt>Aktif araç</dt>
+          <dd>{session.activeTool ?? '—'}</dd>
+        </div>
+      </dl>
+    </section>
+  );
+}

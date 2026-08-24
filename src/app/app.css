@@ -15,9 +15,12 @@ body,
 
 .asuna-shell {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
+  gap: 16px;
+  box-sizing: border-box;
   height: 100%;
+  padding: 24px 16px;
   background: #0d0f14;
   color: #e6e8ee;
   /* Pencere surukleme alani: baslik cubugu gizli oldugunda govdeden tasinabilsin. */
@@ -26,8 +29,114 @@ body,
 
 .asuna-shell__title {
   margin: 0;
-  font-size: 2rem;
+  font-size: 1.25rem;
   font-weight: 300;
   letter-spacing: 0.35em;
+  opacity: 0.6;
+}
+
+/* --- Ses paneli (ASU-015) — susleme degil, gorunurluk. --- */
+
+.asuna-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(520px, 100%);
+  font-size: 0.85rem;
+}
+
+.asuna-panel__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.asuna-status,
+.asuna-mic {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.asuna-status__dot,
+.asuna-mic__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #5a6070;
+}
+
+.asuna-status[data-state='LISTENING'] .asuna-status__dot,
+.asuna-status[data-state='USER_SPEAKING'] .asuna-status__dot {
+  background: #4cc38a;
+}
+
+.asuna-status[data-state='CONNECTING'] .asuna-status__dot,
+.asuna-status[data-state='WAKING'] .asuna-status__dot,
+.asuna-status[data-state='ASSISTANT_THINKING'] .asuna-status__dot,
+.asuna-status[data-state='ASSISTANT_SPEAKING'] .asuna-status__dot,
+.asuna-status[data-state='TOOL_PENDING'] .asuna-status__dot,
+.asuna-status[data-state='AWAITING_APPROVAL'] .asuna-status__dot {
+  background: #ffd166;
+}
+
+.asuna-status[data-state='ERROR'] .asuna-status__dot {
+  background: #ff6b6b;
+}
+
+.asuna-mic[data-active='true'] .asuna-mic__dot {
+  background: #4cc38a;
+}
+
+.asuna-talk-button {
+  padding: 10px 16px;
+  font: inherit;
+  color: inherit;
+  background: #1b1f2a;
+  border: 1px solid #2a2f3d;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.asuna-talk-button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.asuna-error {
+  padding: 8px 10px;
+  background: #241417;
+  border: 1px solid #4a2126;
+  border-radius: 6px;
+}
+
+.asuna-error__message,
+.asuna-error__action {
+  margin: 0;
+}
+
+.asuna-error__action {
+  margin-top: 4px;
   opacity: 0.75;
+}
+
+.asuna-panel__facts {
+  display: flex;
+  gap: 16px;
+  margin: 0;
+  opacity: 0.7;
+}
+
+.asuna-panel__fact {
+  display: flex;
+  gap: 6px;
+}
+
+.asuna-panel__fact dt::after {
+  content: ':';
+}
+
+.asuna-panel__fact dd {
+  margin: 0;
 }

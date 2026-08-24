@@ -1,0 +1,374 @@
+/**
+ * `useAsunaSession` testleri (ASU-015).
+ *
+ * Ne aga cikilir ne mikrofona dokunulur: servis, config ve mikrofon sondasi
+ * enjekte edilir. Durum iddialari **gercek** `VoiceStateMachine` uzerinden yapilir —
+ * hook'un durum uydurmadigi ancak boyle kanitlanir.
+ */
+
+import { act, renderHook } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+
+import { AsunaRealtimeError } from './realtime-errors';
+import type { AsunaRealtimeEvent, AsunaRealtimeEventListener } from './realtime-events';
+import {
+  describeRealtimeFailure,
+  useAsunaSession,
+  type AsunaSessionPort,
+  type UseAsunaSessionOptions,
+} from './use-asuna-session';
+import { MicrophoneAccessError, type MicrophoneProbe } from '../audio/microphone-access';
+import type { FrontendConfig } from '../config/frontend-config';
+import { AsunaLogger } from '../observability';
+import { VoiceStateMachine } from '../state/voice-state-machine';
+
+const CONFIG: FrontendConfig = {
+  realtimeModel: 'gpt-realtime-2.1-mini',
+  realtimeVoice: 'marin',
+  wakeWord: 'Hey Asuna',
+  idleTimeoutSeconds: 45,
+  logLevel: 'info',
+  memoryEnabled: true,
+  transcriptStorage: true,
+  toolApprovalMode: 'safe',
+};
+
+const PROBE: MicrophoneProbe = { echoCancellation: true, noiseSuppression: true };
+
+/** Gercek servisin durum makinesini surusunu taklit eden sahte oturum. */
+interface FakeService extends AsunaSessionPort {
+  readonly listenerCount: () => number;
+  readonly connectCalls: () => number;
+  readonly disconnectCalls: () => number;
+  readonly emit: (event: AsunaRealtimeEvent) => void;
+}
+
+interface HarnessOptions {
+  readonly connectError?: Error;
+  readonly probe?: () => Promise<MicrophoneProbe>;
+  readonly loadConfig?: () => Promise<FrontendConfig>;
+  readonly logger?: AsunaLogger;
+}
+
+interface Harness {
+  readonly options: UseAsunaSessionOptions;
+  readonly machine: VoiceStateMachine;
+  readonly services: FakeService[];
+  readonly service: () => FakeService;
+  readonly probeCalls: () => number;
+  readonly createdServices: () => number;
+}
+
+function createHarness(harnessOptions: HarnessOptions = {}): Harness {
+  const machine = new VoiceStateMachine();
+  const services: FakeService[] = [];
+  let probeCalls = 0;
+
+  const options: UseAsunaSessionOptions = {
+    stateMachine: machine,
+    logger: harnessOptions.logger ?? new AsunaLogger(),
+    loadConfig:
+      harnessOptions.loadConfig ?? ((): Promise<FrontendConfig> => Promise.resolve(CONFIG)),
+    probeMicrophone:
+      harnessOptions.probe ??
+      ((): Promise<MicrophoneProbe> => {
+        probeCalls += 1;
+        return Promise.resolve(PROBE);
+      }),
+    createService: (context): AsunaSessionPort => {
+      const listeners = new Set<AsunaRealtimeEventListener>();
+      let connects = 0;
+      let disconnects = 0;
+
+      const publish = (event: AsunaRealtimeEvent): void => {
+        for (const listener of [...listeners]) {
+          listener(event);
+        }
+      };
+
+      const service: FakeService = {
+        connect: async (): Promise<void> => {
+          connects += 1;
+          context.stateMachine.transition('CONNECTING', 'REALTIME_CONNECTING');
+          publish({ type: 'connecting', attempt: 1, maxAttempts: 3 });
+          await Promise.resolve();
+
+          if (harnessOptions.connectError !== undefined) {
+            // Gercek servis de hatada once `ERROR`'a gecer, sonra firlatir.
+            context.stateMachine.transition('ERROR', 'ERROR_OCCURRED');
+            throw harnessOptions.connectError;
+          }
+
+          context.stateMachine.transition('LISTENING', 'REALTIME_CONNECTED');
+          publish({ type: 'connected', model: context.config.realtimeModel });
+        },
+        disconnect: (): void => {
+          disconnects += 1;
+          if (context.stateMachine.canTransition('BOOTING')) {
+            context.stateMachine.transition('BOOTING', 'SESSION_CLOSED_BY_USER');
+          }
+          publish({ type: 'disconnected', reason: 'requested' });
+        },
+        interrupt: (): void => {
+          publish({ type: 'agent_interrupted' });
+        },
+        subscribe: (listener): (() => void) => {
+          listeners.add(listener);
+          return (): void => {
+            listeners.delete(listener);
+          };
+        },
+        getState: () => context.stateMachine.getState(),
+        listenerCount: (): number => listeners.size,
+        connectCalls: (): number => connects,
+        disconnectCalls: (): number => disconnects,
+        emit: publish,
+      };
+
+      services.push(service);
+      return service;
+    },
+  };
+
+  return {
+    options,
+    machine,
+    services,
+    service: (): FakeService => {
+      const service = services[services.length - 1];
+      if (service === undefined) {
+        throw new Error('Henuz servis olusturulmadi.');
+      }
+      return service;
+    },
+    probeCalls: (): number => probeCalls,
+    createdServices: (): number => services.length,
+  };
+}
+
+/** Hook'un asenkron aktivasyon zincirini act() icinde bosaltir. */
+async function flush(action: () => void): Promise<void> {
+  await act(async () => {
+    action();
+    await Promise.resolve();
+  });
+}
+
+describe('useAsunaSession — baglanti akisi (ASU-015)', () => {
+  it('start(): mikrofon izni -> config -> connect -> LISTENING', async () => {
+    const harness = createHarness();
+    const { result } = renderHook(() => useAsunaSession(harness.options));
+
+    expect(result.current.state).toBe('BOOTING');
+    expect(result.current.connected).toBe(false);
+    expect(result.current.micActive).toBe(false);
+
+    await flush(() => {
+      result.current.start();
+    });
+
+    expect(harness.probeCalls()).toBe(1);
+    expect(result.current.state).toBe('LISTENING');
+    expect(result.current.connected).toBe(true);
+    expect(result.current.micActive).toBe(true);
+    expect(result.current.model).toBe(CONFIG.realtimeModel);
+    expect(result.current.error).toBeNull();
+    expect(result.current.busy).toBe(false);
+  });
+
+  it('mikrofon izni istenmeden once WAKING durumuna geciyor', async () => {
+    const seen: string[] = [];
+    const harness = createHarness({
+      probe: (): Promise<MicrophoneProbe> => {
+        seen.push('probe');
+        return Promise.resolve(PROBE);
+      },
+    });
+    harness.machine.subscribe((transition) => {
+      seen.push(transition.to);
+    });
+
+    const { result } = renderHook(() => useAsunaSession(harness.options));
+    await flush(() => {
+      result.current.start();
+    });
+
+    expect(seen).toEqual(['WAKING', 'probe', 'CONNECTING', 'LISTENING']);
+  });
+
+  it('cift tiklama yaris kosulu uretmiyor — tek connect', async () => {
+    const harness = createHarness();
+    const { result } = renderHook(() => useAsunaSession(harness.options));
+
+    await flush(() => {
+      result.current.start();
+      result.current.start();
+      result.current.start();
+    });
+
+    expect(harness.createdServices()).toBe(1);
+    expect(harness.service().connectCalls()).toBe(1);
+    expect(harness.probeCalls()).toBe(1);
+  });
+
+  it('bagliyken start() yeniden baglanmaya calismiyor', async () => {
+    const harness = createHarness();
+    const { result } = renderHook(() => useAsunaSession(harness.options));
+
+    await flush(() => {
+      result.current.start();
+    });
+    await flush(() => {
+      result.current.start();
+    });
+
+    expect(harness.service().connectCalls()).toBe(1);
+  });
+
+  it('aktivasyon sirasinda buton kilitli (busy)', async () => {
+    let release: (() => void) | null = null;
+    const harness = createHarness({
+      probe: (): Promise<MicrophoneProbe> =>
+        new Promise<MicrophoneProbe>((resolve) => {
+          release = (): void => {
+            resolve(PROBE);
+          };
+        }),
+    });
+    const { result } = renderHook(() => useAsunaSession(harness.options));
+
+    act(() => {
+      result.current.start();
+    });
+    expect(result.current.busy).toBe(true);
+
+    await act(async () => {
+      release?.();
+      await Promise.resolve();
+    });
+    expect(result.current.busy).toBe(false);
+  });
+
+  it('stop(): oturumu kapatir ve idle duruma doner', async () => {
+    const harness = createHarness();
+    const { result } = renderHook(() => useAsunaSession(harness.options));
+
+    await flush(() => {
+      result.current.start();
+    });
+    act(() => {
+      result.current.stop();
+    });
+
+    expect(harness.service().disconnectCalls()).toBe(1);
+    expect(result.current.state).toBe('BOOTING');
+    expect(result.current.connected).toBe(false);
+    expect(result.current.micActive).toBe(false);
+  });
+});
+
+describe('useAsunaSession — hata yollari (ASU-015 / ASU-019)', () => {
+  it('mikrofon izni reddedilirse macOS kurulum yonlendirmesi gosteriliyor', async () => {
+    const harness = createHarness({
+      probe: (): Promise<MicrophoneProbe> =>
+        Promise.reject(new MicrophoneAccessError('mic_permission_denied', 'reddedildi')),
+    });
+    const { result } = renderHook(() => useAsunaSession(harness.options));
+
+    await flush(() => {
+      result.current.start();
+    });
+
+    expect(result.current.state).toBe('ERROR');
+    expect(result.current.error?.kind).toBe('mic_permission_denied');
+    expect(result.current.error?.action).toContain('Gizlilik ve Güvenlik');
+    expect(result.current.error?.retryable).toBe(true);
+    expect(harness.createdServices()).toBe(0);
+  });
+
+  it('config okunamazsa oturum acilmiyor', async () => {
+    const harness = createHarness({
+      loadConfig: (): Promise<FrontendConfig> => Promise.reject(new Error('IPC yok')),
+    });
+    const { result } = renderHook(() => useAsunaSession(harness.options));
+
+    await flush(() => {
+      result.current.start();
+    });
+
+    expect(result.current.error?.kind).toBe('config_unavailable');
+    expect(result.current.state).toBe('ERROR');
+    expect(harness.createdServices()).toBe(0);
+  });
+
+  it('gecersiz API anahtarinda tekrar denemeye izin vermiyor', async () => {
+    const harness = createHarness({
+      connectError: new AsunaRealtimeError({
+        kind: 'token',
+        cause: 'invalid_api_key',
+        message: 'anahtar reddedildi',
+        retryable: false,
+      }),
+    });
+    const { result } = renderHook(() => useAsunaSession(harness.options));
+
+    await flush(() => {
+      result.current.start();
+    });
+
+    expect(result.current.state).toBe('ERROR');
+    expect(result.current.error?.kind).toBe('invalid_api_key');
+    expect(result.current.error?.retryable).toBe(false);
+    expect(result.current.connected).toBe(false);
+    expect(result.current.busy).toBe(false);
+  });
+
+  it('ERROR durumundan yeniden baglanilabiliyor', async () => {
+    const harness = createHarness({
+      probe: vi
+        .fn<() => Promise<MicrophoneProbe>>()
+        .mockRejectedValueOnce(new MicrophoneAccessError('mic_permission_denied', 'reddedildi'))
+        .mockResolvedValue(PROBE),
+    });
+    const { result } = renderHook(() => useAsunaSession(harness.options));
+
+    await flush(() => {
+      result.current.start();
+    });
+    expect(result.current.state).toBe('ERROR');
+
+    await flush(() => {
+      result.current.start();
+    });
+
+    expect(result.current.state).toBe('LISTENING');
+    expect(result.current.error).toBeNull();
+  });
+});
+
+describe('describeRealtimeFailure', () => {
+  it('Rust etiketini ASU-019 mesaj tablosuna baglar', () => {
+    const described = describeRealtimeFailure({
+      kind: 'token',
+      cause: 'quota_exceeded',
+      message: 'kota',
+      retryable: true,
+    });
+
+    expect(described.kind).toBe('quota_exceeded');
+    expect(described.action).not.toBeNull();
+  });
+
+  it('etiket cozulemezse servisin kendi mesajini koruyor', () => {
+    const described = describeRealtimeFailure({
+      kind: 'transport',
+      cause: null,
+      message: 'Realtime oturumu acilamadi: SDP reddedildi',
+      retryable: true,
+    });
+
+    expect(described.kind).toBe('realtime_connect_failed');
+    expect(described.message).toBe('Realtime oturumu acilamadi: SDP reddedildi');
+    expect(described.retryable).toBe(true);
+  });
+});

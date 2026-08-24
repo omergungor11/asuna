@@ -1,5 +1,7 @@
 import { Suspense, lazy } from 'react';
 
+import { VoicePanel } from '../components/voice-panel';
+
 /**
  * Debug log paneli (ASU-019) yalnizca gelistirmede yuklenir.
  *
@@ -14,15 +16,16 @@ const DebugPanel = import.meta.env.DEV
   : null;
 
 /**
- * Phase 0 iskeleti: bos pencere.
+ * Uygulama kabugu.
  *
- * Bu bilesende bilerek hicbir Asuna ozelligi yok — ne ses, ne agent, ne IPC.
- * Amac yalnizca Tauri kabugunun ayakta oldugunu gostermek (ASU-002).
+ * Kabuk bilerek ince: hicbir servis cagrisi burada yok. Ses oturumunun tum
+ * gorunur yuzeyi `VoicePanel` icinde (ASU-015), log paneli yalnizca dev'de.
  */
 export function App(): React.JSX.Element {
   return (
     <main className="asuna-shell">
       <h1 className="asuna-shell__title">Asuna</h1>
+      <VoicePanel />
       {DebugPanel !== null && (
         <Suspense fallback={null}>
           <DebugPanel />

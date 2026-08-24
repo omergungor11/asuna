@@ -165,23 +165,47 @@ sekilde `SESSION_EXIT_TARGETS` icinde isaretli. React entegrasyonu ASU-015'te ho
 
 ## ASU-015: "Talk to Asuna" Gecici Butonu + Baglanti Akisi
 
-**Scope**: frontend | **Boyut**: M | **Durum**: PENDING | **Bagimlilik**: ASU-014
+**Scope**: frontend | **Boyut**: M | **Durum**: COMPLETED (2026-08-24) | **Bagimlilik**: ASU-014
 
 ### Aciklama
 Wake word'un yerini gecici olarak tutan manuel aktivasyon. Phase 2'de kaldirilacak/ikincil hale
 gelecek (TRANSCRIPT.md Bolum 20).
 
 ### Acceptance Criteria
-- [ ] Tek buton: bagli degilken "Talk to Asuna", bagliyken "Stop"
-- [ ] Tiklama akisi: mikrofon izni -> token mint -> `connect()` -> `LISTENING`
-- [ ] Mevcut durum UI'da her an gorunur (durum rozeti + mikrofon gostergesi)
-- [ ] Mikrofon izni reddedilirse net kurulum yonlendirmesi gosteriliyor (PROJECT.md Bolum 30)
-- [ ] Cift tiklama / hizli tiklama yaris kosulu yaratmiyor (buton islem sirasinda kilitli)
-- [ ] Kod `// TEMPORARY: ASU-023 wake word ile degistirilecek` notu iceriyor
+- [x] Tek buton: bagli degilken "Talk to Asuna", bagliyken "Stop"
+      (`src/components/talk-button.tsx`)
+- [x] Tiklama akisi: mikrofon izni -> token mint -> `connect()` -> `LISTENING`
+      (token mint SDK'nin lazy `apiKey` cagrisinda, `AsunaRealtimeService` icinde)
+- [x] Mevcut durum UI'da her an gorunur (durum rozeti + mikrofon gostergesi)
+- [x] Mikrofon izni reddedilirse net kurulum yonlendirmesi gosteriliyor (PROJECT.md Bolum 30) —
+      "Sistem Ayarlari > Gizlilik ve Guvenlik > Mikrofon" (ASU-019 mesaj tablosundan)
+- [x] Cift tiklama / hizli tiklama yaris kosulu yaratmiyor (buton islem sirasinda kilitli) —
+      `busyRef` senkron kilit + `busy` bayragi; test: "cift tiklama yaris kosulu uretmiyor"
+- [x] Kod `// TEMPORARY: ASU-023 wake word ile degistirilecek` notu iceriyor
+      (`use-asuna-session.ts` aktivasyon gecisi + `talk-button.tsx` dosya basligi)
 
 ### Notlar
 Bu butonu guzellestirme. UI Phase 1'de guven ve gorunurluk icin var, urun degil
 (PROJECT.md Bolum 21: "The desktop UI should not become the main product").
+
+### Uygulama (tamamlandi)
+- `src/asuna/agent/use-asuna-session.ts` — React ile servis arasindaki tek kopru. Bilesenler
+  duz veri gorur; `AsunaRealtimeService`, Tauri IPC ve SDK tipleri bilesen katmanina sizmaz.
+  Durum `useSyncExternalStore` ile dogrudan `VoiceStateMachine`'den okunur (paralel durum yok);
+  makine varsayilan olarak `createLoggedVoiceStateMachine()` ile kurulur, gecis log'lari
+  ASU-019 formatinda kendiliginden akar.
+- `src/asuna/audio/microphone-access.ts` — izin sondasi. `getUserMedia` kisitlari acikca
+  `echoCancellation: true, noiseSuppression: true`; track'ler ayarlar okunduktan **hemen sonra**
+  durdurulur. Sonda stream'i SDK'ya verilmez (voice.md Bolum 4 "Secenek A": mikrofonun sahibi
+  SDK olsun ki `close()` onu kapatabilsin).
+- Hata cevirisi: servis hatasinin `cause` etiketi (`invalid_api_key`, `quota_exceeded`, ...)
+  ASU-019 mesaj tablosuna baglanir; etiket cozulemezse servisin kendi redakte mesaji korunur.
+  `retryable` UI sozlesmesi: kurtarilamaz hatada buton kapali kalir.
+- Bilesenler saf sunum: `talk-button`, `voice-status-badge`, `mic-indicator`, `error-notice`;
+  `voice-panel` tek container (hook'u yalnizca o cagirir). Metin girisi/gonder butonu **yok** —
+  test bunu ayrica zorluyor ("sohbet arayuzu degil").
+- Test: `use-asuna-session.spec.ts` (13), `microphone-access.spec.ts` (10),
+  `voice-panel.spec.tsx` (4). Ne aga cikilir ne mikrofona dokunulur.
 
 ---
 
