@@ -20,6 +20,10 @@
 //! **edilmiyor**. Boylece komut ACL'i gecerse "state not managed" hatasiyla
 //! duser — OpenAI'ye hicbir istek gitmez. Ayrim testin can alici noktasi:
 //! *reddedilme* ile *calisip baska bir nedenle hata verme* farkli seylerdir.
+//!
+//! Ayni gerekceyle `summary::SummaryService` de `manage` **edilmiyor**:
+//! `session_finalize` kapanistan sonra ozet uretimini tetikler; servis kayitli
+//! olmadigi icin tetik log'layip durur ve bu testlerden ag'a cikilmaz.
 
 use tauri::ipc::{CallbackFn, InvokeBody};
 use tauri::test::MockRuntime;
@@ -41,6 +45,7 @@ fn test_config() -> config::AsunaConfig {
     let pairs = [
         ("OPENAI_API_KEY", "sk-proj-TEST-DEGERI-AGA-CIKILMAZ"),
         ("ASUNA_REALTIME_MODEL", "gpt-realtime-2.1"),
+        ("ASUNA_SUMMARY_MODEL", "gpt-4o-mini"),
         ("ASUNA_REALTIME_VOICE", "marin"),
         ("ASUNA_WAKE_WORD", "Hey Asuna"),
         ("ASUNA_MEMORY_ENABLED", "true"),
@@ -498,6 +503,54 @@ fn session_commands_record_a_session_end_to_end_over_the_real_acl() {
         finalized.contains("\"transcriptPath\":null"),
         "transcript kapaliyken yol yazilmis: {finalized}"
     );
+
+    // ASU-033: kapanis nedeni makine-okunur alanda, ozet alani bos. Ozet
+    // uretimi kapanisi **bloklamaz**; servis kayitli olmadigi icin (bkz. modul
+    // dokumantasyonu) burada ag'a da cikilmaz.
+    assert!(
+        finalized.contains("\"endReason\":\"completed\""),
+        "kapanis nedeni yazilmamis: {finalized}"
+    );
+    assert!(
+        finalized.contains("\"summary\":null"),
+        "ozet kapanisi bekletmemeli: {finalized}"
+    );
+}
+
+/// Renderer bir oturumu "kurtarilmis" ilan edemez; `error` bildirebilir.
+#[test]
+fn the_renderer_can_report_an_error_but_not_an_abandoned_session() {
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+
+    let started = invoke_with(&webview, "session_start", serde_json::json!({}))
+        .expect("session_start calismali");
+    let value: serde_json::Value = serde_json::from_str(&started).expect("JSON");
+    let session_id = value["session"]["id"].as_i64().expect("oturum kimligi");
+
+    let finalized = invoke_with(
+        &webview,
+        "session_finalize",
+        serde_json::json!({ "sessionId": session_id, "input": { "endReason": "error" } }),
+    )
+    .expect("hata ile kapanis kabul edilmeli");
+    assert!(
+        finalized.contains("\"endReason\":\"error\""),
+        "yanit: {finalized}"
+    );
+
+    let started = invoke_with(&webview, "session_start", serde_json::json!({}))
+        .expect("session_start calismali");
+    let value: serde_json::Value = serde_json::from_str(&started).expect("JSON");
+    let session_id = value["session"]["id"].as_i64().expect("oturum kimligi");
+
+    let error = invoke_with(
+        &webview,
+        "session_finalize",
+        serde_json::json!({ "sessionId": session_id, "input": { "endReason": "abandoned" } }),
+    )
+    .expect_err("`abandoned` renderer'dan gelemez");
+    assert!(!is_acl_denial(&error), "hata: {error}");
 }
 
 /// Renderer oturum modelini secemez: sozlesmede boyle bir alan yok, gonderirse

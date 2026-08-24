@@ -873,6 +873,7 @@ describe('useAsunaSession — oturum kaydi (ASU-032)', () => {
     estimatedCostUsd: null,
     usageJson: null,
     createdAt: '2026-08-25T10:00:00Z',
+    endReason: null,
   };
 
   const CLOSED_SESSION: SessionRecord = {
@@ -881,6 +882,7 @@ describe('useAsunaSession — oturum kaydi (ASU-032)', () => {
     inputTokens: 120,
     outputTokens: 80,
     totalTokens: 200,
+    endReason: 'completed',
   };
 
   type StartMock = ReturnType<

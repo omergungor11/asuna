@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  SESSION_END_REASONS,
   SessionContractError,
   isSessionOpen,
   parseSessionRecord,
   parseSessionRecords,
+  sessionDurationMs,
 } from './session';
 
 const VALID = {
@@ -21,6 +23,7 @@ const VALID = {
   estimatedCostUsd: 0.0123,
   usageJson: '{"inputTokenDetails":{"audioTokens":100}}',
   createdAt: '2026-08-25T10:00:00Z',
+  endReason: 'completed',
 };
 
 describe('parseSessionRecord', () => {
@@ -41,8 +44,37 @@ describe('parseSessionRecord', () => {
   });
 
   it('acik oturumu tanir', () => {
-    const parsed = parseSessionRecord({ ...VALID, endedAt: null });
+    const parsed = parseSessionRecord({ ...VALID, endedAt: null, endReason: null });
     expect(isSessionOpen(parsed)).toBe(true);
+    expect(parsed.endReason).toBeNull();
+  });
+
+  /** ASU-033: kapanis nedeni ayri bir alan; `summary` bayrak degil. */
+  it('bilinen kapanis nedenlerini kabul, bilinmeyeni reddeder', () => {
+    for (const endReason of SESSION_END_REASONS) {
+      expect(parseSessionRecord({ ...VALID, endReason }).endReason).toBe(endReason);
+    }
+    for (const invalid of ['crashed', 'COMPLETED', '', 0]) {
+      expect(() => parseSessionRecord({ ...VALID, endReason: invalid })).toThrow(
+        SessionContractError,
+      );
+    }
+  });
+
+  /**
+   * Yarim kalan oturum: sure sifir gorunur ama neden **ayri** alanda duruyor —
+   * UI "0 saniye surdu" degil "beklenmedik sekilde kapandi" diyebilsin.
+   */
+  it('yarim kalan oturumu neden alaniyla tasir', () => {
+    const parsed = parseSessionRecord({
+      ...VALID,
+      endedAt: VALID.startedAt,
+      summary: null,
+      endReason: 'abandoned',
+    });
+    expect(sessionDurationMs(parsed)).toBe(0);
+    expect(parsed.endReason).toBe('abandoned');
+    expect(parsed.summary).toBeNull();
   });
 
   /** Semadaki CHECK ile ayni kural — UI negatif sure gostermemeli. */

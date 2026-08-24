@@ -11,13 +11,30 @@
 
 import { ContractError, assertNoUnexpectedKeys, isRecord, readers } from './contract';
 
+/**
+ * Oturumun **nasil** kapandigi (ASU-033, migration 002).
+ *
+ * Degerler semadaki CHECK kisitindan gelir (`002_session_end_reason.up.sql`) ve
+ * `schema-mirror.spec.ts` ikisini birbirine baglar.
+ */
+export const SESSION_END_REASONS = ['completed', 'abandoned', 'error'] as const;
+
+export type SessionEndReason = (typeof SESSION_END_REASONS)[number];
+
 export interface SessionRecord {
   readonly id: number;
   readonly startedAt: string;
   /** `null` = oturum hala acik (ya da temiz kapanamadi). */
   readonly endedAt: string | null;
   readonly projectId: string | null;
-  /** `null` = ozet uretilmedi. Ozet basarisiz olsa da oturum kapanir. */
+  /**
+   * `null` = ozet uretilmedi.
+   *
+   * Ozet uretimi kapanistan **sonra**, arka planda calisir (ASU-033); basarisiz
+   * olursa ya da oturum cok kisaysa bu alan `null` kalir ve oturum yine kapanir.
+   * Alan bir durum bayragi **degildir** — yarim kalan oturum `endReason` ile
+   * isaretlenir.
+   */
   readonly summary: string | null;
   /**
    * `null` = transcript diske yazilmadi (`ASUNA_TRANSCRIPT_STORAGE=false`).
@@ -37,6 +54,11 @@ export interface SessionRecord {
    */
   readonly usageJson: string | null;
   readonly createdAt: string;
+  /**
+   * `null` = bilinmiyor (hala acik oturum ya da migration 002 oncesi kayit).
+   * Uydurulmaz: "bilmiyoruz" ayri bir durumdur.
+   */
+  readonly endReason: SessionEndReason | null;
 }
 
 /** Sozlesmedeki alanlarin tam listesi — sema kolon sirasiyla ayni. */
@@ -54,6 +76,8 @@ export const SESSION_RECORD_KEYS = [
   'estimatedCostUsd',
   'usageJson',
   'createdAt',
+  // `ALTER TABLE ADD COLUMN` kolonu tablonun sonuna ekler; sira sema ile ayni.
+  'endReason',
 ] as const;
 
 export class SessionContractError extends ContractError {
@@ -98,6 +122,8 @@ export function parseSessionRecord(value: unknown): SessionRecord {
     estimatedCostUsd: read.nullableAmount('estimatedCostUsd'),
     usageJson: read.nullableJsonText('usageJson'),
     createdAt: read.timestamp('createdAt'),
+    endReason:
+      value['endReason'] === null ? null : read.enumeration('endReason', SESSION_END_REASONS),
   };
 }
 
@@ -141,9 +167,19 @@ export interface SessionUsageInput {
   readonly outputTokenDetails?: readonly Readonly<Record<string, number>>[];
 }
 
+/**
+ * Renderer'in bildirebilecegi kapanis nedeni (ASU-033).
+ *
+ * `abandoned` bilerek **yok**: yarim kalan oturumu tespit etmek host'un isidir
+ * (acilistaki kurtarma). Gonderilirse Rust tarafi istegi reddeder.
+ */
+export type ReportedEndReason = Extract<SessionEndReason, 'completed' | 'error'>;
+
 export interface SessionFinalizeInput {
   readonly usage?: SessionUsageInput;
   readonly transcript?: readonly TranscriptLineInput[];
+  /** Verilmezse `completed` sayilir. */
+  readonly endReason?: ReportedEndReason;
 }
 
 /**
@@ -182,7 +218,9 @@ export function parseSessionWriteResult(value: unknown): SessionWriteResult {
  *
  * Yarim kalan bir oturum acilista `endedAt = startedAt` ile kapatilir; bu
  * durumda sure `0` doner. Bu bilincli: gercek bitis zamani bilinmiyor ve
- * "simdi" yazmak saatler suren sahte bir oturum uretirdi (ASU-032).
+ * "simdi" yazmak saatler suren sahte bir oturum uretirdi (ASU-032). Boyle bir
+ * oturum `endReason === 'abandoned'` ile ayirt edilir — "0 saniye surdu" degil,
+ * "ne kadar surdugunu bilmiyoruz" demektir.
  */
 export function sessionDurationMs(session: SessionRecord): number | null {
   if (session.endedAt === null) {

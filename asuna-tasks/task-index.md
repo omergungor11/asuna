@@ -89,7 +89,7 @@
 | ASU-030 | `memories` + `sessions` schema | 3 | M | db | DONE |
 | ASU-031 | `MemoryService` CRUD | 3 | M | backend | DONE |
 | ASU-032 | Session kaydi + opsiyonel transcript persist | 3 | M | backend | DONE |
-| ASU-033 | Session summary pipeline | 3 | M | backend | PENDING |
+| ASU-033 | Session summary pipeline | 3 | M | backend | DONE |
 | ASU-034 | Memory extraction pipeline (PROJECT.md Bolum 26) | 3 | L | backend | PENDING |
 | ASU-035 | Stage A deterministik retrieval + `SessionBootstrapContext` | 3 | L | backend | PENDING |
 | ASU-036 | Memory UI (listele / ara / sil / arsivle) | 3 | M | frontend | DONE |

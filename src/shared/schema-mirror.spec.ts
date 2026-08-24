@@ -28,15 +28,32 @@ import { describe, expect, it } from 'vitest';
 
 import { toCamelCase } from './contract';
 import { MEMORY_COLUMNS_NOT_MIRRORED, MEMORY_KINDS, MEMORY_RECORD_KEYS } from './memory';
-import { SESSION_RECORD_KEYS } from './session';
+import { SESSION_END_REASONS, SESSION_RECORD_KEYS } from './session';
 
-/** Tek kaynak. Yol degisirse test dosyayi bulamaz ve duser — sessiz kayma yok. */
-const SCHEMA_PATH = resolve(cwd(), 'src-tauri/src/db/migrations/001_memories_sessions.up.sql');
+const MIGRATIONS_DIR = 'src-tauri/src/db/migrations';
 
-const schema = readFileSync(SCHEMA_PATH, 'utf8');
+/**
+ * Tek kaynak: migration'lar **sirasiyla**.
+ *
+ * Bu listeye yeni bir migration eklendiginde kolon aynasi otomatik olarak
+ * guncel kalir; eklenmezse (yeni bir `.sql` yazilip buraya konmazsa) sema ile
+ * TypeScript arasindaki fark bir sonraki kolon degisikliginde kirmizi test
+ * uretir. Yol degisirse dosya okunamaz ve test duser — sessiz kayma yok.
+ */
+const MIGRATION_FILES = [
+  '001_memories_sessions.up.sql',
+  '002_session_end_reason.up.sql',
+] as const;
+
+function readMigration(name: string): string {
+  return readFileSync(resolve(cwd(), MIGRATIONS_DIR, name), 'utf8');
+}
+
+/** Tum migration'larin metni, sirayla birlestirilmis. */
+const schema = MIGRATION_FILES.map(readMigration).join('\n');
 
 /** `CREATE TABLE <name> ( ... ) STRICT;` blogundaki kolon adlari, sirasiyla. */
-function columnsOf(table: string): string[] {
+function createdColumnsOf(table: string): string[] {
   const start = schema.indexOf(`CREATE TABLE ${table} (`);
   expect(start, `\`${table}\` tablosu semada bulunmali`).toBeGreaterThanOrEqual(0);
 
@@ -53,15 +70,35 @@ function columnsOf(table: string): string[] {
     .filter((name) => /^[a-z][a-z0-9_]*$/.test(name));
 }
 
-/** `memories.kind` CHECK kisitindaki degerler. */
-function kindsDeclaredInSchema(): string[] {
-  const marker = 'CHECK (kind IN (';
+/**
+ * Bir tablonun **guncel** kolonlari: `CREATE TABLE` + sonraki migration'larin
+ * `ALTER TABLE ... ADD COLUMN`'lari, uygulanma sirasiyla.
+ *
+ * Sira onemli: SQLite `ADD COLUMN` ile gelen kolonu tablonun **sonuna** koyar
+ * (`PRAGMA table_info` sirasi budur) ve Rust `SESSION_COLUMNS` ile TypeScript
+ * `SESSION_RECORD_KEYS` bu siraya gore yazilmistir.
+ */
+function columnsOf(table: string): string[] {
+  const added = [
+    ...schema.matchAll(new RegExp(`ALTER TABLE ${table} ADD COLUMN\\s+([a-z][a-z0-9_]*)`, 'g')),
+  ].map((match) => match[1] ?? '');
+
+  return [...createdColumnsOf(table), ...added];
+}
+
+/** Bir CHECK kisitindaki (`... IN ('a', 'b')`) degerler. */
+function valuesInCheck(marker: string): string[] {
   const start = schema.indexOf(marker);
-  expect(start, '`kind` CHECK kisiti semada bulunmali').toBeGreaterThanOrEqual(0);
+  expect(start, `\`${marker}\` kisiti semada bulunmali`).toBeGreaterThanOrEqual(0);
 
   const rest = schema.slice(start + marker.length);
   const end = rest.indexOf(')');
   return [...rest.slice(0, end).matchAll(/'([^']+)'/g)].map((match) => match[1] ?? '');
+}
+
+/** `memories.kind` CHECK kisitindaki degerler. */
+function kindsDeclaredInSchema(): string[] {
+  return valuesInCheck('CHECK (kind IN (');
 }
 
 describe('memories tablosu <-> src/shared/memory.ts', () => {
@@ -109,8 +146,18 @@ describe('memories tablosu <-> src/shared/memory.ts', () => {
 });
 
 describe('sessions tablosu <-> src/shared/session.ts', () => {
+  /** `ALTER TABLE ... ADD COLUMN` ile eklenen kolonlar dahil (ASU-033). */
   it('kolon adlari sozlesme alanlariyla birebir esleisiyor (sira dahil)', () => {
     expect(columnsOf('sessions').map(toCamelCase)).toEqual([...SESSION_RECORD_KEYS]);
+  });
+
+  it('sonraki migration"larla eklenen kolonlar da aynada', () => {
+    expect(columnsOf('sessions')).toContain('end_reason');
+    expect(createdColumnsOf('sessions')).not.toContain('end_reason');
+  });
+
+  it('endReason degerleri semadaki CHECK kisitiyla birebir', () => {
+    expect(valuesInCheck('end_reason IN (')).toEqual([...SESSION_END_REASONS]);
   });
 });
 
@@ -139,16 +186,33 @@ describe('sema disiplini', () => {
   });
 
   /** Her `up` icin bir `down` (ADR-005). */
-  it('geri alma migration"i mevcut', () => {
-    const down = readFileSync(
-      resolve(cwd(), 'src-tauri/src/db/migrations/001_memories_sessions.down.sql'),
-      'utf8',
-    );
-    expect(down).toContain('DROP TABLE IF EXISTS memories;');
-    expect(down).toContain('DROP TABLE IF EXISTS sessions;');
+  it('her migration"in geri almasi mevcut', () => {
+    for (const file of MIGRATION_FILES) {
+      const down = readMigration(file.replace('.up.sql', '.down.sql'));
+      expect(down.trim().length, `\`${file}\` icin down bos`).toBeGreaterThan(0);
+    }
+
+    const first = readMigration('001_memories_sessions.down.sql');
+    expect(first).toContain('DROP TABLE IF EXISTS memories;');
+    expect(first).toContain('DROP TABLE IF EXISTS sessions;');
     // FK yonunun tersi: once referans veren.
-    expect(down.indexOf('DROP TABLE IF EXISTS memories;')).toBeLessThan(
-      down.indexOf('DROP TABLE IF EXISTS sessions;'),
+    expect(first.indexOf('DROP TABLE IF EXISTS memories;')).toBeLessThan(
+      first.indexOf('DROP TABLE IF EXISTS sessions;'),
     );
+
+    expect(readMigration('002_session_end_reason.down.sql')).toContain(
+      'ALTER TABLE sessions DROP COLUMN end_reason;',
+    );
+  });
+
+  /**
+   * ASU-030 kurali: yayinlanmis bir migration bir daha **degistirilmez**;
+   * duzeltme yeni bir dosya ekler. Bu test yalnizca kuralin dosyada yazili
+   * kalmasini garanti eder — insan hatirlatmasi da bir gate.
+   */
+  it('degismezlik kurali migration dosyalarinda yazili', () => {
+    for (const file of MIGRATION_FILES) {
+      expect(readMigration(file)).toContain('BIR DAHA DEGISTIRILMEZ');
+    }
   });
 });

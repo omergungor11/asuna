@@ -30,6 +30,7 @@ const OPEN_SESSION: SessionRecord = {
   estimatedCostUsd: null,
   usageJson: null,
   createdAt: '2026-08-25T10:00:00Z',
+  endReason: null,
 };
 
 const CLOSED_SESSION: SessionRecord = {
@@ -39,6 +40,7 @@ const CLOSED_SESSION: SessionRecord = {
   outputTokens: 80,
   totalTokens: 200,
   usageJson: '{"requests":2}',
+  endReason: 'completed',
 };
 
 describe('session-service komutlari', () => {

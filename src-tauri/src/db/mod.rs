@@ -32,7 +32,7 @@ pub mod store_error;
 pub mod transcript;
 
 pub use migrations::EXPECTED_SCHEMA_VERSION;
-pub use model::{MemoryKind, MemoryRecord, SessionRecord};
+pub use model::{MemoryKind, MemoryRecord, SessionEndReason, SessionRecord};
 pub use state::{db_status, DbAvailability, DbState, DbStatus};
 pub use store_error::{StoreError, StoreErrorCode, StoreSkipReason};
 

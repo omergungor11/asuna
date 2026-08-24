@@ -167,7 +167,10 @@ pub enum NetworkCause {
 }
 
 impl NetworkCause {
-    fn as_turkish(self) -> &'static str {
+    /// Kullaniciya gosterilen kisa neden. `pub`: ozet boru hatti (ASU-033) da
+    /// ayni siniflandirmayi kullaniyor — iki yerde iki farkli "baglanti hatasi"
+    /// sozlugu tutmak drift uretir.
+    pub fn as_turkish(self) -> &'static str {
         match self {
             Self::Connect => "baglanti kurulamadi",
             Self::Timeout => "zaman asimi",

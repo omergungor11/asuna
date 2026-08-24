@@ -15,7 +15,9 @@ pub mod commands;
 pub mod config;
 pub mod db;
 pub mod env_file;
+pub mod pricing;
 pub mod realtime_token;
+pub mod summary;
 
 /// Uygulama context'i — **crate basina tek `generate_context!` cagrisi**.
 ///
@@ -59,6 +61,10 @@ pub fn run() {
         // kullanimda kurulur; kurulamazsa uygulama dusmez, komut tipli hata
         // doner (PROJECT.md Bolum 30).
         .manage(realtime_token::RealtimeTokenService::new())
+        // ASU-033: oturum ozeti uretimi. Renderer'a **acilmaz** — bu servisin
+        // hicbir komutu yok; yalnizca `session_finalize` kapanistan sonra arka
+        // planda tetikler. `Arc` cunku is arka plan gorevine tasiniyor.
+        .manage(std::sync::Arc::new(summary::SummaryService::new()))
         // Webview'e acilan her komut ayri bir yetki yuzeyidir ve kendi
         // capability kaydiyla birlikte eklenir (`capabilities/`).
         .invoke_handler(tauri::generate_handler![

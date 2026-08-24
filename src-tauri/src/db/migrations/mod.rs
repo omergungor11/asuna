@@ -30,16 +30,20 @@ use super::DbError;
 pub const V1_UP: &str = include_str!("001_memories_sessions.up.sql");
 pub const V1_DOWN: &str = include_str!("001_memories_sessions.down.sql");
 
+/// Migration 2 — `sessions.end_reason` (ASU-033).
+pub const V2_UP: &str = include_str!("002_session_end_reason.up.sql");
+pub const V2_DOWN: &str = include_str!("002_session_end_reason.down.sql");
+
 /// Sirali migration tanimlari.
 ///
 /// **Bu vektore yalnizca sona ekleme yapilir.** Araya ekleme ya da silme, daha
 /// once uygulanmis surumlerin anlamini degistirir.
 fn definitions() -> Vec<M<'static>> {
-    vec![M::up(V1_UP).down(V1_DOWN)]
+    vec![M::up(V1_UP).down(V1_DOWN), M::up(V2_UP).down(V2_DOWN)]
 }
 
 /// Bu kod surumunun bekledigi sema surumu (`PRAGMA user_version`).
-pub const EXPECTED_SCHEMA_VERSION: u32 = 1;
+pub const EXPECTED_SCHEMA_VERSION: u32 = 2;
 
 /// Migration kumesi. Testler `validate()` icin bunu kullanir.
 pub fn migrations() -> Migrations<'static> {
@@ -58,14 +62,24 @@ pub(super) fn apply(connection: &mut Connection) -> Result<(), DbError> {
 /// Rust enum'u ve TypeScript union'i bu listeye testlerle baglanir; kimse
 /// listeyi tek tarafli genisletemez.
 pub fn kinds_declared_in_schema() -> Vec<String> {
-    const MARKER: &str = "CHECK (kind IN (";
+    values_in_check(V1_UP, "CHECK (kind IN (")
+}
 
-    let start = V1_UP
-        .find(MARKER)
-        .expect("`memories.kind` CHECK kisiti semada bulunmali")
-        + MARKER.len();
-    let rest = &V1_UP[start..];
-    let end = rest.find(')').expect("`kind` CHECK kisiti kapanmali");
+/// `sessions.end_reason` CHECK kisitindaki degerleri **sema metninden** okur
+/// (ASU-033). Rust `SessionEndReason` ve TypeScript `SESSION_END_REASONS` bu
+/// listeye testlerle baglidir.
+pub fn end_reasons_declared_in_schema() -> Vec<String> {
+    values_in_check(V2_UP, "end_reason IN (")
+}
+
+/// `... IN ('a', 'b')` listesini ayristirir.
+fn values_in_check(schema: &str, marker: &str) -> Vec<String> {
+    let start = schema
+        .find(marker)
+        .unwrap_or_else(|| panic!("`{marker}` kisiti semada bulunmali"))
+        + marker.len();
+    let rest = &schema[start..];
+    let end = rest.find(')').expect("CHECK kisiti kapanmali");
 
     rest[..end]
         .split(',')
@@ -313,6 +327,114 @@ mod tests {
                 "`{expected}` index'i yok. Mevcut: {names:?}"
             );
         }
+    }
+
+    // --- Migration 2: `end_reason` (ASU-033) --------------------------------
+
+    /// Eski bir DB (sema 1) uzerinde: yarim kalan oturumun bayrak cumlesi
+    /// `end_reason`'a tasinir ve `summary` **temizlenir** — ozet alani bundan
+    /// sonra yalnizca gercek ozeti tasir (ASU-034'un girdisi kirlenmez).
+    #[test]
+    fn migration_two_moves_the_abandoned_flag_out_of_the_summary_column() {
+        const FLAG: &str = crate::db::session_repository::ABANDONED_SESSION_SUMMARY;
+
+        let mut connection = Connection::open_in_memory().expect("bellek ici DB");
+        migrations()
+            .to_version(&mut connection, 1)
+            .expect("sema 1 uygulanmali");
+
+        connection
+            .execute(
+                "INSERT INTO sessions (id, started_at, ended_at, summary, model, created_at)
+                 VALUES (1, '2026-08-25T10:00:00Z', '2026-08-25T10:00:00Z', ?1, 'm', '2026-08-25T10:00:00Z'),
+                        (2, '2026-08-25T11:00:00Z', '2026-08-25T11:30:00Z', 'Gercek ozet.', 'm', '2026-08-25T11:00:00Z'),
+                        (3, '2026-08-25T12:00:00Z', NULL, NULL, 'm', '2026-08-25T12:00:00Z')",
+                [FLAG],
+            )
+            .expect("eski kayitlar yazilmali");
+
+        apply(&mut connection).expect("sema 2'ye yukseltilmeli");
+
+        let rows: Vec<(i64, Option<String>, Option<String>)> = connection
+            .prepare("SELECT id, end_reason, summary FROM sessions ORDER BY id")
+            .and_then(|mut statement| {
+                statement
+                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+                    .collect()
+            })
+            .expect("kayitlar okunmali");
+
+        assert_eq!(
+            rows,
+            vec![
+                (1, Some("abandoned".to_owned()), None),
+                (
+                    2,
+                    Some("completed".to_owned()),
+                    Some("Gercek ozet.".to_owned())
+                ),
+                // Hala acik oturum: durum bilinmiyor, uydurulmuyor.
+                (3, None, None),
+            ]
+        );
+    }
+
+    /// Geri alma calisiyor ve kaybolan bilgi insan diliyle geri yaziliyor.
+    #[test]
+    fn migration_two_can_be_rolled_back_without_losing_the_reason() {
+        let mut connection = Connection::open_in_memory().expect("bellek ici DB");
+        apply(&mut connection).expect("migration uygulanmali");
+        connection
+            .execute(
+                "INSERT INTO sessions (started_at, ended_at, model, created_at, end_reason)
+                 VALUES ('2026-08-25T10:00:00Z', '2026-08-25T10:00:00Z', 'm', '2026-08-25T10:00:00Z', 'abandoned')",
+                [],
+            )
+            .expect("kayit yazilmali");
+
+        migrations()
+            .to_version(&mut connection, 1)
+            .expect("sema 1'e donulebilmeli");
+
+        let summary: Option<String> = connection
+            .query_row("SELECT summary FROM sessions", [], |row| row.get(0))
+            .expect("okunmali");
+        assert_eq!(
+            summary.as_deref(),
+            Some(crate::db::session_repository::ABANDONED_SESSION_SUMMARY)
+        );
+
+        apply(&mut connection).expect("yeniden ileri sarilmali");
+    }
+
+    #[test]
+    fn end_reason_check_rejects_values_outside_the_spec() {
+        let db = fresh_db();
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO sessions (started_at, model, created_at, end_reason)
+                 VALUES ('2026-08-25T10:00:00Z', 'm', '2026-08-25T10:00:00Z', 'kapandi')",
+                [],
+            )
+        })
+        .expect_err("bilinmeyen end_reason reddedilmeli");
+    }
+
+    /// Sema metnindeki bayrak cumlesi ile Rust sabiti ayni olmali; aksi halde
+    /// geriye donuk doldurma hicbir satiri eslestirmez ve **sessizce** hicbir
+    /// sey yapmaz.
+    #[test]
+    fn the_backfill_matches_the_flag_sentence_used_by_the_recovery_path() {
+        assert!(V2_UP.contains(crate::db::session_repository::ABANDONED_SESSION_SUMMARY));
+        assert!(V2_DOWN.contains(crate::db::session_repository::ABANDONED_SESSION_SUMMARY));
+    }
+
+    #[test]
+    fn schema_declares_the_three_end_reasons() {
+        assert_eq!(
+            end_reasons_declared_in_schema(),
+            ["completed", "abandoned", "error"]
+        );
     }
 
     #[test]

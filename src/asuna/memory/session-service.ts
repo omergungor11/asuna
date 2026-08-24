@@ -64,11 +64,16 @@ export interface SessionOutcome {
   readonly durationMs: number;
   readonly totalTokens: number | null;
   /**
-   * Tahmini maliyet — **su an her zaman `null`**.
+   * Tahmini maliyet — `null` = **bilinmiyor**.
    *
-   * Fiyat tablosu dogrulanmadan bir sayi uretmek "uydurulmus maliyet" olur;
-   * Asuna bilmedigi seyi bilmiyor gosterir. Dogrulanmis fiyatlandirma ASU-033
-   * ile gelecek (ozetleme maliyeti de ayni tabloyu kullanacak).
+   * ASU-033 ile dogrulanmis bir fiyat tablosu geldi (`src-tauri/src/pricing.rs`,
+   * kaynak `docs/architecture/voice.md` Bolum 6). Sayi yalnizca iki kosul
+   * birlikte saglaninca uretilir: modelin fiyati tabloda **var** ve token
+   * kirilimi (ses/metin) toplami **aciklayabiliyor**. Aksi halde alan `null`
+   * kalir ve UI "bilinmiyor" yazar — yaklasik bir deger uydurulmaz.
+   *
+   * Ozetleme maliyeti bu sayiya **dahil degildir**: ozet modelinin fiyati
+   * dogrulanmadi, bu yuzden token cinsinden `usageJson.summary` altinda durur.
    */
   readonly estimatedCostUsd: number | null;
 }

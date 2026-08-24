@@ -26,6 +26,7 @@ pub type EnvMap = BTreeMap<String, String>;
 
 pub const KEY_OPENAI_API_KEY: &str = "OPENAI_API_KEY";
 pub const KEY_REALTIME_MODEL: &str = "ASUNA_REALTIME_MODEL";
+pub const KEY_SUMMARY_MODEL: &str = "ASUNA_SUMMARY_MODEL";
 pub const KEY_REALTIME_VOICE: &str = "ASUNA_REALTIME_VOICE";
 pub const KEY_WAKE_WORD: &str = "ASUNA_WAKE_WORD";
 pub const KEY_MEMORY_ENABLED: &str = "ASUNA_MEMORY_ENABLED";
@@ -42,9 +43,10 @@ pub const KEY_VAD_SILENCE_MS: &str = "ASUNA_VAD_SILENCE_MS";
 
 /// Konfigurasyonu olusturan tum anahtarlar. Process environment sadece bu
 /// listedeki anahtarlar icin okunur — alakasiz degiskenler config'e sizmaz.
-pub const ALL_KEYS: [&str; 15] = [
+pub const ALL_KEYS: [&str; 16] = [
     KEY_OPENAI_API_KEY,
     KEY_REALTIME_MODEL,
+    KEY_SUMMARY_MODEL,
     KEY_REALTIME_VOICE,
     KEY_WAKE_WORD,
     KEY_MEMORY_ENABLED,
@@ -305,6 +307,12 @@ impl From<EnvFileError> for ConfigError {
 pub struct AsunaConfig {
     openai_api_key: SecretString,
     pub realtime_model: String,
+    /// Oturum ozeti uretiminde kullanilan metin modeli (ASU-033).
+    ///
+    /// Renderer'a **gitmez**: ozet cagrisini bu process yapar (kalici API key
+    /// burada), dolayisiyla webview'in bu model ID'sini bilmesi icin bir neden
+    /// yok. `to_frontend` whitelist'ine eklenmemesi bilincli bir karardir.
+    pub summary_model: String,
     pub realtime_voice: Option<String>,
     pub wake_word: String,
     pub memory_enabled: bool,
@@ -404,13 +412,8 @@ pub fn load() -> Result<AsunaConfig, ConfigError> {
 pub fn load_from_map(map: &EnvMap) -> Result<AsunaConfig, ConfigError> {
     let openai_api_key = SecretString::new(required_non_empty(map, KEY_OPENAI_API_KEY)?);
 
-    let realtime_model = required_non_empty(map, KEY_REALTIME_MODEL)?;
-    if realtime_model.contains(char::is_whitespace) {
-        return Err(ConfigError::Invalid {
-            key: KEY_REALTIME_MODEL,
-            expected: "bosluk icermeyen bir model ID (orn. `gpt-realtime-2.1`)".to_owned(),
-        });
-    }
+    let realtime_model = model_id(map, KEY_REALTIME_MODEL, "gpt-realtime-2.1")?;
+    let summary_model = model_id(map, KEY_SUMMARY_MODEL, "gpt-4o-mini")?;
 
     let realtime_voice = match optional(map, KEY_REALTIME_VOICE)? {
         None => None,
@@ -534,6 +537,7 @@ pub fn load_from_map(map: &EnvMap) -> Result<AsunaConfig, ConfigError> {
     Ok(AsunaConfig {
         openai_api_key,
         realtime_model,
+        summary_model,
         realtime_voice,
         wake_word,
         memory_enabled,
@@ -548,6 +552,21 @@ pub fn load_from_map(map: &EnvMap) -> Result<AsunaConfig, ConfigError> {
         vad_eagerness,
         vad_silence_ms,
     })
+}
+
+/// Bosluk icermeyen bir model kimligi.
+///
+/// Ayni kural iki anahtar icin de gecerli: model ID hicbir yerde hard-code
+/// edilmez, ama yanlis yazilmis bir deger de sessizce API'ye gonderilmez.
+fn model_id(map: &EnvMap, key: &'static str, example: &str) -> Result<String, ConfigError> {
+    let value = required_non_empty(map, key)?;
+    if value.contains(char::is_whitespace) {
+        return Err(ConfigError::Invalid {
+            key,
+            expected: format!("bosluk icermeyen bir model ID (orn. `{example}`)"),
+        });
+    }
+    Ok(value)
 }
 
 /// Anahtar tanimli olmali ve bos olmamali.
@@ -594,6 +613,7 @@ mod tests {
         let pairs = [
             (KEY_OPENAI_API_KEY, TEST_API_KEY),
             (KEY_REALTIME_MODEL, "gpt-realtime-2.1"),
+            (KEY_SUMMARY_MODEL, "gpt-4o-mini"),
             (KEY_REALTIME_VOICE, "marin"),
             (KEY_WAKE_WORD, "Hey Asuna"),
             (KEY_MEMORY_ENABLED, "true"),
@@ -631,6 +651,7 @@ mod tests {
         let config = load_from_map(&valid_map()).expect("gecerli config yuklenmeli");
 
         assert_eq!(config.realtime_model, "gpt-realtime-2.1");
+        assert_eq!(config.summary_model, "gpt-4o-mini");
         assert_eq!(config.realtime_voice.as_deref(), Some("marin"));
         assert_eq!(config.wake_word, "Hey Asuna");
         assert!(config.memory_enabled);
@@ -774,15 +795,32 @@ mod tests {
 
     #[test]
     fn rejects_model_with_whitespace() {
-        let error = load_from_map(&map_with(KEY_REALTIME_MODEL, "gpt realtime"))
-            .expect_err("hata bekleniyordu");
-        assert!(matches!(
-            error,
-            ConfigError::Invalid {
-                key: KEY_REALTIME_MODEL,
-                ..
+        // Iki model anahtari da ayni kurala tabi (ASU-033).
+        for key in [KEY_REALTIME_MODEL, KEY_SUMMARY_MODEL] {
+            let Err(error) = load_from_map(&map_with(key, "gpt realtime")) else {
+                panic!("`{key}` icin hata bekleniyordu");
+            };
+            match error {
+                ConfigError::Invalid { key: invalid, .. } => assert_eq!(invalid, key),
+                other => panic!("`{key}` icin Invalid bekleniyordu, gelen: {other:?}"),
             }
-        ));
+        }
+    }
+
+    /// GUVENLIK: ozet modeli renderer'a **gitmez**. Ozet cagrisini kalici API
+    /// key'in yasadigi process yapar; webview'in bu ID'yi bilmesi gerekmez.
+    #[test]
+    fn summary_model_stays_in_the_trusted_process() {
+        let config = load_from_map(&map_with(KEY_SUMMARY_MODEL, "gpt-ozet-gizli"))
+            .expect("gecerli config yuklenmeli");
+        let json = serde_json::to_value(config.to_frontend()).expect("serialize edilebilmeli");
+
+        let serialized = json.to_string();
+        assert!(!serialized.contains("gpt-ozet-gizli"), "JSON: {serialized}");
+        assert!(
+            !serialized.to_lowercase().contains("summary"),
+            "JSON: {serialized}"
+        );
     }
 
     #[test]
@@ -953,6 +991,7 @@ mod tests {
         let cases = [
             (KEY_OPENAI_API_KEY, "   "),
             (KEY_REALTIME_MODEL, model_value.as_str()),
+            (KEY_SUMMARY_MODEL, model_value.as_str()),
             (KEY_REALTIME_VOICE, TEST_API_KEY),
             (KEY_MEMORY_ENABLED, TEST_API_KEY),
             (KEY_TOOL_APPROVAL_MODE, TEST_API_KEY),

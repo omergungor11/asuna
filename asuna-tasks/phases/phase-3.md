@@ -180,12 +180,16 @@ PROJECT.md Bolum 12.2'deki iki tablo. `projects`, `tasks`, `tool_events` sonraki
   eklemek de mevcut `.env`'leri kirar (config'te sessiz default yok). Bu yuzden:
   kolon ve tum boru hatti hazir, deger `NULL`, UI "bilinmiyor" yaziyor. **ASU-033**
   ozetleme maliyetini de hesaplayacagi icin fiyat tablosu orada tek seferde cozulmeli.
+  → **ASU-033'te cozuldu**: `src-tauri/src/pricing.rs` (voice.md Bolum 6, dogrulanmis).
+  Deger artik kirilim aciklanabildiginde hesaplaniyor, aksi halde hala `NULL`.
 - **Yarim oturumun `ended_at` degeri `started_at`.** Gercek bitis bilinmiyor; "simdi"
   yazmak 20 saatlik sahte bir oturum ve sahte bir maliyet penceresi uretirdi. Sifir sure
   "bilmiyoruz"un en az yaniltici hali; neden `summary` alanina insan diliyle yaziliyor
   (`ABANDONED_SESSION_SUMMARY`). Ayri bir `end_reason` kolonu daha temiz olurdu ama yeni
   migration + uc katmanli tip aynasi bu task'in kapsamini asiyordu — ASU-033 kolon acarken
   birlikte degerlendirilecek.
+  → **ASU-033'te cozuldu**: migration 002 `end_reason` kolonunu acti, bayrak `summary`'den
+  cikarildi ve eski kayitlar tasindi. `ended_at = started_at` karari degismedi.
 - **TEMPORARY (ASU-026).** Kapanis tetigi su an Phase 1'in `disconnected` event'i.
   Idle timeout / wake word ile kapanis geldiginde tetik oraya tasinacak; `SessionRecorder`
   sozlesmesi (begin/end) degismeyecek.
@@ -203,20 +207,69 @@ PROJECT.md Bolum 12.2'deki iki tablo. `projects`, `tasks`, `tool_events` sonraki
 
 ## ASU-033: Session Summary Pipeline
 
-**Scope**: backend | **Boyut**: M | **Durum**: PENDING | **Bagimlilik**: ASU-032
+**Scope**: backend | **Boyut**: M | **Durum**: DONE (2026-08-25) | **Bagimlilik**: ASU-032
 
 ### Aciklama
 Oturum kapandiginda transcript'ten kisa bir ozet uret. Bu ozet hem `sessions.summary`'ye yazilir hem
 de ASU-034'un girdisidir.
 
 ### Acceptance Criteria
-- [ ] Ozet, realtime oturumundan **ayri** bir cagri ile uretiliyor (realtime modele "kaydet" dedirtilmiyor)
-- [ ] Ozet kisa ve yapili: ne konusuldu, ne karar verildi, ne yarim kaldi
-- [ ] Ozet uretimi basarisiz olursa oturum kaydi yine de kapaniyor (ozet null kalir, hata loglanir)
-- [ ] Cok kisa oturumlarda (orn. 2 replikten az) ozet uretilmiyor — bos gurultu yaratmiyor
-- [ ] Ozet icin kullanilan model config'ten geliyor, hard-code degil
-- [ ] Ozetleme maliyeti oturum metadata'sina ekleniyor
-- [ ] Unit test: sabit transcript girdisi -> pipeline'in cagrildigi ve sonucun yazildigi dogrulanmis (model mock'lu)
+- [x] Ozet, realtime oturumundan **ayri** bir cagri ile uretiliyor (realtime modele "kaydet" dedirtilmiyor)
+      — `src-tauri/src/summary.rs`, `POST /v1/chat/completions`. Realtime oturumu kapandiktan
+        **sonra** calisir; konusan modele hicbir kayit/ozet yetkisi verilmiyor (PROJECT.md Bolum 26)
+- [x] Ozet kisa ve yapili: ne konusuldu, ne karar verildi, ne yarim kaldi
+      — `SESSION_SUMMARY_PROMPT_V1` uc basligi sart kosar (`Konusulanlar` / `Kararlar` /
+        `Yarim kalanlar`), 120 kelime siniri + "uydurma" yasagi; saklanan metin 1.500 karakterle kirpilir
+- [x] Ozet uretimi basarisiz olursa oturum kaydi yine de kapaniyor (ozet null kalir, hata loglanir)
+      — kapanis once yazilir, ozet sonra (bkz. Notlar "Iki yazma"). Test:
+        `a_model_failure_leaves_the_session_closed_without_a_summary` (401/429/500) +
+        `a_network_failure_is_typed_and_does_not_touch_the_session`
+- [x] Cok kisa oturumlarda (orn. 2 replikten az) ozet uretilmiyor — bos gurultu yaratmiyor
+      — `MIN_TRANSCRIPT_LINES = 2`; ayrica yalnizca bosluktan olusan dokum de atlanir.
+        Test ag'a **hic cikilmadigini** dogruluyor (`very_short_sessions_are_skipped_without_calling_the_model`)
+- [x] Ozet icin kullanilan model config'ten geliyor, hard-code degil
+      — `ASUNA_SUMMARY_MODEL` (zorunlu anahtar; `.env.example`'da `gpt-4o-mini`). Renderer'a
+        **gitmez**: `FrontendConfig` whitelist'inde yok, testle bagli
+- [x] Ozetleme maliyeti oturum metadata'sina ekleniyor
+      — `usage_json.$.summary` = `{ model, promptVersion, promptTokens, completionTokens,
+        totalTokens, estimatedCostUsd: null }`. USD **null**: ozet modelinin fiyati dogrulanmadi
+        (bkz. Notlar). Realtime oturumunun kendi kirilimi `json_set` ile **ezilmiyor**
+- [x] Unit test: sabit transcript girdisi -> pipeline'in cagrildigi ve sonucun yazildigi dogrulanmis (model mock'lu)
+      — `a_fixed_transcript_produces_a_summary_that_is_written_to_the_session`; mock HTTP sunucusu
+        `realtime_token.rs`'teki std `TcpListener` deseni, **gercek API'ye cagri yok**
+
+### Notlar
+- **`end_reason` kolonu (migration 002).** ASU-032'de yarim kalan oturum `summary` alanina yazilan
+  bir cumle ile isaretleniyordu. `summary` artik gercek ozeti tasiyor ve ASU-034'un girdisi —
+  bayrak orada kalsaydi ya ozeti ezerdi ya da bir sistem cumlesinden hafiza uretilirdi. Yeni kolon
+  `completed | abandoned | error`; eski kayitlar migration icinde tasindi ve bayrak cumlesi
+  `summary`'den **temizlendi**. Geri alma da bilgiyi kaybetmiyor (cumleyi geri yaziyor).
+  Sema surumu 1 → 2; tip aynasi uc katmanda da guncellendi.
+- **Renderer `abandoned` diyemez.** `session_finalize` girdisi yalnizca `completed | error` kabul
+  eder (`ReportedEndReason`); "yarim kalmis" tespiti acilistaki kurtarmanin isi. Aksi halde kolon
+  neyi olctugunu kaybederdi. IPC ucundan test edildi.
+- **Iki yazma, tek dogru sira.** `session_finalize` once DB'ye yazip **doner**, ozet arka planda
+  (`tauri::async_runtime::spawn`) uretilip ayri bir `UPDATE` ile eklenir. Gerekce: (1) kapanis bir
+  ag cagrisina bagimli olamaz — kullanici 30 sn beklemez; (2) uygulama ozet donmeden kapanirsa
+  kaybedilen tek sey ozettir, oturum kaydi kapali ve tutarli; (3) kuyruk/retry tablosu gerekmiyor,
+  cunku "ozet bekliyor" diye yarim bir durum hic olusmuyor. Ozet ancak `ended_at IS NOT NULL` olan
+  bir kayda yazilir.
+- **Fiyat tablosu cozuldu — ama yalnizca dogrulanmis kismi.** `src-tauri/src/pricing.rs`, kaynak
+  `docs/architecture/voice.md` Bolum 6 (2026-08-24). `estimated_cost_usd` artik **hesaplanabiliyor**,
+  ama iki kosul birlikte saglanirsa: model tabloda var **ve** token kirilimi (ses/metin) toplami
+  aciklayabiliyor. `cached_tokens` gelirse hesap yapilmaz — cache indirimi ses/metin ayrimi
+  gerektiriyor, o ayrim kirilimda yok ve "ortalama almak" uydurmaktir. Hesaplanamadiginda gorulen
+  anahtar **adlari** log'lanir; boylece voice.md'deki "BELIRSIZ" tahminle degil gozlemle kapanacak.
+- **Ozet maliyeti neden USD degil token.** `gpt-4o-mini` fiyati dogrulanmis bir kaynaktan
+  alinmadi. Olculen sey (token sayisi) kaydediliyor, cevrimi yapilmiyor: fiyat dogrulandiginda
+  ayni `pricing` modulune eklenip geriye donuk hesaplanabilir.
+- **Transcript ayarindan bagimsiz.** Ozet, `session_finalize`'a gelen **bellekteki** dokumu
+  kullanir; `ASUNA_TRANSCRIPT_STORAGE` yalnizca diske yazmayi kontrol eder (`.env.example`:
+  "false = sadece oturum ozeti saklanir"). Ancak transcription hic acilmazsa dokum bos gelir ve
+  ozet uretilmez — bu, ayarin dogal sonucu.
+- **Ag'a cikmayan testler.** ACL regresyon uygulamasinda `SummaryService` bilerek `manage`
+  **edilmiyor** (`RealtimeTokenService` ile ayni gerekce): `session_finalize` tetigi servisi
+  bulamayinca log'layip duruyor.
 
 ---
 

@@ -194,6 +194,54 @@ impl MemoryRecord {
 // sessions
 // ---------------------------------------------------------------------------
 
+/// Oturumun **nasil** kapandigi (ASU-033, migration 002).
+///
+/// `summary` bir durum bayragi degildir: oturum ozeti ASU-034'un memory
+/// extraction girdisidir ve "Oturum beklenmedik sekilde kapandi" gibi bir
+/// cumle oraya karisirsa hem gercek ozeti ezer hem uydurma hafiza uretir.
+/// Durum bu yuzden ayri ve makine-okunur.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionEndReason {
+    /// `session_finalize` ile temiz kapanis.
+    Completed,
+    /// Cokme/kill sonrasi acilista kurtarildi; gercek bitis zamani bilinmiyor.
+    Abandoned,
+    /// Oturum bir hata ile sonlandi (renderer bildirir).
+    Error,
+}
+
+impl SessionEndReason {
+    /// Tum degerler — sira semadaki CHECK kisiti ile ayni (test ile baglidir).
+    pub const ALL: [Self; 3] = [Self::Completed, Self::Abandoned, Self::Error];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Abandoned => "abandoned",
+            Self::Error => "error",
+        }
+    }
+
+    /// Sessiz default **yok**: bilinmeyen deger `None` doner.
+    pub fn parse(raw: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|reason| reason.as_str() == raw)
+    }
+}
+
+impl ToSql for SessionEndReason {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(ToSqlOutput::from(self.as_str()))
+    }
+}
+
+impl FromSql for SessionEndReason {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        let raw = value.as_str()?;
+        Self::parse(raw).ok_or_else(|| FromSqlError::Other("bilinmeyen sessions.end_reason".into()))
+    }
+}
+
 /// `sessions` satiri.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -218,9 +266,14 @@ pub struct SessionRecord {
     /// netlestiginde ASU-032 yeni migration ile kolon acabilir.
     pub usage_json: Option<String>,
     pub created_at: String,
+    /// `None` = bilinmiyor. Hala acik oturumlarda beklenen deger budur;
+    /// migration 002 oncesinden kalan kayitlarda da bos kalabilir.
+    pub end_reason: Option<SessionEndReason>,
 }
 
-pub const SESSION_COLUMNS: [&str; 13] = [
+/// Sema kolon sirasiyla ayni. `end_reason` **sonda**: `ALTER TABLE ADD COLUMN`
+/// kolonu tablonun sonuna ekler (`PRAGMA table_info` sirasi budur).
+pub const SESSION_COLUMNS: [&str; 14] = [
     "id",
     "started_at",
     "ended_at",
@@ -234,6 +287,7 @@ pub const SESSION_COLUMNS: [&str; 13] = [
     "estimated_cost_usd",
     "usage_json",
     "created_at",
+    "end_reason",
 ];
 
 impl SessionRecord {
@@ -252,6 +306,7 @@ impl SessionRecord {
             estimated_cost_usd: row.get("estimated_cost_usd")?,
             usage_json: row.get("usage_json")?,
             created_at: row.get("created_at")?,
+            end_reason: row.get("end_reason")?,
         })
     }
 
@@ -345,6 +400,24 @@ mod tests {
         assert_eq!(actual, expected);
     }
 
+    /// Sema ile Rust enum'u ayni `end_reason` kumesini tanimali (ASU-033).
+    #[test]
+    fn session_end_reason_matches_the_schema_check_constraint() {
+        let from_schema = migrations::end_reasons_declared_in_schema();
+        let from_enum: Vec<String> = SessionEndReason::ALL
+            .iter()
+            .map(|reason| reason.as_str().to_owned())
+            .collect();
+        assert_eq!(from_enum, from_schema);
+    }
+
+    #[test]
+    fn unknown_session_end_reason_is_rejected() {
+        assert_eq!(SessionEndReason::parse("kapandi"), None);
+        assert_eq!(SessionEndReason::parse("Completed"), None);
+        assert!(serde_json::from_str::<SessionEndReason>("\"crashed\"").is_err());
+    }
+
     /// Satirdan tipe okuma gercekten calisiyor mu (kolon adi yazim hatasi
     /// derleme zamani yakalanmaz).
     #[test]
@@ -400,6 +473,7 @@ mod tests {
         assert_eq!(session.input_tokens, Some(120));
         assert_eq!(session.summary, None);
         assert_eq!(session.transcript_path, None);
+        assert_eq!(session.end_reason, None, "yazilmayan durum uydurulmaz");
 
         assert_eq!(memory.kind, MemoryKind::Decision);
         assert_eq!(memory.project_id.as_deref(), Some("asuna"));
