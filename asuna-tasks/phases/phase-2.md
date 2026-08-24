@@ -12,7 +12,8 @@
 > **model + ifade secimi ACIK** — gigaspeech-3.3M sozlugu "ASUNA"yi tasimiyor (%0 tespit).
 > Bu faz baslamadan cozum sirasi: (1) gercek mikrofon + insan sesi testi (30 dk, harness
 > `spike/asu-008b-kws` branch'inde), (2) daha buyuk model, (3) vocabulary-aware ifade,
-> (4) yedek motorlar. Detay: ADR-004 "Model + Ifade Secimi" bolumu. ASU-022 icin kritik
+> (4) yedek motorlar. Blokaj **ASU-022'ye ozel**: ASU-021 (vendor'dan bagimsiz arayuz + fake
+> provider) bundan etkilenmez ve tamamlandi. Detay: ADR-004 "Model + Ifade Secimi" bolumu. ASU-022 icin kritik
 > spike notlari (surum pinleme tuzagi `=1.13.6`, segfault onlemi — keyword token dogrulamasi
 > sart, resampler, ASUNA_WAKE_WORD_BOOST onerisi) ADR-004 ve spike raporunda.
 >
@@ -22,19 +23,34 @@
 
 ## ASU-021: `WakeWordProvider` Interface + Fake Provider
 
-**Scope**: backend | **Boyut**: M | **Durum**: PENDING | **Bagimlilik**: ASU-020
+**Scope**: backend | **Boyut**: M | **Durum**: COMPLETED (2026-08-24) | **Bagimlilik**: ASU-020
 
 ### Aciklama
 PROJECT.md Bolum 8'deki adapter interface'i once tanimla, sonra vendor bagla. Boylece Phase 2'nin
 geri kalani gercek KWS motorunun hazir olmasini beklemez ve testler vendor'suz calisir.
 
 ### Acceptance Criteria
-- [ ] Interface tanimli: `initialize()`, `start()`, `stop()`, `onDetected(cb): () => void`
-- [ ] `WakeWordEvent` tipi: zaman damgasi, guven skoru, hangi keyword
-- [ ] `FakeWakeWordProvider` — test/dev icin manuel tetiklenebilir (dev panelinden veya kisayoldan)
-- [ ] Provider secimi config'ten (`ASUNA_WAKE_WORD_PROVIDER`) geliyor
-- [ ] Uygulamanin geri kalani somut provider tipini import etmiyor (yalnizca interface)
-- [ ] Unit test: fake provider ile detection -> callback zinciri
+- [x] Interface tanimli: `initialize()`, `start()`, `stop()`, `onDetected(cb): () => void`
+      (`src/asuna/audio/wake-word-provider.ts` — PROJECT.md Bolum 8 ile birebir, genisletilmedi)
+- [x] `WakeWordEvent` tipi: `phrase`, `confidence: number | null`, `at` (UTC ISO-8601).
+      Skor **nullable**: her motor skor bildirmez, "bilinmiyor" ile "0" ayrilir
+- [x] `FakeWakeWordProvider` — programatik `trigger()` + `start()` sirasinda kurulan
+      `__asunaFakeWake()` debug global'i (dev). Mikrofon **acmaz**, `stop()` global'i kaldirir
+- [x] Provider secimi config'ten (`ASUNA_WAKE_WORD_PROVIDER`) geliyor — Rust `FrontendConfig`
+      whitelist'ine `wakeWordProvider` eklendi; model dizini/esik renderer'a **gitmiyor**
+- [x] Uygulamanin geri kalani somut provider tipini import etmiyor (yalnizca interface) —
+      `wake-word-import-boundary.spec.ts` ile zorlanıyor (izinli tek dosya: fabrika)
+- [x] Unit test: fake provider ile detection -> callback zinciri (+ coklu listener, unsubscribe,
+      stop sonrasi sessizlik, stub'in durust hatasi, fabrika secimi)
+
+### Notlar
+`SherpaKwsProvider` **iskelet**: `initialize()` `not_implemented` ile reddediyor (sessiz sahte
+basari yok), Tauri event koprusu (`asuna://wake-word-detected`) yorumlu TODO olarak duruyor —
+gercegi ASU-022'de. Gelistirme sirasinda `ASUNA_WAKE_WORD_PROVIDER=fake` kullanilir.
+
+`voice-state-machine.ts` gecis tablosunda Phase 2 kenarlari (`BOOTING -> IDLE_WAKE_WORD`,
+`IDLE_WAKE_WORD -> WAKING`) zaten acikti; degisiklik gerekmedi. UI baglantisi bilerek
+yapilmadi — idle akisi ASU-023'un isi.
 
 ---
 

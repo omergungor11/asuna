@@ -10,14 +10,14 @@
 |-------|----|-------|------|-------------|--------|---------|---------|
 | 0 | Arastirma + Scaffold | 11 | 11 | 0 | 0 | 0 | 0 |
 | 1 | Realtime Voice (dikey dilim) | 11 | 11 | 0 | 0 | 0 | 0 |
-| 2 | Wake Word | 8 | 0 | 0 | 0 | 8 | 0 |
+| 2 | Wake Word | 8 | 1 | 0 | 0 | 7 | 0 |
 | 3 | Memory | 10 | 0 | 0 | 0 | 10 | 0 |
 | 4 | Project Context | 8 | 0 | 0 | 0 | 8 | 0 |
 | 5 | One Useful Action (Tools) | 9 | 0 | 0 | 0 | 9 | 0 |
 | 6 | Focus Recovery (MVP) | 8 | 0 | 0 | 0 | 8 | 0 |
-| **Total** | | **65** | **22** | **0** | **0** | **43** | **0** |
+| **Total** | | **65** | **23** | **0** | **0** | **42** | **0** |
 
-**Progress**: 22/65 (34%)
+**Progress**: 23/65 (35%)
 
 > ASU-008b spike tamamlandi (2026-08-24): motor/lisans/CPU/bundle dogrulandi, ADR-004 accepted
 > (kapsami daraltilmis). ACIK: model+ifade secimi — gigaspeech-3.3M "Hey Asuna"yi tasimiyor (R2).
@@ -77,7 +77,7 @@
 | ASU-018 | Temiz disconnect + kaynak temizligi | 1 | M | frontend | COMPLETED |
 | ASU-019 | Hata yonetimi + observability (state transition log) | 1 | M | backend | COMPLETED |
 | ASU-020 | **M1 kabul testi** — PROJECT.md Bolum 35, 8 madde | 1 | M | test | COMPLETED |
-| ASU-021 | `WakeWordProvider` interface + fake provider | 2 | M | backend | PENDING |
+| ASU-021 | `WakeWordProvider` interface + fake provider | 2 | M | backend | COMPLETED |
 | ASU-022 | `SherpaKwsProvider` (sherpa-onnx KWS, "Hey Asuna") | 2 | L | backend | PENDING |
 | ASU-023 | IDLE_WAKE_WORD -> WAKING -> CONNECTING gecisi | 2 | M | frontend | PENDING |
 | ASU-024 | Idle'da buluta ses gitmedigi dogrulamasi | 2 | M | test | PENDING |

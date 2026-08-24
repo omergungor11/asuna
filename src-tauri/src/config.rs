@@ -209,10 +209,16 @@ impl VadEagerness {
     }
 }
 
-/// Wake word saglayicisi secimi (`WakeWordProvider` adapter'inin hangi somut
-/// implementasyonunun kurulacagi — ADR-004). Renderer'a **gitmez**: motor Rust
-/// tarafinda calisir, renderer vendor adini gormez.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Wake word saglayicisi secimi — `WakeWordProvider` adapter'inin hangi somut
+/// implementasyonunun kurulacagi (ADR-004, ASU-021).
+///
+/// Renderer'a **gider**: adapter'i renderer kurar
+/// (`src/asuna/audio/wake-word-provider-factory.ts`), dolayisiyla hangisinin
+/// kurulacagini bilmek zorunda. Bu bir secret degil, bir davranis ayaridir.
+/// Motorun **detaylari** (model dizini, esik, keyword dosyasi) renderer'a
+/// gitmez ve gitmemeli: ses isleme tamamen bu process'te kalir.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum WakeWordProviderKind {
     /// sherpa-onnx `KeywordSpotter` (ADR-004, ASU-022).
     SherpaKws,
@@ -331,6 +337,7 @@ impl AsunaConfig {
             realtime_model: self.realtime_model.clone(),
             realtime_voice: self.realtime_voice.clone(),
             wake_word: self.wake_word.clone(),
+            wake_word_provider: self.wake_word_provider,
             idle_timeout_seconds: self.idle_timeout_seconds,
             log_level: self.log_level,
             memory_enabled: self.memory_enabled,
@@ -345,15 +352,18 @@ impl AsunaConfig {
 
 /// Renderer'a gecen config alt kumesi (whitelist — blacklist degil).
 ///
-/// Burada **olmayan** her sey renderer'a gitmez: `OPENAI_API_KEY`,
-/// wake word saglayicisi/model dizini/esigi (motor Rust tarafinda calisir,
-/// renderer vendor adini gormez — ADR-004).
+/// Burada **olmayan** her sey renderer'a gitmez: `OPENAI_API_KEY`, wake word
+/// model dizini ve esigi (motor Rust tarafinda calisir; renderer ses karesi
+/// gormez, yalnizca tespit olayini alir — ADR-004).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FrontendConfig {
     pub realtime_model: String,
     pub realtime_voice: Option<String>,
     pub wake_word: String,
+    /// ASU-021: hangi `WakeWordProvider` adapter'inin kurulacagi. Yalnizca secim;
+    /// motor detayi degil.
+    pub wake_word_provider: WakeWordProviderKind,
     pub idle_timeout_seconds: u32,
     pub log_level: LogLevel,
     pub memory_enabled: bool,
@@ -994,6 +1004,7 @@ mod tests {
                 "vadEagerness",
                 "vadSilenceMs",
                 "wakeWord",
+                "wakeWordProvider",
             ]
         );
 
@@ -1003,8 +1014,39 @@ mod tests {
             !serialized.to_lowercase().contains("apikey"),
             "JSON: {serialized}"
         );
-        // Wake word motoru detaylari da renderer'a gitmez (ADR-004).
-        assert!(!serialized.contains("sherpa"), "JSON: {serialized}");
+    }
+
+    /// ASU-021 / ADR-004: saglayici **secimi** renderer'a gider (adapter'i o kurar),
+    /// motor **detaylari** gitmez — model dizini ve esik bu process'te kalir.
+    #[test]
+    fn frontend_config_exposes_the_provider_choice_but_not_the_engine_details() {
+        const MODEL_DIR: &str = "/opt/asuna/kws-model-dizini";
+
+        let mut map = valid_map();
+        map.insert(KEY_WAKE_WORD_MODEL_DIR.to_owned(), MODEL_DIR.to_owned());
+        map.insert(KEY_WAKE_WORD_THRESHOLD.to_owned(), "0.77".to_owned());
+
+        let config = load_from_map(&map).expect("gecerli config yuklenmeli");
+        let json = serde_json::to_value(config.to_frontend()).expect("serialize edilebilmeli");
+
+        assert_eq!(json["wakeWordProvider"], "sherpa-kws");
+
+        let serialized = json.to_string();
+        assert!(!serialized.contains(MODEL_DIR), "JSON: {serialized}");
+        assert!(!serialized.contains("0.77"), "JSON: {serialized}");
+        assert!(
+            !serialized.to_lowercase().contains("threshold"),
+            "JSON: {serialized}"
+        );
+    }
+
+    #[test]
+    fn frontend_config_serializes_the_fake_provider_as_kebab_case() {
+        let config = load_from_map(&map_with(KEY_WAKE_WORD_PROVIDER, "fake"))
+            .expect("gecerli config yuklenmeli");
+        let json = serde_json::to_value(config.to_frontend()).expect("serialize edilebilmeli");
+
+        assert_eq!(json["wakeWordProvider"], "fake");
     }
 
     #[test]
