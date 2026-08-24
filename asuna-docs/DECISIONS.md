@@ -40,6 +40,23 @@ Ayrica ADR'ye donusmeden karara baglanan uygulama detaylari (ASU-009, Phase 0 sc
 Acik sorularin guncel durumu `asuna-config/tech-stack.md` → **ACIK SORULAR** tablosunda.
 Katman mimarileri: `docs/architecture/{voice,memory,tools,security}.md`.
 
+### Phase 1 uygulama kararlari (ADR'siz, kayit icin)
+
+- **MSRV 1.82 → 1.85** (ASU-011, 2026-08-24): `reqwest =0.13.4` (`rust-version = 1.85`) icin.
+  Toolchain zaten 1.96.1 pinli — pratik etki yok, kayit icin. reqwest minimal feature setiyle
+  (`rustls`, `json`, `system-proxy`; http2/cookies/blocking kapali) ve `redirect: none` ile
+  kullaniliyor. Not: `rustls` → `aws-lc-sys` build'de cmake + C derleyici istiyor (macOS
+  runner'larda mevcut; CI image degisirse dikkat).
+
+- **Prompt baseline = `core.v1`** (ASU-012, 2026-08-24): `src/asuna/prompts/core.v1.ts` kabul edilen
+  davranis taban cizgisidir. Prompt metni Ingilizce (PROJECT.md Bolum 11 ile ayni dil), icindeki dil
+  politikasi Turkce-agirlikli yanit + Ingilizce teknik terim. Degisiklik = yeni versiyon dosyasi
+  (`core.v2.ts`) + buraya kayit; aktif versiyon secimi tek nokta: `src/asuna/prompts/index.ts`.
+- **Gecersiz state gecisi politikasi** (ASU-014, 2026-08-24): dev'de `throw` (bug erken patlasin),
+  prod'da `reject` (durum korunur, `transition()` false doner, `onInvalidTransition` gozlemcisine
+  rapor edilir) — ses dongusu bozuk bir UI yolu yuzunden olmez (PROJECT.md Bolum 30). Hicbir gecersiz
+  gecis sessizce yutulmaz. Ayni-duruma gecis de gecersizdir (log'a sahte gecis dusmesin).
+
 ---
 
 ## ADR-007: Claude Code gelistirme modeli = Fable orchestrator + opus subagent'lar — 2026-08-24
