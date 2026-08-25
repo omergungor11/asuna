@@ -190,20 +190,42 @@ PROJECT.md Bolum 15. Kayitli bir projenin metadata'sini ve secili baglam dosyala
 
 ## ASU-043: `.asuna/context.json` Okuma/Yazma
 
-**Scope**: backend | **Boyut**: M | **Durum**: PENDING | **Bagimlilik**: ASU-041
+**Scope**: backend | **Boyut**: M | **Durum**: DONE (2026-08-25) | **Bagimlilik**: ASU-041
 
 ### Aciklama
 PROJECT.md Bolum 16. Proje basina kompakt, makine okunur devir teslim artefakti.
 
 ### Acceptance Criteria
-- [ ] Sema: projectName, objective, currentMilestone, activeTask, blockers[], recentDecisions[]
-- [ ] Dosya proje kokunde `.asuna/context.json` olarak okunuyor; yoksa hata degil, bos baglam
-- [ ] Bozuk/gecersiz JSON uygulamayi cokertmiyor; uyari ile yok sayiliyor
-- [ ] Asuna oturum sonunda bu dosyayi guncelleyebiliyor (kararlar/aktif task) — yazma islemi
+- [x] Sema: projectName, objective, currentMilestone, activeTask, blockers[], recentDecisions[]
+- [x] Dosya proje kokunde `.asuna/context.json` olarak okunuyor; yoksa hata degil, bos baglam
+- [x] Bozuk/gecersiz JSON uygulamayi cokertmiyor; uyari ile yok sayiliyor
+- [x] Asuna oturum sonunda bu dosyayi guncelleyebiliyor (kararlar/aktif task) — yazma islemi
       kayitli proje root'u disina cikamiyor
-- [ ] Dosya "tek gercek kaynak" olarak muamele gormuyor; DB verisiyle celisirse hangisinin
+- [x] Dosya "tek gercek kaynak" olarak muamele gormuyor; DB verisiyle celisirse hangisinin
       kazandigi dokumante
-- [ ] Yazma atomik (gecici dosya + rename), yarim dosya birakmiyor
+- [x] Yazma atomik (gecici dosya + rename), yarim dosya birakmiyor
+
+### Uygulama notlari
+- `src-tauri/src/projects/handoff.rs`.
+- **Cakisma kurali (dokumante, modul bas yorumunda ve `projects/mod.rs`'te):**
+  > **DB kazanir.** DB ile `.asuna/context.json` celisirse Asuna DB'ye inanir. Dosya DB'yi
+  > *guncelleyemez*; DB dosyayi guncelleyebilir.
+
+  Gerekce: dosya kullanicinin (ya da baska bir aracin, ya da bir git merge cakismasinin) her an
+  degistirebilecegi bir metin. Otoriter sayilsaydi, "hafizami sildim" diyen kullanicinin silinmis
+  kararlari bir dosyadan geri dogardi — M3'te tam olarak bu sinifta bir hata yakalanmisti (ASU-065).
+- Okuma **hosgorulu**: yanlis tipteki tek bir alan butun dosyayi cope atmaz, yalnizca o alan yok
+  sayilir ve log'lanir. Dosya elle duzenlenmeye acik. Bozuk JSON / dizi kok / cok buyuk dosya
+  `Ignored` doner (uyari ile), dosya yoksa `Absent` (hata degil).
+- Yazma **atomik**: ayni dizinde gecici dosya → `sync_all` → `rename`. Gecici dosya bilerek ayni
+  dizinde; `/tmp`'ye yazip tasimak dosya sistemi sinirini gecip `EXDEV` verirdi. Ad benzersiz
+  (pid + thread) — iki oturum birbirinin yarim dosyasini gormez.
+- Traversal guard: hedef her zaman `<kayitli kok>/.asuna/context.json`, yol cagirandan alinmaz.
+  `.asuna` bir symlink olup disari gosteriyorsa hem yazma hem okuma **reddedilir**
+  (`canonicalize` + kok prefix kontrolu, metin `startsWith` degil).
+- Metin hem yazmada hem okumada `redact_sensitive_text`'ten gecer: icerik oturumdan (model
+  ciktisindan) gelir ve kullanicinin sesli okudugu bir anahtar dosyaya **kalici** girebilirdi.
+- Tavanlar: dosya 64 KB, metin alani 300 karakter, liste 10 girdi, girdi 200 karakter.
 
 ---
 

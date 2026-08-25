@@ -9,9 +9,14 @@
 //! | [`registry`] | Kayitli proje koklerinin tek kaynagi (ASU-040) |
 //! | [`context`] | Kayitli bir projeden guvenli ve kisa ozet (ASU-041) |
 //! | [`git_metadata`] | Salt okuma git durumu: branch, kirli/temiz, son commit'ler (ASU-042) |
+//! | [`handoff`] | `.asuna/context.json` devir teslim artefakti (ASU-043) |
 //!
-//! Sonraki task bu modulun altina eklenir: `handoff` (ASU-043).
+//! # Cakisma kurali
+//!
+//! DB ile [`handoff`] dosyasi celisirse **DB kazanir**. Dosya kompakt bir devir
+//! teslim artefaktidir, tek gercek kaynak degil (PROJECT.md Bolum 16).
 
 pub mod context;
 pub mod git_metadata;
+pub mod handoff;
 pub mod registry;
