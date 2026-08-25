@@ -49,18 +49,18 @@ Bu dosya bir **referans kartı**; spec kopyası değil. Detay için `PROJECT.md`
 
 ## Mevcut Durum
 
-**Phase 0 + Phase 1 tamam.** Phase 0: Tauri 2 + React/TS scaffold, CI yeşil, 4 araştırma
-ADR'ye bağlandı. Phase 1: realtime voice dikey dilimi (ASU-011..020).
-
-**M1 geçti (2026-08-24, canlı test)** — Türkçe konuşuldu, barge-in sorunsuz, temiz kapanış.
+**Phase 0 + 1 + 3 (kod) tamam.** M1 geçti (2026-08-24, canlı test). Phase 3 memory katmanı
+(ASU-029..037 + ASU-064/021) yazıldı, Gate 3 review'dan geçti (1 CRITICAL + 8 bulgu düzeltildi).
+296 Rust + 529 TS testi yeşil.
 
 Sırada:
 
 | Ne | Durum |
 |----|-------|
-| ASU-064 — realtime gecikme ayarı (turn detection + ölçüm) | M1'de fark edilen gecikme, açık |
-| Phase 2 — wake word | Kısmen bloklu: model + ifade seçimi ADR-004'te ACIK, gerçek mikrofon testi kullanıcıyı bekliyor. ASU-021 (interface + fake provider) bloklu değil |
-| Phase 3 — memory | Hazır (ADR-005 accepted); plan: `asuna-plans/plan-phase-3-memory.md` |
+| ASU-038 — M3 kabul testi ("restart sonrası hatırlama") | Kullanıcının sesli testi bekleniyor |
+| Phase 2 — wake word | ASU-022+ bloklu: model + ifade seçimi ADR-004'te AÇIK — kullanıcının 30 dk gerçek mikrofon testi (`spike/asu-008b-kws`) ilk adım |
+| Gecikme A/B | `ASUNA_VAD_EAGERNESS=high` aktif; WARP kapalı deneme önerisi açık |
+| Phase 4 — project context | Phase 3 kabulünden sonra |
 
 Task listesi ve ilerleme → `asuna-tasks/task-index.md`
 

@@ -61,3 +61,15 @@
 - Phase 2 wake word model karari verilmeden ASU-022 baslamaz (R2 acik).
 - Yeni `#[tauri::command]` = 4 adim (build.rs manifest + `permissions/` + capability + `tauri.conf.json`); atlanirsa sessiz red.
 - `src-tauri/permissions/` dizini olusturuldugu an TUM uygulama komutlari ACL'e tabi olur — Phase 3'te gecis adimi olarak planlandi.
+
+## 2026-08-25 — Session 1 devami (otonom)
+
+- Bilgi grafi kuruldu (graphify, 21 doc stabil cekirdek; 145 node / 11 topluluk;
+  `graphify query` agent promptlarina girdi).
+- Phase 3 tamamen yazildi: ASU-029..037 (5 dalga, 8 opus agent) + Gate 3 review
+  (opus reviewer). Review: 1 CRITICAL (runtime hafiza anahtari oturum+ozet yolunu
+  durdurmuyordu), 1 HIGH (saklanan metinde secret redaksiyonu yoktu) + 7 orta/dusuk —
+  hepsi duzeltildi. 296 Rust + 529 TS testi.
+- Yeni backlog: ASU-065 (oturum ozeti + transcript temizligi), sunucu tarafli sayfalama.
+- Kullaniciyi bekleyen: ASU-038 M3 sesli kabul testi, gecikme A/B (eagerness=high + WARP),
+  KWS gercek mikrofon testi (Phase 2 kilidi).

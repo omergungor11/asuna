@@ -17,6 +17,25 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added (2026-08-25 — Phase 3: Memory, kod tamam; M3 kabul testi bekliyor)
+
+- SQLite bootstrap + migration altyapisi, `memories`/`sessions` semasi (ASU-029/030)
+- MemoryService CRUD + okuma/yazma ayrik ACL (ASU-031)
+- Oturum kaydi + opsiyonel transcript persist — kapaliyken diske hicbir sey yazilmadigi
+  dosya-sistemi taramasiyla testli (ASU-032)
+- Session summary pipeline (`ASUNA_SUMMARY_MODEL`, ayri text-model cagrisi) + `end_reason`
+  migration'i (ASU-033)
+- Memory extraction: dogrulama, deterministik dedup, onem esigi, hassas kategorilerde
+  `pendingApproval` bekletme (ASU-034)
+- Stage A deterministik retrieval + `SessionBootstrapContext` → prompt enjeksiyonu;
+  bos hafizada "hatirliyormus gibi davranma" satiri (ASU-035)
+- Memory UI (listele/ara/sil/arsivle) + Ayarlar sekmesi: runtime gizlilik anahtarlari,
+  "tum hafizayi sil" (cift onay + phrase), onay bekleyenler kuyrugu (ASU-036/037)
+- Gate 3 review duzeltmeleri: runtime gizlilik kapisi tum yazma yollarinda, saklanan
+  metinde secret redaksiyonu (`redaction.rs`), dedup esigi 40 + %80 oran, dosya izinleri
+  0600/0700, 200 kayit tavani gorunur
+
+
 ### Added
 - **Phase 1 — realtime voice dikey dilimi (ASU-011..ASU-020).** Butona basilir, Turkce konusulur,
   Asuna sesle cevap verir, sozu kesilebilir, transcript gorunur, oturum temiz kapanir:
