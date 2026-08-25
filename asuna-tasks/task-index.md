@@ -12,12 +12,12 @@
 | 1 | Realtime Voice (dikey dilim) | 11 | 11 | 0 | 0 | 0 | 0 |
 | 2 | Wake Word | 8 | 1 | 0 | 0 | 7 | 0 |
 | 3 | Memory | 11 | 10 | 0 | 0 | 1 | 0 |
-| 4 | Project Context | 8 | 3 | 0 | 0 | 5 | 0 |
+| 4 | Project Context | 8 | 4 | 0 | 0 | 4 | 0 |
 | 5 | One Useful Action (Tools) | 9 | 0 | 0 | 0 | 9 | 0 |
 | 6 | Focus Recovery (MVP) | 8 | 0 | 0 | 0 | 8 | 0 |
-| **Total** | | **66** | **36** | **0** | **0** | **30** | **0** |
+| **Total** | | **66** | **37** | **0** | **0** | **29** | **0** |
 
-**Progress**: 36/66 (55%)
+**Progress**: 37/66 (56%)
 
 > Phase 3 implementasyonu ASU-035 ile kapandi (2026-08-25): ASU-029..ASU-037 DONE.
 > Gate 3 review bulgulari duzeltildi (2026-08-25): calisma zamani gizlilik kapisi oturum
@@ -109,7 +109,7 @@
 | ASU-039 | `projects` tablosu + migration | 4 | S | db | DONE |
 | ASU-040 | `ProjectRegistry` (kayitli proje root'lari) | 4 | M | backend | DONE |
 | ASU-041 | `ProjectContextService` (metadata + context dosyalari) | 4 | L | backend | DONE |
-| ASU-042 | Git metadata provider | 4 | M | backend | PENDING |
+| ASU-042 | Git metadata provider | 4 | M | backend | DONE |
 | ASU-043 | `.asuna/context.json` okuma/yazma | 4 | M | backend | PENDING |
 | ASU-044 | `get_current_project` tool (risk 0) | 4 | M | backend | PENDING |
 | ASU-045 | Projects UI sekmesi | 4 | M | frontend | PENDING |

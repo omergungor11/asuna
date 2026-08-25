@@ -147,17 +147,44 @@ PROJECT.md Bolum 15. Kayitli bir projenin metadata'sini ve secili baglam dosyala
 
 ## ASU-042: Git Metadata Provider
 
-**Scope**: backend | **Boyut**: M | **Durum**: PENDING | **Bagimlilik**: ASU-041
+**Scope**: backend | **Boyut**: M | **Durum**: DONE (2026-08-25) | **Bagimlilik**: ASU-041
 
 ### Acceptance Criteria
-- [ ] Okunan bilgiler: guncel branch, kirli/temiz calisma agaci, degisen dosya sayisi,
+- [x] Okunan bilgiler: guncel branch, kirli/temiz calisma agaci, degisen dosya sayisi,
       son N commit basligi, remote adi
-- [ ] Sadece okuma — hicbir git yazma komutu calistirilmiyor
-- [ ] Git deposu olmayan proje sorunsuz destekleniyor (bos metadata)
-- [ ] Komut/erisim timeout'lu; asili kalmiyor
-- [ ] Buyuk repoda makul surede donuyor
-- [ ] Commit mesajlari kirpiliyor, tam diff hic okunmuyor
-- [ ] Hicbir kimlik bilgisi / remote token'i cikti'ya girmiyor
+- [x] Sadece okuma — hicbir git yazma komutu calistirilmiyor
+- [x] Git deposu olmayan proje sorunsuz destekleniyor (bos metadata)
+- [x] Komut/erisim timeout'lu; asili kalmiyor
+- [x] Buyuk repoda makul surede donuyor
+- [x] Commit mesajlari kirpiliyor, tam diff hic okunmuyor
+- [x] Hicbir kimlik bilgisi / remote token'i cikti'ya girmiyor
+
+### Uygulama notlari
+- `src-tauri/src/projects/git_metadata.rs`.
+- **Karar: `git` CLI, `.git/HEAD` elle okumak degil.** Gerekce modul bas yorumunda:
+  branch icin `.git/HEAD` ucuz olurdu ama *kirli/temiz + degisen dosya sayisi* index
+  (binary) ↔ calisma agaci karsilastirmasi + `.gitignore` yorumu demek; *commit
+  basliklari* loose object + packfile + delta (zlib) cozumu demek. Ikisi de git'i yeniden
+  yazmak olurdu. `git2` (libgit2) yeni bir bagimlilik — ASU-042'de paket eklenmedi.
+- Shell **yok**: `Command::new("git")` + `arg()`, argumanlar sabit. Tek degisken girdi
+  calisma dizini ve o da kayitli, `canonicalize` edilmis bir kok.
+- `GIT_OPTIONAL_LOCKS=0` → `status` index'i tazelemeye calismaz, `.git`e **yazilmaz**.
+  `GIT_TERMINAL_PROMPT=0` + `GIT_ASKPASS`/`SSH_ASKPASS` temizligi → kimlik dogrulama
+  istemi hic ortaya cikmaz (asili kalmanin en yaygin sebebi).
+- Timeout 5 sn/komut; sure dolarsa process **oldurulur**. Boru hatti ayri bir thread'de
+  sonuna kadar bosaltilir — `try_wait` dongusu, cikti 64 KB boru tamponunu doldurdugunda
+  kilitlenirdi.
+- **Ust dizindeki repo sayilmaz**: `git` calisma dizininden yukari yurur; kullanici bir
+  repo'nun alt dizinini kaydettiyse ust repo'nun branch/commit'lerini raporlamak hem
+  yanlis hem kayitli kok disi bir sizinti olurdu. `rev-parse --show-toplevel` kok ile
+  karsilastiriliyor.
+- `--untracked-files=no` takasi acikca test edilmis ve alan adi bunu soyluyor
+  (`changedTrackedFiles`): yalnizca yeni dosyasi olan repo "temiz" gorunur.
+- Remote URL'i once yapisal olarak (`@` oncesi atilir) sonra `redact_sensitive_text`'ten
+  gecer — ASU-041 ile **ayni** sanitizer (`context::sanitise_remote_url`), ikinci kopya yok.
+  Commit basliklari da redaksiyondan gecer: bir baslik yanlislikla token icerebilir.
+- `degraded` bayragi: bir alt komut basarisiz olduysa eksik bilgi "basarili" gibi
+  sunulmaz (PROJECT.md Bolum 30). Bos repo ve git'siz proje **degraded degildir**.
 
 ---
 

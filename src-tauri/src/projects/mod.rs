@@ -8,9 +8,10 @@
 //! |---|---|
 //! | [`registry`] | Kayitli proje koklerinin tek kaynagi (ASU-040) |
 //! | [`context`] | Kayitli bir projeden guvenli ve kisa ozet (ASU-041) |
+//! | [`git_metadata`] | Salt okuma git durumu: branch, kirli/temiz, son commit'ler (ASU-042) |
 //!
-//! Sonraki task'lar bu modulun altina eklenir: `git_metadata` (ASU-042),
-//! `handoff` (ASU-043).
+//! Sonraki task bu modulun altina eklenir: `handoff` (ASU-043).
 
 pub mod context;
+pub mod git_metadata;
 pub mod registry;
