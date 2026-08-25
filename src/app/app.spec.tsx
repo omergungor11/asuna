@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { DbStatus } from '../shared/db-status';
+import type { PrivacySettings } from '../shared/privacy';
 
 import { App } from './app';
 
@@ -17,6 +18,21 @@ const DISABLED: DbStatus = {
 vi.mock('../asuna/memory/db-status-service', () => ({
   DB_STATUS_COMMAND: 'db_status',
   fetchDbStatus: (): Promise<DbStatus> => Promise.resolve(DISABLED),
+}));
+
+// Ayni gerekce (ASU-037): ayarlar sekmesi acildiginda gercek gizlilik komutu
+// cagrilmasin.
+const PRIVACY: PrivacySettings = {
+  memoryEnabled: false,
+  transcriptStorage: true,
+  memoryEnabledAtBoot: false,
+  transcriptStorageAtBoot: true,
+};
+
+vi.mock('../asuna/memory/privacy-service', () => ({
+  PRIVACY_COMMANDS: { get: 'get_privacy_settings', set: 'set_privacy_settings' },
+  fetchPrivacySettings: (): Promise<PrivacySettings> => Promise.resolve(PRIVACY),
+  updatePrivacySettings: (): Promise<PrivacySettings> => Promise.resolve(PRIVACY),
 }));
 
 // Phase 0 smoke testi: test zincirinin (Vitest + jsdom + JSX + strict TS)
@@ -48,6 +64,23 @@ describe('App', () => {
     const conversation = document.getElementById('asuna-panel-conversation');
     expect(conversation).toHaveAttribute('hidden');
     // Gizli ama YIKILMAMIS: canli Realtime oturumu sekme degisiminde kopmaz.
+    expect(conversation?.querySelector('.asuna-panel')).not.toBeNull();
+  });
+
+  /** ASU-037: gizlilik kontrolleri kendi sekmesinde, ses paneli yine monte. */
+  it('ayarlar sekmesi gizlilik anahtarlarini acar, ses panelini yikmaz', async () => {
+    render(<App />);
+
+    expect(document.getElementById('asuna-panel-settings')).toBeNull();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Ayarlar' }));
+
+    expect(await screen.findByRole('switch', { name: 'Konuşma dökümü saklama' })).toBeChecked();
+    // `.env` ile kapatilmis anahtar buradan acilamaz.
+    expect(screen.getByRole('switch', { name: 'Kalıcı hafıza' })).toBeDisabled();
+
+    const conversation = document.getElementById('asuna-panel-conversation');
+    expect(conversation).toHaveAttribute('hidden');
     expect(conversation?.querySelector('.asuna-panel')).not.toBeNull();
   });
 });

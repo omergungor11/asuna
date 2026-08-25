@@ -24,11 +24,19 @@ fn main() {
             "memory_update",
             "memory_archive",
             "memory_delete",
+            // ASU-037: tum hafizayi silme. Yazma capability'sinin parcasi;
+            // komut ayrica birebir bir onay ifadesi ister.
+            "memory_delete_all",
             // ASU-032: oturum kaydi (capabilities/asuna-session.json). Model
             // config'ten gelir, transcript yolu Rust tarafinda cozulur —
             // renderer ikisini de veremez.
             "session_start",
             "session_finalize",
+            // ASU-037: calisma zamani gizlilik anahtarlari
+            // (capabilities/asuna-privacy.json). Secret icermez; yalnizca
+            // kullanicinin kendi ayarlari okunur/yazilir.
+            "get_privacy_settings",
+            "set_privacy_settings",
         ]));
 
     if let Err(error) = tauri_build::try_build(attributes) {

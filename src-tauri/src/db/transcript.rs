@@ -12,6 +12,11 @@
 //! oturumunda `audio.input.transcription` hic acilmaz (voice.md Bolum 2) — yani
 //! yazilacak metin uretilmez bile.
 //!
+//! ASU-037 ile karar **iki** kaynaktan gelir ve ikisi de `&&` ile baglanir:
+//! acilis degeri (cagiranin gecirdigi `enabled`) ve calisma zamani anahtari
+//! ([`crate::privacy`]). Kullanici ayari oturum ortasinda kapatirsa yazma o
+//! andan itibaren durur; yeniden baslatma gerekmez.
+//!
 //! # Bicim
 //!
 //! Oturum basina bir JSONL dosyasi: her satir bir replik
@@ -66,6 +71,7 @@ pub fn transcript_dir<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<Pa
 /// Transcript'i **yalnizca** ayar aciksa diske yazar.
 ///
 /// - `enabled == false` → `Ok(None)`; dosya sistemi hic **acilmaz**.
+/// - calisma zamani anahtari kapali → `Ok(None)` (ASU-037).
 /// - `lines` bos → `Ok(None)`; bos bir dosya yaratmak yalnizca gurultudur.
 /// - aksi halde `base_dir/session-<id>.jsonl` yazilir ve yolu donulur.
 ///
@@ -78,7 +84,29 @@ pub fn persist_if_enabled(
     session_id: i64,
     lines: &[TranscriptLine],
 ) -> io::Result<Option<PathBuf>> {
-    if !enabled || lines.is_empty() {
+    persist_with_runtime_switch(
+        crate::privacy::process_transcript_storage(),
+        enabled,
+        base_dir,
+        session_id,
+        lines,
+    )
+}
+
+/// [`persist_if_enabled`]'in test edilebilir govdesi.
+///
+/// Calisma zamani anahtari parametre olarak aliniyor cunku process genelindeki
+/// durum ([`crate::privacy::install_process_state`]) geri alinamaz; onu bir
+/// testte kapatmak ayni process'teki diger testleri etkilerdi. Kapali anahtarin
+/// **davranisi** (diske hicbir sey yazilmamasi) boylece dogrudan olculebiliyor.
+fn persist_with_runtime_switch(
+    runtime_enabled: bool,
+    enabled: bool,
+    base_dir: &Path,
+    session_id: i64,
+    lines: &[TranscriptLine],
+) -> io::Result<Option<PathBuf>> {
+    if !enabled || !runtime_enabled || lines.is_empty() {
         return Ok(None);
     }
 
@@ -221,6 +249,31 @@ mod tests {
             "diske dosya yazilmis: {:?}",
             temp.files()
         );
+    }
+
+    /// **ASU-037 kabul kriteri (yeniden baslatmadan etkili).** Acilista ayar
+    /// acik olsa bile, kullanici calisma zamaninda kapattiysa yazma no-op olur.
+    /// Yine bayrak degil dosya sistemi testi: dizin bile olusmuyor.
+    #[test]
+    fn the_runtime_switch_stops_writing_even_when_boot_allowed_it() {
+        let temp = TempDir::new("runtime-off");
+        let dir = temp.path().join(TRANSCRIPT_DIR_NAME);
+
+        let result = persist_with_runtime_switch(false, true, &dir, 42, &lines())
+            .expect("kapali anahtar hata degil");
+
+        assert_eq!(result, None);
+        assert!(!dir.exists(), "transcript dizini olusturulmus");
+        assert!(
+            temp.files().is_empty(),
+            "diske dosya yazilmis: {:?}",
+            temp.files()
+        );
+
+        // Anahtar geri acilinca ayni cagri yazar — durum kalici olarak bozulmaz.
+        assert!(persist_with_runtime_switch(true, true, &dir, 42, &lines())
+            .expect("acik anahtar")
+            .is_some());
     }
 
     /// Bos oturum icin bos dosya birakilmaz.

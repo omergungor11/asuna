@@ -418,14 +418,57 @@ checklist maddesi — opsiyonel degil.
 
 ## ASU-037: Memory Gizlilik Kontrolleri
 
-**Scope**: frontend | **Boyut**: S | **Durum**: PENDING | **Bagimlilik**: ASU-036
+**Scope**: frontend | **Boyut**: S | **Durum**: DONE (2026-08-25) | **Bagimlilik**: ASU-036
 
 ### Acceptance Criteria
-- [ ] Settings'te anahtarlar: durable memory acik/kapali, transcript saklama acik/kapali
-- [ ] Anahtarlar `ASUNA_MEMORY_ENABLED` / `ASUNA_TRANSCRIPT_STORAGE` ile ayni davranisi paylasiyor
-- [ ] Kapatildiginda geriye donuk veriye ne oldugu kullaniciya net anlatiliyor (silinmiyor, sadece yazilmiyor)
-- [ ] "Tum hafizayi sil" aksiyonu var ve cift onay istiyor
-- [ ] Degisiklikler yeniden baslatmadan etkili
+- [x] Settings'te anahtarlar: durable memory acik/kapali, transcript saklama acik/kapali
+      — `src/components/settings-view.tsx`; sekme `src/app/app.tsx` ("Ayarlar"). Anahtarlar
+        `role="switch"`; durum `get_privacy_settings`'ten okunur, onbelleklenmez
+- [x] Anahtarlar `ASUNA_MEMORY_ENABLED` / `ASUNA_TRANSCRIPT_STORAGE` ile ayni davranisi paylasiyor
+      — `src-tauri/src/privacy.rs`: `PrivacyState::from_boot(...)` acilista env'den baslar.
+        Hafiza yazma yolu (`memory_create`/`memory_update`) ve transcript yazma yolu artik
+        config'in ham alanina degil bu duruma bakiyor
+- [x] Kapatildiginda geriye donuk veriye ne oldugu kullaniciya net anlatiliyor (silinmiyor, sadece yazilmiyor)
+      — her anahtarin altinda durum-bagimli cumle ("Daha once kaydedilenler SILINMEZ...").
+        Testler metni birebir olcuyor (`settings-view.spec.tsx`)
+- [x] "Tum hafizayi sil" aksiyonu var ve cift onay istiyor
+      — birinci kapi UI (niyet -> `TUM HAFIZAYI SIL` yazma), ikinci kapi komut imzasi
+        (`memory_delete_all(confirmationPhrase)`). Ifade tutmazsa DB'ye **hic dokunulmaz**,
+        `invalid` kodlu tipli hata doner
+- [x] Degisiklikler yeniden baslatmadan etkili
+      — `set_privacy_settings` calisma zamani durumunu degistirir; ACL uzerinden ucdan uca
+        test: `turning_durable_memory_off_at_runtime_stops_writes_without_a_restart`
+
+### Notlar
+- **Calisma zamani yalnizca SIKILASTIRIR.** Acilista kapali olan bir anahtar buradan
+  **acilamaz** ve istek `locked-by-env` ile reddedilir. Bu bir kolaylik kisiti degil,
+  acilisin gercegi: `ASUNA_MEMORY_ENABLED=false` iken SQLite dosyasi **hic acilmaz**
+  (`DbState::Disabled`), acilmamis bir DB'ye calisma zamaninda yazilamaz. UI kilitli anahtari
+  tiklatip hata gostermek yerine nedenini onceden yazar (`*AtBoot` alanlari bunun icin var).
+- **`.env` degismez.** Ayar yalnizca calisan process icin gecerli; dosyayi kullanici yonetir,
+  uygulama sessizce duzenlemez. Bu davranis Ayarlar ekraninda **yazili**.
+- **Anahtar "daha az hatirla" yonunu kapatmaz.** Kalici hafiza kapaliyken `memory_create` /
+  `memory_update` `skipped` doner ama `memory_archive`, `memory_delete` ve `memory_delete_all`
+  **calismaya devam eder**. Aksi halde anahtar, kullanicinin kendi verisini temizlemesini
+  engelleyen bir tuzaga donusurdu (PROJECT.md Bolum 20).
+- **Toplu silmenin kapsami dar ve acikca yazili**: yalnizca `memories`. Oturum
+  kayitlari/ozetleri ve diskteki transcript dosyalari silinmez — "hepsini sildim" deyip bir
+  seyi birakmak en kotu sonuc. Silme sonrasi `VACUUM` denenir (serbest sayfalar dosyada
+  kalmasin); `VACUUM` basarisiz olursa islem yine basarili sayilir, hata log'lanir.
+- **Onay bekleyenler UI'i** (`src/components/pending-approvals.tsx`): ASU-034'un
+  `metadata_json.pendingApproval` bayragini gorunur kilar. Onayla = bayragi `false` yapan
+  `memory_update` (diger metadata korunur), Reddet = `memory_delete`. Filtre **UI tarafinda**:
+  `MemoryFilter` bir `pendingApproval` boyutu sunmuyor, son 200 kayit taraniyor. Daha buyuk
+  depolar icin sunucu tarafi filtre gerekir — backend task'i.
+- **Komut olmayan yazma yolu icin process durumu.** Transcript persist bir komut degil,
+  `State` goremez; ayni `Arc<PrivacyState>` acilista `install_process_state` ile process
+  genelinde de kaydedilir. Testlerde kurulmaz (OnceLock geri alinamaz, testler birbirini
+  etkilerdi) — kapali anahtarin davranisi `persist_with_runtime_switch` uzerinden dogrudan
+  olculuyor: dizin bile olusmuyor.
+- **Yeni ACL yuzeyi**: `memory_delete_all` hafiza **yazma** capability'sinde (yazma izni
+  kaldirilinca toplu silme de kapanir), `get/set_privacy_settings` ise kendi
+  `asuna-privacy` capability'sinde. Uc adim disiplini (build.rs manifest + capability +
+  tauri.conf) ve `EXPOSED_COMMANDS` senkron testleri guncellendi.
 
 ---
 

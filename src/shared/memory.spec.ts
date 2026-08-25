@@ -1,13 +1,19 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  MEMORY_DELETE_ALL_CONFIRMATION,
   MEMORY_KINDS,
+  MEMORY_PENDING_APPROVAL_KEY,
   MemoryContractError,
   isMemoryKind,
+  isPendingApproval,
+  parseMemoryPurgeResult,
   parseMemoryRecord,
   parseMemoryRecords,
   parseMemoryWriteResult,
   wasMemoryStored,
+  withApprovalGranted,
+  type MemoryRecord,
 } from './memory';
 
 const VALID = {
@@ -184,5 +190,73 @@ describe('parseMemoryWriteResult', () => {
     ]) {
       expect(() => parseMemoryWriteResult(value)).toThrow(MemoryContractError);
     }
+  });
+});
+
+describe('parseMemoryPurgeResult (ASU-037)', () => {
+  it('silinen sayiyi tasir; sifir gecerli bir sonuctur', () => {
+    expect(parseMemoryPurgeResult({ status: 'purged', deleted: 12 })).toEqual({
+      status: 'purged',
+      deleted: 12,
+    });
+    expect(parseMemoryPurgeResult({ status: 'purged', deleted: 0 })).toEqual({
+      status: 'purged',
+      deleted: 0,
+    });
+  });
+
+  it('hafiza kapaliyken atlanan islemi ayirt eder', () => {
+    expect(parseMemoryPurgeResult({ status: 'skipped', reason: 'memory-disabled' })).toEqual({
+      status: 'skipped',
+      reason: 'memory-disabled',
+    });
+  });
+
+  it('bozuk sonucu reddeder', () => {
+    for (const value of [
+      { status: 'deleted', id: 1 },
+      { status: 'purged' },
+      { status: 'purged', deleted: -1 },
+      { status: 'purged', deleted: 2, extra: true },
+      'purged',
+    ]) {
+      expect(() => parseMemoryPurgeResult(value)).toThrow(MemoryContractError);
+    }
+  });
+
+  /** Rust `DELETE_ALL_CONFIRMATION` ile birebir ayni olmali. */
+  it('onay ifadesi Rust sabitiyle ayni', () => {
+    expect(MEMORY_DELETE_ALL_CONFIRMATION).toBe('TUM HAFIZAYI SIL');
+  });
+});
+
+describe('onay bekleyen hafizalar (ASU-034 bayragi)', () => {
+  const withMetadata = (metadataJson: string): MemoryRecord =>
+    parseMemoryRecord({ ...VALID, metadataJson });
+
+  it('yalnizca acik `true` bayragi bekliyor sayilir', () => {
+    expect(isPendingApproval(withMetadata('{"pendingApproval":true}'))).toBe(true);
+    expect(isPendingApproval(withMetadata('{"pendingApproval":false}'))).toBe(false);
+    expect(isPendingApproval(withMetadata('{}'))).toBe(false);
+    // Bozuk/beklenmedik bicim kuyruga dusmez: tek bir bicim hatasi tum listeyi
+    // onay kuyruguna doldurmamali.
+    expect(isPendingApproval(withMetadata('"pendingApproval"'))).toBe(false);
+    expect(isPendingApproval(withMetadata('{"pendingApproval":"true"}'))).toBe(false);
+    expect(MEMORY_PENDING_APPROVAL_KEY).toBe('pendingApproval');
+  });
+
+  it('onaylamak bayragi false yapar, diger metadata"yi korur', () => {
+    const updated: unknown = JSON.parse(
+      withApprovalGranted('{"pendingApproval":true,"extraction":{"promptVersion":"v1"}}'),
+    );
+
+    expect(updated).toEqual({
+      pendingApproval: false,
+      extraction: { promptVersion: 'v1' },
+    });
+  });
+
+  it('bozuk metadata"da bile gecerli JSON uretir', () => {
+    expect(JSON.parse(withApprovalGranted('[]'))).toEqual({ pendingApproval: false });
   });
 });

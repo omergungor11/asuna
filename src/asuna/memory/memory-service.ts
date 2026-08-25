@@ -19,11 +19,13 @@
 import { invoke } from '@tauri-apps/api/core';
 
 import {
+  parseMemoryPurgeResult,
   parseMemoryRecords,
   parseMemoryWriteResult,
   type MemoryDraft,
   type MemoryFilter,
   type MemoryPatch,
+  type MemoryPurgeResult,
   type MemoryRecord,
   type MemoryWriteResult,
 } from '../../shared/memory';
@@ -45,6 +47,7 @@ export const MEMORY_WRITE_COMMANDS = {
   update: 'memory_update',
   archive: 'memory_archive',
   delete: 'memory_delete',
+  deleteAll: 'memory_delete_all',
 } as const;
 
 /** Tek `invoke` noktasi: hata cevirisi her cagri icin ayni sekilde yapilsin. */
@@ -112,4 +115,22 @@ export async function archiveMemory(id: number, archived = true): Promise<Memory
  */
 export async function deleteMemory(id: number): Promise<MemoryWriteResult> {
   return parseMemoryWriteResult(await call(MEMORY_WRITE_COMMANDS.delete, { id }));
+}
+
+/**
+ * **Tum** hafizayi siler (ASU-037).
+ *
+ * Onay ifadesi cagiran taraftan gelir ve Rust'ta birebir karsilastirilir; bu
+ * servis onu **uydurmaz**. Boylece "yanlislikla cagirma" yolu kapali kalir:
+ * `deleteAllMemories()` diye parametresiz bir cagri mumkun degil.
+ *
+ * Ifade tutmazsa `invalid` kodlu [`AsunaStoreError`] firlar ve DB'ye
+ * dokunulmaz.
+ */
+export async function deleteAllMemories(
+  confirmationPhrase: string,
+): Promise<MemoryPurgeResult> {
+  return parseMemoryPurgeResult(
+    await call(MEMORY_WRITE_COMMANDS.deleteAll, { confirmationPhrase }),
+  );
 }

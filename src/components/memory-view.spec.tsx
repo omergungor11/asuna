@@ -16,7 +16,12 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi, type Mock } from 'vitest';
 
 import type { DbStatus } from '../shared/db-status';
-import type { MemoryFilter, MemoryRecord, MemoryWriteResult } from '../shared/memory';
+import type {
+  MemoryFilter,
+  MemoryPatch,
+  MemoryRecord,
+  MemoryWriteResult,
+} from '../shared/memory';
 import { AsunaStoreError } from '../shared/store-error';
 
 import { MemoryView, type MemoryViewPort } from './memory-view';
@@ -67,6 +72,7 @@ interface TestPort extends MemoryViewPort {
   readonly list: Mock<(filter: MemoryFilter) => Promise<readonly MemoryRecord[]>>;
   readonly archive: Mock<(id: number, archived: boolean) => Promise<MemoryWriteResult>>;
   readonly remove: Mock<(id: number) => Promise<MemoryWriteResult>>;
+  readonly update: Mock<(id: number, patch: MemoryPatch) => Promise<MemoryWriteResult>>;
 }
 
 function createPort(initial: readonly MemoryRecord[], status: DbStatus = READY): TestPort {
@@ -95,12 +101,23 @@ function createPort(initial: readonly MemoryRecord[], status: DbStatus = READY):
     return Promise.resolve({ status: 'deleted', id });
   });
 
+  const update = vi.fn((id: number, patch: MemoryPatch): Promise<MemoryWriteResult> => {
+    const index = rows.findIndex((row) => row.id === id);
+    const updated = {
+      ...rows[index]!,
+      ...(patch.metadataJson === undefined ? {} : { metadataJson: patch.metadataJson }),
+    };
+    rows[index] = updated;
+    return Promise.resolve({ status: 'stored', record: updated });
+  });
+
   return {
     rows,
     fetchStatus,
     list,
     archive,
     remove,
+    update,
     lastFilter: (): MemoryFilter | undefined => list.mock.calls.at(-1)?.[0],
   };
 }
@@ -147,6 +164,40 @@ describe('MemoryView — listeleme', () => {
 
     expect(await screen.findByText('<b>enjekte</b>')).toBeInTheDocument();
     expect(document.querySelector('b')).toBeNull();
+  });
+
+  /**
+   * ASU-037: onay bekleyen kayitlar listenin **ustunde** ayri bir bolumde
+   * cikar; normal listede iki kez gorunmezler (ayrinti:
+   * `pending-approvals.spec.tsx`).
+   */
+  it('onay bekleyen hafizalari ayri bolumde gosterir', async () => {
+    const port = createPort([
+      DECISION,
+      record({
+        id: 3,
+        kind: 'profile',
+        title: 'Hassas bir profil notu',
+        metadataJson: '{"pendingApproval":true}',
+      }),
+    ]);
+    render(<MemoryView port={port} {...FAST} />);
+
+    const section = await screen.findByRole('region', { name: 'Onay bekleyen hafızalar' });
+    expect(section).toHaveTextContent('Hassas bir profil notu');
+    expect(
+      screen.getByRole('button', { name: 'Onayla: Hassas bir profil notu' }),
+    ).toBeInTheDocument();
+  });
+
+  it('onay bekleyen kayit yoksa bolum hic cizilmez', async () => {
+    const port = createPort([DECISION]);
+    render(<MemoryView port={port} {...FAST} />);
+
+    await screen.findByText('Wake word yerel kalir');
+    expect(
+      screen.queryByRole('region', { name: 'Onay bekleyen hafızalar' }),
+    ).not.toBeInTheDocument();
   });
 
   it('kayit yokken bos durum yazar', async () => {
@@ -370,7 +421,10 @@ describe('MemoryView — hafiza yokken', () => {
 
   it('liste sorgusu patlarsa hata kodunu anlamli cumleye cevirir', async () => {
     const port = createPort([DECISION]);
-    port.list.mockRejectedValueOnce(new AsunaStoreError('unavailable', 'veritabani kilitli'));
+    // `mockRejectedValue` (Once degil): ASU-037 ile ekran iki sorgu atiyor
+    // (onay kuyrugu + ana liste). Olculen sey "liste sorgusu bozuk" —
+    // sorgulardan yalnizca birincisinin bozulmasi degil.
+    port.list.mockRejectedValue(new AsunaStoreError('unavailable', 'veritabani kilitli'));
     render(<MemoryView port={port} {...FAST} />);
 
     expect(await screen.findByRole('alert')).toHaveTextContent(

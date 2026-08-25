@@ -25,7 +25,7 @@ pub fn get_frontend_config(config: State<'_, AsunaConfig>) -> FrontendConfig {
 /// etkinlestirme) ve `lib.rs` (`generate_handler!`) ile karsilastirir. Yeni bir
 /// `#[tauri::command]` eklerken dort yerin hepsi guncellenmeli.
 #[cfg(test)]
-pub const EXPOSED_COMMANDS: [&str; 10] = [
+pub const EXPOSED_COMMANDS: [&str; 13] = [
     "get_frontend_config",
     "mint_realtime_token",
     "db_status",
@@ -34,8 +34,11 @@ pub const EXPOSED_COMMANDS: [&str; 10] = [
     "memory_update",
     "memory_archive",
     "memory_delete",
+    "memory_delete_all",
     "session_start",
     "session_finalize",
+    "get_privacy_settings",
+    "set_privacy_settings",
 ];
 
 /// Hafizayi **okuyan** komutlar (ASU-031).
@@ -47,13 +50,17 @@ pub const EXPOSED_COMMANDS: [&str; 10] = [
 #[cfg(test)]
 pub const MEMORY_READ_COMMANDS: [&str; 1] = ["memory_list"];
 
-/// Hafizayi **degistiren** komutlar (ASU-031).
+/// Hafizayi **degistiren** komutlar (ASU-031, ASU-037).
+///
+/// `memory_delete_all` de buradadir: ayri bir "silme" capability'si acmak,
+/// yazma yetkisi kaldirilmis bir kurulumda toplu silmeyi acik birakirdi.
 #[cfg(test)]
-pub const MEMORY_WRITE_COMMANDS: [&str; 4] = [
+pub const MEMORY_WRITE_COMMANDS: [&str; 5] = [
     "memory_create",
     "memory_update",
     "memory_archive",
     "memory_delete",
+    "memory_delete_all",
 ];
 
 #[cfg(test)]
@@ -306,6 +313,33 @@ mod tests {
         // Durum komutu ucuncu bir yuzey: hafiza icerigine hic dokunmaz.
         let status_permissions = permissions_of("asuna-db.json");
         assert_eq!(status_permissions, vec![permission_name("db_status")]);
+    }
+
+    /// **ASU-037**: gizlilik anahtarlari kendi capability'sinde durur ve hafiza
+    /// yuzeylerine karismaz. Toplu silme ise hafiza **yazma** dosyasindadir —
+    /// yazma izni kaldirildiginda "tum hafizayi sil" de kapanmali.
+    #[test]
+    fn privacy_settings_have_their_own_capability_and_purge_stays_with_writes() {
+        let privacy_permissions = permissions_of("asuna-privacy.json");
+        assert_eq!(
+            privacy_permissions,
+            vec![
+                permission_name("get_privacy_settings"),
+                permission_name("set_privacy_settings"),
+            ]
+        );
+
+        let write_permissions = permissions_of("asuna-memory-write.json");
+        assert!(write_permissions.contains(&permission_name("memory_delete_all")));
+        assert!(!permissions_of("asuna-memory-read.json")
+            .contains(&permission_name("memory_delete_all")));
+
+        for command in ["get_privacy_settings", "set_privacy_settings"] {
+            assert!(
+                !write_permissions.contains(&permission_name(command)),
+                "`{command}` hafiza yazma capability'sinde de aciliyor"
+            );
+        }
     }
 
     /// Okuma/yazma listeleri `EXPOSED_COMMANDS` ile ayni kumeyi kapsamali;

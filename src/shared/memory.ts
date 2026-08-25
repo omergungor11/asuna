@@ -258,3 +258,96 @@ export function parseMemoryWriteResult(value: unknown): MemoryWriteResult {
 export function wasMemoryStored(result: MemoryWriteResult): boolean {
   return result.status !== 'skipped';
 }
+
+// ---------------------------------------------------------------------------
+// Onay bekleyen hafizalar (ASU-034 mekanizmasi, ASU-037 UI'i)
+// ---------------------------------------------------------------------------
+
+/**
+ * `metadata_json` icindeki onay bayragi — Rust
+ * `extraction::PENDING_APPROVAL_KEY` ile birebir ayni.
+ *
+ * Hassas turlerde (profil, iliski) cikarim kaydi **yazar ama isaretler**;
+ * kullanici acikca onaylayana kadar retrieval o kaydi baglama koymaz
+ * (PROJECT.md Bolum 26 sonu).
+ */
+export const MEMORY_PENDING_APPROVAL_KEY = 'pendingApproval';
+
+/**
+ * Kayit kullanici onayi bekliyor mu?
+ *
+ * Yalnizca `true` bayragi "bekliyor" demektir: bayrak yoksa ya da `false` ise
+ * kayit normaldir. Bozuk/beklenmedik `metadata_json` "bekliyor" sayilmaz —
+ * aksi halde tek bir bicim hatasi tum listeyi onay kuyruguna doldururdu.
+ */
+export function isPendingApproval(record: MemoryRecord): boolean {
+  return readMetadata(record.metadataJson)?.[MEMORY_PENDING_APPROVAL_KEY] === true;
+}
+
+/**
+ * Onay bayragini **kaldirmadan** `false` yapar; diger metadata alanlari
+ * (orn. `extraction.promptVersion`) korunur.
+ *
+ * Bayrak silinmez, `false` yazilir: Rust tarafi "anahtar yoksa ne demek?"
+ * sorusunu bilerek yaratmiyor.
+ */
+export function withApprovalGranted(metadataJson: string): string {
+  const metadata = readMetadata(metadataJson) ?? {};
+  return JSON.stringify({ ...metadata, [MEMORY_PENDING_APPROVAL_KEY]: false });
+}
+
+/** Gecerli bir JSON **nesnesi** ise dondurur; degilse `null`. */
+function readMetadata(metadataJson: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(metadataJson);
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Toplu silme (ASU-037)
+// ---------------------------------------------------------------------------
+
+/**
+ * "Tum hafizayi sil" komutunun istedigi onay ifadesi — Rust
+ * `memory_repository::DELETE_ALL_CONFIRMATION` ile **birebir** ayni.
+ *
+ * Ifade komut imzasinin parcasi: cift onay yalnizca UI'da yasasaydi, tek bir
+ * yanlis `invoke` tum hafizayi silebilirdi. Turkce karakter yok — kullanicinin
+ * klavye duzeninden bagimsiz yazilabilmeli.
+ */
+export const MEMORY_DELETE_ALL_CONFIRMATION = 'TUM HAFIZAYI SIL';
+
+/**
+ * Toplu silmenin sonucu.
+ *
+ * `deleted` bir sayidir cunku kullanici "gercekten gitti mi, kac tane?"
+ * sorusunun cevabini gormeli.
+ */
+export type MemoryPurgeResult =
+  | { readonly status: 'purged'; readonly deleted: number }
+  | { readonly status: 'skipped'; readonly reason: MemorySkipReason };
+
+export function parseMemoryPurgeResult(value: unknown): MemoryPurgeResult {
+  if (!isRecord(value)) {
+    throw new MemoryContractError('Silme sonucu bir nesne olmali.');
+  }
+
+  const read = readers(value, fail);
+
+  switch (value['status']) {
+    case 'purged':
+      assertNoUnexpectedKeys(value, ['status', 'deleted'], failWith);
+      // `count`: sifir gecerli bir sonuc (zaten bos depo).
+      return { status: 'purged', deleted: read.count('deleted') };
+
+    case 'skipped':
+      assertNoUnexpectedKeys(value, ['status', 'reason'], failWith);
+      return { status: 'skipped', reason: read.enumeration('reason', MEMORY_SKIP_REASONS) };
+
+    default:
+      fail('status', 'su degerlerden biri: purged, skipped');
+  }
+}

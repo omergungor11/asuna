@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "asuna-privacy",
+  "description": "Calisma zamani gizlilik anahtarlari (ASU-037): `get_privacy_settings`, `set_privacy_settings`. Ayarlar ekraninin kalici hafiza ve transcript saklama anahtarlarini yeniden baslatmadan degistirmesi icin. Yuzey dar: yalnizca iki boolean okunur/yazilir, secret ya da dosya yolu gecmez. `.env` dosyasina yazilmaz — acilis kaynagi kullanicinin kendi dosyasidir ve uygulama onu duzenlemez. Anahtarlar yalnizca SIKILASTIRILABILIR: acilista kapali olan bir sey calisma zamaninda acilamaz (tipli `locked-by-env` hatasi). Kapsam ana pencere ile sinirlidir; wildcard izin yoktur.",
+  "platforms": ["macOS"],
+  "windows": ["main"],
+  "permissions": ["allow-get-privacy-settings", "allow-set-privacy-settings"]
+}

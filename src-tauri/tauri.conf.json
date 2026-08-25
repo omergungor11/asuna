@@ -64,7 +64,8 @@
         "asuna-db",
         "asuna-memory-read",
         "asuna-memory-write",
-        "asuna-session"
+        "asuna-session",
+        "asuna-privacy"
       ]
     }
   },

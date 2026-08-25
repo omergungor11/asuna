@@ -13,6 +13,13 @@
 //!   iken DB dosyasi hic acilmaz ([`DbState::Disabled`]); komutlar `Ok` doner ve
 //!   yazmanin atlandigini [`MemoryWriteResult::Skipped`] ile **acikca** soyler —
 //!   renderer "kaydettim" sanmaz.
+//! - **Calisma zamani anahtari yalnizca "daha fazla hatirla" yonunu kapatir**
+//!   (ASU-037). [`crate::privacy::PrivacyState`] kapaliyken [`memory_create`] ve
+//!   [`memory_update`] `Skipped` doner; [`memory_archive`], [`memory_delete`] ve
+//!   [`memory_delete_all`] **calismaya devam eder**. Gerekce: kullanici hafizayi
+//!   kapattiktan sonra da var olan kayitlarini gorup silebilmeli — aksi halde
+//!   anahtar, kendi verisini temizlemesini engelleyen bir tuzaga donusurdu
+//!   (PROJECT.md Bolum 20).
 //! - **Ariza sessizce yutulmaz.** `DbState::Unavailable` iken okuma da yazma da
 //!   `unavailable` kodlu hata doner (PROJECT.md Bolum 30).
 //!
@@ -28,10 +35,14 @@
 //!   temizlik politikasi ayri bir is (memory.md T7). Kullanici onlari yine de
 //!   gorup silebilsin diye [`MemoryFilter::include_expired`] var.
 
+use std::sync::Arc;
+
 use rusqlite::types::Value;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Deserializer, Serialize};
 use tauri::State;
+
+use crate::privacy::PrivacyState;
 
 use super::clock;
 use super::model::{MemoryKind, MemoryRecord};
@@ -199,6 +210,18 @@ pub struct MemoryFilter {
 pub enum MemoryWriteResult {
     Stored { record: Box<MemoryRecord> },
     Deleted { id: i64 },
+    Skipped { reason: StoreSkipReason },
+}
+
+/// Toplu silmenin sonucu (ASU-037).
+///
+/// Ayri bir tip cunku sonuc **sayi**dir: kullanici "gercekten gitti mi?"
+/// sorusunun cevabini gormeli. [`MemoryWriteResult::Deleted`] tek bir `id`
+/// tasir ve buraya uymaz.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "kebab-case")]
+pub enum MemoryPurgeResult {
+    Purged { deleted: u32 },
     Skipped { reason: StoreSkipReason },
 }
 
@@ -730,16 +753,50 @@ pub fn delete(db: &AsunaDb, id: i64) -> Result<(), StoreError> {
     Ok(())
 }
 
+/// **Tum** hafiza kayitlarini siler ve silinen sayiyi dondurur.
+///
+/// Silinen satirlarin serbest kalan SQLite sayfalari dosyada kalmasin diye
+/// ardindan `VACUUM` denenir: bu bir gizlilik aksiyonu, "listeden kalksin"
+/// degil. `VACUUM` basarisiz olursa (kilit, disk) islem **basarili sayilir** —
+/// satirlar zaten gitti; artik sayfalar bir sonraki yazmada ustune yazilir.
+/// Sessiz yutma yok: hata yerel log'a duser.
+pub fn delete_all(db: &AsunaDb) -> Result<u32, StoreError> {
+    let deleted = db
+        .with_connection(|connection| connection.execute("DELETE FROM memories", []))
+        .map_err(|error| StoreError::storage(error, "memory_delete_all"))?;
+
+    if let Err(error) = db.with_connection(|connection| connection.execute_batch("VACUUM")) {
+        eprintln!("[asuna] Toplu silme sonrasi VACUUM basarisiz: {error}");
+    }
+
+    Ok(u32::try_from(deleted).unwrap_or(u32::MAX))
+}
+
 // ---------------------------------------------------------------------------
 // Komutlar (kaba taneli — her SQL icin ayri komut yok)
 // ---------------------------------------------------------------------------
+
+/// Toplu silmeyi onaylayan ifade — kullanicinin **birebir** yazmasi gerekir.
+///
+/// Neden bir parametre: cift onay yalnizca UI'da yasarsa, komut hala tek bir
+/// yanlis `invoke` ile tum hafizayi silebilir. Ifade komut imzasinin parcasi
+/// olunca "yanlislikla cagirma" yolu kapanir (ASU-037).
+///
+/// TypeScript aynasi: `src/shared/memory.ts` → `MEMORY_DELETE_ALL_CONFIRMATION`.
+pub const DELETE_ALL_CONFIRMATION: &str = "TUM HAFIZAYI SIL";
 
 /// Yeni hafiza kaydi yazar.
 #[tauri::command]
 pub fn memory_create(
     state: State<'_, DbState>,
+    privacy: State<'_, Arc<PrivacyState>>,
     draft: MemoryDraft,
 ) -> Result<MemoryWriteResult, StoreError> {
+    if !privacy.memory_enabled() {
+        return Ok(MemoryWriteResult::Skipped {
+            reason: StoreSkipReason::MemoryDisabled,
+        });
+    }
     let Some(db) = database(&state)? else {
         return Ok(MemoryWriteResult::Skipped {
             reason: StoreSkipReason::MemoryDisabled,
@@ -763,12 +820,21 @@ pub fn memory_list(
 }
 
 /// Var olan bir kaydin alanlarini gunceller.
+///
+/// Kalici hafiza calisma zamaninda kapaliysa `Skipped` doner: guncelleme de bir
+/// "hatirlama" yazimidir (onay bekleyen bir kaydi onaylamak dahil).
 #[tauri::command]
 pub fn memory_update(
     state: State<'_, DbState>,
+    privacy: State<'_, Arc<PrivacyState>>,
     id: i64,
     patch: MemoryPatch,
 ) -> Result<MemoryWriteResult, StoreError> {
+    if !privacy.memory_enabled() {
+        return Ok(MemoryWriteResult::Skipped {
+            reason: StoreSkipReason::MemoryDisabled,
+        });
+    }
     let Some(db) = database(&state)? else {
         return Ok(MemoryWriteResult::Skipped {
             reason: StoreSkipReason::MemoryDisabled,
@@ -780,6 +846,9 @@ pub fn memory_update(
 }
 
 /// Kaydi arsivler ya da arsivden cikarir.
+///
+/// Calisma zamani gizlilik anahtarina **bakmaz**: arsivleme kullanicinin kendi
+/// temizligidir, Asuna'nin yeni bir sey hatirlamasi degil.
 #[tauri::command]
 pub fn memory_archive(
     state: State<'_, DbState>,
@@ -797,6 +866,8 @@ pub fn memory_archive(
 }
 
 /// Kaydi kalici olarak siler.
+///
+/// Gizlilik anahtarina bakmaz — silme her zaman kullanilabilir olmali.
 #[tauri::command]
 pub fn memory_delete(state: State<'_, DbState>, id: i64) -> Result<MemoryWriteResult, StoreError> {
     let Some(db) = database(&state)? else {
@@ -806,6 +877,38 @@ pub fn memory_delete(state: State<'_, DbState>, id: i64) -> Result<MemoryWriteRe
     };
     delete(db, id)?;
     Ok(MemoryWriteResult::Deleted { id })
+}
+
+/// **Tum** hafizayi siler (ASU-037).
+///
+/// Iki kapi vardir ve ikisi de gecilmelidir: UI'daki iki asamali onay ve
+/// buradaki [`DELETE_ALL_CONFIRMATION`] ifadesi. Ifade eslesmezse DB'ye
+/// **hic dokunulmaz** ve `invalid` kodlu tipli hata doner.
+///
+/// Kapsam bilerek dar: yalnizca `memories` tablosu. Oturum kayitlari/ozetleri ve
+/// diskteki transcript dosyalari bu komutla silinmez — UI bunu acikca yazar,
+/// cunku "hepsini sildim" diyip bir seyi birakmak en kotu sonuctur.
+#[tauri::command]
+pub fn memory_delete_all(
+    state: State<'_, DbState>,
+    confirmation_phrase: String,
+) -> Result<MemoryPurgeResult, StoreError> {
+    if confirmation_phrase != DELETE_ALL_CONFIRMATION {
+        // Mesaj kullanicinin yazdigi metni **tekrarlamaz**.
+        return Err(StoreError::invalid(format!(
+            "`confirmationPhrase` birebir `{DELETE_ALL_CONFIRMATION}` olmali"
+        )));
+    }
+
+    let Some(db) = database(&state)? else {
+        return Ok(MemoryPurgeResult::Skipped {
+            reason: StoreSkipReason::MemoryDisabled,
+        });
+    };
+
+    Ok(MemoryPurgeResult::Purged {
+        deleted: delete_all(db)?,
+    })
 }
 
 #[cfg(test)]
@@ -1525,6 +1628,55 @@ mod tests {
         assert!(!filter.include_expired);
         assert!(!filter.mark_accessed);
         assert_eq!(filter.sort, MemorySort::Recent);
+    }
+
+    /// **ASU-037**: toplu silme gercekten siler ve kac kayit gittigini soyler.
+    #[test]
+    fn delete_all_removes_every_record_and_reports_the_count() {
+        let db = fresh_db();
+        create(&db, &draft(MemoryKind::Decision, "a", "icerik"), NOW).expect("kayit");
+        create(&db, &draft(MemoryKind::Idea, "b", "icerik"), NOW).expect("kayit");
+        let archived = create(&db, &draft(MemoryKind::Task, "c", "icerik"), NOW).expect("kayit");
+        set_archived(&db, archived.id, true, NOW).expect("arsivle");
+
+        // Arsivli kayit da gider: "tum hafiza" gercekten tumu demek.
+        assert_eq!(delete_all(&db).expect("toplu silme"), 3);
+
+        let remaining = list(
+            &db,
+            &MemoryFilter {
+                archived: ArchiveFilter::All,
+                include_expired: true,
+                ..MemoryFilter::default()
+            },
+            NOW,
+        )
+        .expect("listeleme");
+        assert!(remaining.is_empty(), "kalan kayit: {remaining:?}");
+
+        // Bos depoda tekrar cagirmak hata degil, yalnizca 0.
+        assert_eq!(delete_all(&db).expect("bos depo"), 0);
+    }
+
+    #[test]
+    fn purge_result_serializes_with_the_expected_contract() {
+        let json =
+            serde_json::to_value(MemoryPurgeResult::Purged { deleted: 12 }).expect("serialize");
+        assert_eq!(json["status"], "purged");
+        assert_eq!(json["deleted"], 12);
+
+        let json = serde_json::to_value(MemoryPurgeResult::Skipped {
+            reason: StoreSkipReason::MemoryDisabled,
+        })
+        .expect("serialize");
+        assert_eq!(json["status"], "skipped");
+        assert_eq!(json["reason"], "memory-disabled");
+    }
+
+    /// Onay ifadesi kod tarafinda sabit; UI ile ayni metin olmali.
+    #[test]
+    fn the_delete_all_confirmation_phrase_is_exact() {
+        assert_eq!(DELETE_ALL_CONFIRMATION, "TUM HAFIZAYI SIL");
     }
 
     /// Cagirandan gelen zaman damgasi da dogrulanir: bozuk bir `now`

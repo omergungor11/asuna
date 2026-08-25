@@ -357,3 +357,155 @@ body,
 .asuna-memory__more {
   align-self: flex-start;
 }
+
+/* --- Onay bekleyen hafizalar (ASU-037) — dikkat cekmeli, korkutmamali. --- */
+
+.asuna-approvals {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  background: #171b12;
+  border: 1px solid #33401f;
+  border-radius: 6px;
+}
+
+.asuna-approvals__title {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.asuna-approvals__hint {
+  margin: 0;
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+
+.asuna-approvals__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.asuna-approvals__item {
+  padding: 8px 10px;
+  background: #12151d;
+  border: 1px solid #22262f;
+  border-radius: 6px;
+}
+
+/* --- Ayarlar sekmesi (ASU-037) — gizlilik kontrol yuzeyi. --- */
+
+.asuna-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(520px, 100%);
+  font-size: 0.85rem;
+  user-select: text;
+}
+
+.asuna-settings__heading {
+  margin: 6px 0 0;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.asuna-settings__note,
+.asuna-settings__explain {
+  margin: 0;
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+
+.asuna-settings__list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.asuna-settings__item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  background: #12151d;
+  border: 1px solid #22262f;
+  border-radius: 6px;
+}
+
+.asuna-settings__switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.asuna-settings__switch input:disabled {
+  cursor: default;
+}
+
+.asuna-settings__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.75rem;
+}
+
+.asuna-settings__field input {
+  padding: 4px 6px;
+  font: inherit;
+  font-size: 0.8rem;
+  color: inherit;
+  background: #12151d;
+  border: 1px solid #22262f;
+  border-radius: 6px;
+}
+
+.asuna-settings__confirm {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.asuna-settings__notice {
+  margin: 0;
+}
+
+.asuna-settings__notice[role='alert'] {
+  padding: 8px 10px;
+  background: #241417;
+  border: 1px solid #4a2126;
+  border-radius: 6px;
+}
+
+.asuna-settings button,
+.asuna-approvals__item button {
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 0.75rem;
+  color: inherit;
+  background: #1b1f2a;
+  border: 1px solid #2a2f3d;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.asuna-settings__danger {
+  /* Yikici aksiyon farkli gorunur ama "acil durum dugmesi" degil. */
+  border-color: #4a2126;
+  background: #241417;
+}
+
+.asuna-settings button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}

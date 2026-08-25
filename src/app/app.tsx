@@ -1,6 +1,7 @@
 import { Suspense, lazy, useState } from 'react';
 
 import { MemoryView } from '../components/memory-view';
+import { SettingsView } from '../components/settings-view';
 import { VoicePanel } from '../components/voice-panel';
 
 /**
@@ -19,6 +20,7 @@ const DebugPanel = import.meta.env.DEV
 const TABS = [
   { id: 'conversation', label: 'Konuşma' },
   { id: 'memory', label: 'Hafıza' },
+  { id: 'settings', label: 'Ayarlar' },
 ] as const;
 
 type TabId = (typeof TABS)[number]['id'];
@@ -80,6 +82,19 @@ export function App(): React.JSX.Element {
           className="asuna-shell__panel"
         >
           <MemoryView />
+        </div>
+      )}
+
+      {/* Ayarlar da yalnizca acikken monte olur: kapali sekme gizlilik
+          ayarlarini sormaz, ekranda bayat bir "acik/kapali" durmaz. */}
+      {tab === 'settings' && (
+        <div
+          id="asuna-panel-settings"
+          role="tabpanel"
+          aria-labelledby="asuna-tab-settings"
+          className="asuna-shell__panel"
+        >
+          <SettingsView />
         </div>
       )}
 

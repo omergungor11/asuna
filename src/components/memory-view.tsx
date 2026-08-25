@@ -25,12 +25,18 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { fetchDbStatus } from '../asuna/memory/db-status-service';
-import { archiveMemory, deleteMemory, listMemories } from '../asuna/memory/memory-service';
+import {
+  archiveMemory,
+  deleteMemory,
+  listMemories,
+  updateMemory,
+} from '../asuna/memory/memory-service';
 import type { DbStatus } from '../shared/db-status';
 import {
   wasMemoryStored,
   type MemoryArchiveFilter,
   type MemoryFilter,
+  type MemoryPatch,
   type MemoryRecord,
   type MemoryWriteResult,
 } from '../shared/memory';
@@ -38,6 +44,7 @@ import {
 import { ALL_KINDS, MemoryFilters, type KindFilterValue } from './memory-filters';
 import { MemoryItem } from './memory-item';
 import { describeMemoryError } from './memory-text';
+import { PendingApprovals } from './pending-approvals';
 
 /** Bir sayfada istenen kayit sayisi. */
 export const MEMORY_PAGE_SIZE = 25;
@@ -54,6 +61,8 @@ export interface MemoryViewPort {
   readonly list: (filter: MemoryFilter) => Promise<readonly MemoryRecord[]>;
   readonly archive: (id: number, archived: boolean) => Promise<MemoryWriteResult>;
   readonly remove: (id: number) => Promise<MemoryWriteResult>;
+  /** Onay bekleyen kaydin bayragini kaldirmak icin (ASU-037). */
+  readonly update: (id: number, patch: MemoryPatch) => Promise<MemoryWriteResult>;
 }
 
 /** Uretim portu: dogrudan servis katmani. */
@@ -62,6 +71,7 @@ const DEFAULT_MEMORY_PORT: MemoryViewPort = {
   list: listMemories,
   archive: archiveMemory,
   remove: deleteMemory,
+  update: updateMemory,
 };
 
 type StatusState =
@@ -247,6 +257,11 @@ export function MemoryView({
     [port, runWrite],
   );
 
+  /** Onay kuyrugu degistiginde ana liste de tazelenir. */
+  const handleApprovalsChanged = useCallback((): void => {
+    setReloadToken((token) => token + 1);
+  }, []);
+
   if (status.phase === 'checking') {
     return (
       <section className="asuna-memory" aria-label="Hafıza">
@@ -291,6 +306,15 @@ export function MemoryView({
 
   return (
     <section className="asuna-memory" aria-label="Hafıza">
+      {/* Onay kuyrugu filtrelerin ustunde: bekleyen bir karar, arama yapmadan
+          once gorulmeli. Kuyruk bossa bolum hic cizilmez. */}
+      <PendingApprovals
+        list={port.list}
+        update={port.update}
+        remove={port.remove}
+        onChanged={handleApprovalsChanged}
+      />
+
       <MemoryFilters
         search={searchDraft}
         kind={kind}

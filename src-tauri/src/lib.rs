@@ -17,6 +17,7 @@ pub mod db;
 pub mod env_file;
 pub mod extraction;
 pub mod pricing;
+pub mod privacy;
 pub mod realtime_token;
 pub mod summary;
 
@@ -50,6 +51,17 @@ pub fn run() {
     // olusturulmaz (PROJECT.md Bolum 20 gizlilik garantisi).
     let memory_enabled = config.memory_enabled;
 
+    // ASU-037: gizlilik anahtarlarinin calisma zamanindaki hali. Acilis degeri
+    // env'den gelir; kullanici Ayarlar'dan **yeniden baslatmadan** kapatabilir.
+    // `.env` dosyasi degismez — kalicilik kullanicinin kendi dosyasindadir.
+    let privacy = std::sync::Arc::new(privacy::PrivacyState::from_boot(
+        config.memory_enabled,
+        config.transcript_storage,
+    ));
+    // Komut olmayan yazma yollari (transcript persist) `State` goremez; ayni
+    // `Arc` process genelinde de kaydedilir.
+    privacy::install_process_state(std::sync::Arc::clone(&privacy));
+
     // `build()` + `run()`, `run(context)` yerine bilerek: DB acilisi
     // `Builder::setup` hook'una konsaydi test kurulumunda calismazdi
     // (ADR-005 "Her iki secenekte de ortaya cikan iki tuzak" / 2) ve acilis
@@ -70,6 +82,8 @@ pub fn run() {
         // gorevinde calisir; renderer'a **acilmaz** (komutu yok) ve
         // `ASUNA_MEMORY_ENABLED=false` iken hic cagrilmaz.
         .manage(std::sync::Arc::new(extraction::ExtractionService::new()))
+        // ASU-037: hafiza yazma yollari config'in ham alanina degil buna bakar.
+        .manage(privacy)
         // Webview'e acilan her komut ayri bir yetki yuzeyidir ve kendi
         // capability kaydiyla birlikte eklenir (`capabilities/`).
         .invoke_handler(tauri::generate_handler![
@@ -81,8 +95,11 @@ pub fn run() {
             db::memory_repository::memory_update,
             db::memory_repository::memory_archive,
             db::memory_repository::memory_delete,
+            db::memory_repository::memory_delete_all,
             db::session_repository::session_start,
-            db::session_repository::session_finalize
+            db::session_repository::session_finalize,
+            privacy::get_privacy_settings,
+            privacy::set_privacy_settings
         ])
         .build(app_context())
         .expect("Tauri uygulamasi baslatilamadi");

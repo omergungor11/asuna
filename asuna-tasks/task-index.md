@@ -93,7 +93,7 @@
 | ASU-034 | Memory extraction pipeline (PROJECT.md Bolum 26) | 3 | L | backend | DONE |
 | ASU-035 | Stage A deterministik retrieval + `SessionBootstrapContext` | 3 | L | backend | PENDING |
 | ASU-036 | Memory UI (listele / ara / sil / arsivle) | 3 | M | frontend | DONE |
-| ASU-037 | Memory gizlilik kontrolleri (toggle'lar) | 3 | S | frontend | PENDING |
+| ASU-037 | Memory gizlilik kontrolleri (toggle'lar) | 3 | S | frontend | DONE |
 | ASU-038 | **M3 kabul testi** — restart sonrasi hatirlama | 3 | M | test | PENDING |
 | ASU-039 | `projects` tablosu + migration | 4 | S | db | PENDING |
 | ASU-040 | `ProjectRegistry` (kayitli proje root'lari) | 4 | M | backend | PENDING |
