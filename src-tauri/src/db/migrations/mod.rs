@@ -34,16 +34,24 @@ pub const V1_DOWN: &str = include_str!("001_memories_sessions.down.sql");
 pub const V2_UP: &str = include_str!("002_session_end_reason.up.sql");
 pub const V2_DOWN: &str = include_str!("002_session_end_reason.down.sql");
 
+/// Migration 3 — `projects` + `project_id` yabanci anahtarlari (ASU-039).
+pub const V3_UP: &str = include_str!("003_projects.up.sql");
+pub const V3_DOWN: &str = include_str!("003_projects.down.sql");
+
 /// Sirali migration tanimlari.
 ///
 /// **Bu vektore yalnizca sona ekleme yapilir.** Araya ekleme ya da silme, daha
 /// once uygulanmis surumlerin anlamini degistirir.
 fn definitions() -> Vec<M<'static>> {
-    vec![M::up(V1_UP).down(V1_DOWN), M::up(V2_UP).down(V2_DOWN)]
+    vec![
+        M::up(V1_UP).down(V1_DOWN),
+        M::up(V2_UP).down(V2_DOWN),
+        M::up(V3_UP).down(V3_DOWN),
+    ]
 }
 
 /// Bu kod surumunun bekledigi sema surumu (`PRAGMA user_version`).
-pub const EXPECTED_SCHEMA_VERSION: u32 = 2;
+pub const EXPECTED_SCHEMA_VERSION: u32 = 3;
 
 /// Migration kumesi. Testler `validate()` icin bunu kullanir.
 pub fn migrations() -> Migrations<'static> {
@@ -61,15 +69,26 @@ pub(super) fn apply(connection: &mut Connection) -> Result<(), DbError> {
 ///
 /// Rust enum'u ve TypeScript union'i bu listeye testlerle baglanir; kimse
 /// listeyi tek tarafli genisletemez.
+///
+/// Kaynak **en son** tanim (`V3_UP`): 003 tabloyu FK eklemek icin yeniden
+/// yaratti, yani gecerli CHECK kisiti oradadir. 001'deki liste ile ayni oldugu
+/// ayrica test ediliyor — yeniden yaratma sirasinda bir deger dusmus olamaz.
 pub fn kinds_declared_in_schema() -> Vec<String> {
-    values_in_check(V1_UP, "CHECK (kind IN (")
+    values_in_check(V3_UP, "CHECK (kind IN (")
 }
 
 /// `sessions.end_reason` CHECK kisitindaki degerleri **sema metninden** okur
 /// (ASU-033). Rust `SessionEndReason` ve TypeScript `SESSION_END_REASONS` bu
 /// listeye testlerle baglidir.
 pub fn end_reasons_declared_in_schema() -> Vec<String> {
-    values_in_check(V2_UP, "end_reason IN (")
+    values_in_check(V3_UP, "end_reason IN (")
+}
+
+/// `projects.status` CHECK kisitindaki degerleri **sema metninden** okur
+/// (ASU-039). Rust `ProjectStatus` ve TypeScript `PROJECT_STATUSES` bu listeye
+/// testlerle baglidir.
+pub fn project_statuses_declared_in_schema() -> Vec<String> {
+    values_in_check(V3_UP, "status IN (")
 }
 
 /// `... IN ('a', 'b')` listesini ayristirir.
@@ -310,6 +329,9 @@ mod tests {
             .expect("index listesi okunmali");
 
         for expected in [
+            "idx_projects_path",
+            "idx_projects_last_opened_at",
+            "idx_projects_status",
             "idx_memories_kind",
             "idx_memories_project_id",
             "idx_memories_importance",
@@ -434,6 +456,312 @@ mod tests {
         assert_eq!(
             end_reasons_declared_in_schema(),
             ["completed", "abandoned", "error"]
+        );
+    }
+
+    // --- Migration 3: `projects` (ASU-039) ----------------------------------
+
+    /// Sema 2'de veri olan bir DB acar; FK zorlamasi **acik** (uretimdeki gibi).
+    fn database_at_version_two_with_foreign_keys_on() -> Connection {
+        let mut connection = Connection::open_in_memory().expect("bellek ici DB");
+        connection
+            .pragma_update(None, "foreign_keys", "ON")
+            .expect("FK zorlamasi acilmali");
+        migrations()
+            .to_version(&mut connection, 2)
+            .expect("sema 2 uygulanmali");
+
+        connection
+            .execute_batch(
+                "INSERT INTO sessions (id, started_at, ended_at, project_id, summary, model, created_at, end_reason)
+                 VALUES (1, '2026-08-25T10:00:00Z', '2026-08-25T10:30:00Z', 'asuna', 'Ozet.', 'gpt-realtime-2.1', '2026-08-25T10:00:00Z', 'completed'),
+                        (2, '2026-08-25T11:00:00Z', NULL, NULL, NULL, 'gpt-realtime-2.1', '2026-08-25T11:00:00Z', NULL);
+
+                 INSERT INTO memories (id, kind, title, content, project_id, importance, confidence, source_session_id, created_at, updated_at)
+                 VALUES (1, 'decision', 'Wake word yerel', 'Cihazda kalir.', 'asuna', 0.9, 1.0, 1, '2026-08-25T10:05:00Z', '2026-08-25T10:05:00Z'),
+                        (2, 'preference', 'Kisa cevap', 'Kod yazarken kisa.', NULL, 0.5, 0.8, NULL, '2026-08-25T10:06:00Z', '2026-08-25T10:06:00Z'),
+                        (3, 'task', 'Eski proje', 'Baska bir etiket.', 'gel-gez-gor', 0.4, 0.7, 1, '2026-08-25T10:07:00Z', '2026-08-25T10:07:00Z');",
+            )
+            .expect("sema 2 verisi yazilmali");
+
+        connection
+    }
+
+    /// **ASU-039 kabul kaniti.** FK eklemek icin tablolar yeniden yaratiliyor;
+    /// bu islemin hicbir satiri, hicbir etiketi ve hicbir hafiza→oturum bagini
+    /// kaybetmemesi gerekiyor.
+    ///
+    /// Ozellikle `source_session_id`: naif bir siralama (`DROP TABLE sessions`
+    /// once) FK acikken ortuk bir DELETE calistirip `ON DELETE SET NULL`
+    /// eylemini tetikler ve "bu hafiza neden hatirlaniyor?" baglarinin
+    /// **tamamini** sessizce silerdi.
+    #[test]
+    fn migration_three_preserves_every_row_label_and_link() {
+        let mut connection = database_at_version_two_with_foreign_keys_on();
+
+        apply(&mut connection).expect("sema 3'e yukseltilmeli");
+
+        let memories: Vec<(i64, Option<String>, Option<i64>)> = connection
+            .prepare("SELECT id, project_id, source_session_id FROM memories ORDER BY id")
+            .and_then(|mut statement| {
+                statement
+                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+                    .collect()
+            })
+            .expect("hafizalar okunmali");
+        assert_eq!(
+            memories,
+            vec![
+                (1, Some("asuna".to_owned()), Some(1)),
+                (2, None, None),
+                (3, Some("gel-gez-gor".to_owned()), Some(1)),
+            ],
+            "yeniden yaratma bir etiketi ya da oturum bagini dusurmus"
+        );
+
+        let sessions: Vec<(i64, Option<String>, Option<String>)> = connection
+            .prepare("SELECT id, project_id, end_reason FROM sessions ORDER BY id")
+            .and_then(|mut statement| {
+                statement
+                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+                    .collect()
+            })
+            .expect("oturumlar okunmali");
+        assert_eq!(
+            sessions,
+            vec![
+                (1, Some("asuna".to_owned()), Some("completed".to_owned())),
+                (2, None, None),
+            ]
+        );
+    }
+
+    /// Devralinan her etiket icin `unlinked` bir satir acilir — ne fazlasi ne
+    /// eksigi. Yol **uydurulmaz**.
+    #[test]
+    fn migration_three_backfills_one_unlinked_project_per_carried_over_label() {
+        let mut connection = database_at_version_two_with_foreign_keys_on();
+        apply(&mut connection).expect("sema 3'e yukseltilmeli");
+
+        let projects: Vec<(String, String, Option<String>, String)> = connection
+            .prepare("SELECT id, name, path, status FROM projects ORDER BY id")
+            .and_then(|mut statement| {
+                statement
+                    .query_map([], |row| {
+                        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                    })?
+                    .collect()
+            })
+            .expect("projeler okunmali");
+
+        assert_eq!(
+            projects,
+            vec![
+                (
+                    "asuna".to_owned(),
+                    "asuna".to_owned(),
+                    None,
+                    "unlinked".to_owned()
+                ),
+                (
+                    "gel-gez-gor".to_owned(),
+                    "gel-gez-gor".to_owned(),
+                    None,
+                    "unlinked".to_owned()
+                ),
+            ]
+        );
+    }
+
+    /// **Kabul kriteri**: proje silinince hafiza silinmez, yalnizca izi kopar.
+    #[test]
+    fn deleting_a_project_keeps_the_memory_and_the_session() {
+        let mut connection = database_at_version_two_with_foreign_keys_on();
+        apply(&mut connection).expect("sema 3'e yukseltilmeli");
+
+        connection
+            .execute("DELETE FROM projects WHERE id = 'asuna'", [])
+            .expect("proje silinebilmeli");
+
+        let (memory_count, linked): (i64, i64) = connection
+            .query_row(
+                "SELECT count(*), count(project_id) FROM memories",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("hafizalar okunmali");
+        assert_eq!(memory_count, 3, "hafiza proje ile birlikte silinmemeli");
+        assert_eq!(
+            linked, 1,
+            "yalnizca silinen projenin etiketi NULL'a dusmeli"
+        );
+
+        let session_project: Option<String> = connection
+            .query_row("SELECT project_id FROM sessions WHERE id = 1", [], |row| {
+                row.get(0)
+            })
+            .expect("oturum okunmali");
+        assert_eq!(session_project, None);
+
+        // Baglantinin kendisi (hafiza -> oturum) etkilenmemeli.
+        let source: Option<i64> = connection
+            .query_row(
+                "SELECT source_session_id FROM memories WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("okunmali");
+        assert_eq!(source, Some(1));
+    }
+
+    /// Kayitli olmayan bir projeye hafiza yazilamaz: FK gercekten zorluyor.
+    #[test]
+    fn an_unknown_project_label_is_rejected_by_the_foreign_key() {
+        let db = fresh_db();
+        insert_memory(
+            &db,
+            "INSERT INTO memories (kind, title, content, project_id, importance, confidence, created_at, updated_at)
+             VALUES ('decision', 't', 'c', 'hic-kayitli-olmayan', 0.5, 0.5, '2026-08-25T10:00:00Z', '2026-08-25T10:00:00Z')",
+        )
+        .expect_err("kayitsiz proje referansi reddedilmeli");
+    }
+
+    /// Yol normalize edilmis olmali: mutlak, sondaki egik cizgi olmadan ve
+    /// filesystem koku olmadan. Ayni dizin iki kez kaydedilemez.
+    #[test]
+    fn project_paths_must_be_absolute_normalised_and_unique() {
+        let db = fresh_db();
+
+        let insert = |path: &str| {
+            db.with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO projects (id, name, path, status, created_at, updated_at)
+                     VALUES (?1, ?1, ?2, 'active', '2026-08-25T10:00:00Z', '2026-08-25T10:00:00Z')",
+                    rusqlite::params![format!("p{}", path.len()), path],
+                )
+            })
+        };
+
+        for rejected in ["gorece/yol", "/tmp/asuna/", "/", "~/Work/asuna"] {
+            insert(rejected).expect_err("normalize edilmemis yol reddedilmeli");
+        }
+
+        insert("/tmp/asuna").expect("normalize edilmis yol kabul edilmeli");
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO projects (id, name, path, status, created_at, updated_at)
+                 VALUES ('ikinci', 'Ikinci', '/tmp/asuna', 'active', '2026-08-25T10:00:00Z', '2026-08-25T10:00:00Z')",
+                [],
+            )
+        })
+        .expect_err("ayni yol iki kez kaydedilemez");
+    }
+
+    /// `unlinked` <=> `path IS NULL`. Tek yonlu bir CHECK, "yolu olan unlinked"
+    /// ya da "yolsuz active" satirlarini sessizce mumkun kilardi.
+    #[test]
+    fn only_unlinked_projects_may_have_a_null_path() {
+        let db = fresh_db();
+
+        let insert = |id: &str, status: &str, path: Option<&str>| {
+            db.with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO projects (id, name, path, status, created_at, updated_at)
+                     VALUES (?1, ?1, ?2, ?3, '2026-08-25T10:00:00Z', '2026-08-25T10:00:00Z')",
+                    rusqlite::params![id, path, status],
+                )
+            })
+        };
+
+        insert("a", "active", None).expect_err("yolsuz `active` kabul edilmemeli");
+        insert("b", "missing", None).expect_err("yolsuz `missing` kabul edilmemeli");
+        insert("c", "unlinked", Some("/tmp/x")).expect_err("yollu `unlinked` kabul edilmemeli");
+
+        insert("d", "unlinked", None).expect("yolsuz `unlinked` gecerli");
+        insert("e", "missing", Some("/tmp/kayip")).expect("kayip proje yolunu korur");
+        // Birden fazla `unlinked` satir: UNIQUE index NULL'lari farkli sayar.
+        insert("f", "unlinked", None).expect("ikinci etiket de yazilabilmeli");
+    }
+
+    #[test]
+    fn project_status_check_rejects_values_outside_the_spec() {
+        let db = fresh_db();
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO projects (id, name, path, status, created_at, updated_at)
+                 VALUES ('x', 'X', '/tmp/x', 'silinmis', '2026-08-25T10:00:00Z', '2026-08-25T10:00:00Z')",
+                [],
+            )
+        })
+        .expect_err("bilinmeyen status reddedilmeli");
+    }
+
+    /// Geri alma etiketleri kaybetmez; ileri sarma ayni `unlinked` satirlari
+    /// yeniden uretir.
+    #[test]
+    fn migration_three_can_be_rolled_back_without_losing_project_labels() {
+        let mut connection = database_at_version_two_with_foreign_keys_on();
+        apply(&mut connection).expect("sema 3'e yukseltilmeli");
+
+        migrations()
+            .to_version(&mut connection, 2)
+            .expect("sema 2'ye donulebilmeli");
+
+        let tables: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'projects'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("sqlite_master okunmali");
+        assert_eq!(tables, 0, "`projects` dusurulmeliydi");
+
+        let labels: Vec<Option<String>> = connection
+            .prepare("SELECT project_id FROM memories ORDER BY id")
+            .and_then(|mut statement| statement.query_map([], |row| row.get(0))?.collect())
+            .expect("etiketler okunmali");
+        assert_eq!(
+            labels,
+            vec![
+                Some("asuna".to_owned()),
+                None,
+                Some("gel-gez-gor".to_owned())
+            ],
+            "geri alma kullanici verisini silmemeli"
+        );
+
+        apply(&mut connection).expect("yeniden ileri sarilmali");
+        let projects: i64 = connection
+            .query_row("SELECT count(*) FROM projects", [], |row| row.get(0))
+            .expect("okunmali");
+        assert_eq!(projects, 2);
+    }
+
+    #[test]
+    fn schema_declares_the_four_project_statuses() {
+        assert_eq!(
+            project_statuses_declared_in_schema(),
+            ["active", "missing", "archived", "unlinked"]
+        );
+    }
+
+    /// 003 `memories` ve `sessions` tablolarini yeniden yaratti. Yeniden
+    /// yazilan CHECK kisitlari orijinalleriyle **birebir** ayni deger kumesini
+    /// tasimali; aksi halde bir `kind` ya da `end_reason` sessizce dusmus olur.
+    #[test]
+    fn the_rebuilt_tables_keep_the_original_check_constraint_values() {
+        assert_eq!(
+            values_in_check(V1_UP, "CHECK (kind IN ("),
+            values_in_check(V3_UP, "CHECK (kind IN ("),
+        );
+        assert_eq!(
+            values_in_check(V2_UP, "end_reason IN ("),
+            values_in_check(V3_UP, "end_reason IN ("),
+        );
+        // Geri alma da ayni kumeyi geri yazmali.
+        assert_eq!(
+            values_in_check(V3_DOWN, "CHECK (kind IN ("),
+            values_in_check(V3_UP, "CHECK (kind IN ("),
         );
     }
 

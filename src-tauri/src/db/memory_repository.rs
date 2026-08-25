@@ -46,6 +46,7 @@ use crate::privacy::PrivacyState;
 
 use super::clock;
 use super::model::{MemoryKind, MemoryRecord};
+use super::project_repository;
 use super::store_error::{database, StoreError, StoreSkipReason};
 use super::{AsunaDb, DbState};
 
@@ -598,6 +599,14 @@ pub fn create(db: &AsunaDb, draft: &MemoryDraft, now: &str) -> Result<MemoryReco
     let record = db
         .with_connection(|connection| {
             let transaction = connection.transaction()?;
+            // 003'ten beri `project_id` bir yabanci anahtar. Etiketin karsiligi
+            // yoksa `unlinked` bir satir acilir — etiket sessizce NULL'a
+            // cekilmez (bkz. `project_repository::ensure_label`).
+            project_repository::ensure_optional_label(
+                &transaction,
+                draft.project_id.as_deref(),
+                &now,
+            )?;
             transaction.execute(
                 "INSERT INTO memories
                    (kind, title, content, summary, project_id, importance, confidence,
@@ -698,13 +707,20 @@ pub fn update(
         .collect::<Vec<String>>()
         .join(", ");
 
+    // Yeni bir proje etiketine tasima da FK'ye tabi (bkz. [`create`]).
+    let new_label = assignments.iter().find_map(|(column, value)| match value {
+        Value::Text(label) if *column == "project_id" => Some(label.clone()),
+        _ => None,
+    });
+
     let mut params: Vec<Value> = assignments.into_iter().map(|(_, value)| value).collect();
-    params.push(Value::Text(now));
+    params.push(Value::Text(now.clone()));
     params.push(Value::Integer(id));
 
     let record = db
         .with_connection(|connection| {
             let transaction = connection.transaction()?;
+            project_repository::ensure_optional_label(&transaction, new_label.as_deref(), &now)?;
             let changed = transaction.execute(
                 &format!("UPDATE memories SET {clause}, updated_at = ? WHERE id = ?"),
                 rusqlite::params_from_iter(params.iter()),

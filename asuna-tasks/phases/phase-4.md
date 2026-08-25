@@ -7,24 +7,48 @@
 >
 > **Onkosul:** Phase 3 ASU-038 gecmis olmali (proje hafizasi projelere baglanacak).
 >
+> **Orchestrator notu (2026-08-25):** ASU-038 (M3 manuel kabul testi) hala acik. Kod ilerliyor —
+> ASU-039..ASU-043 implementasyonu ASU-038 beklemeden yaziliyor cunku bu task'lar Phase 3'un
+> davranisini degistirmiyor, uzerine ekliyor. **Kabul sirasi degismedi:** ASU-038 gecmeden
+> ASU-046 (Phase 4 kabul testi) kapanmaz.
+>
 > **Ilke (PROJECT.md Bolum 15):** Tum repoyu ses oturumuna dokme. Ozetle, dumpleme.
 
 ---
 
 ## ASU-039: `projects` Tablosu + Migration
 
-**Scope**: db | **Boyut**: S | **Durum**: PENDING | **Bagimlilik**: ASU-030
+**Scope**: db | **Boyut**: S | **Durum**: DONE (2026-08-25) | **Bagimlilik**: ASU-030
 
 ### Acceptance Criteria
-- [ ] `projects`: id, name, path, description, status, primary_language, framework,
+- [x] `projects`: id, name, path, description, status, primary_language, framework,
       git_remote (nullable), last_opened_at, created_at, updated_at, metadata_json
       (PROJECT.md Bolum 12.2)
-- [ ] `path` benzersiz (ayni proje iki kez kayitli olmuyor, normalize edilmis yol)
-- [ ] `memories.project_id` ve `sessions.project_id` bu tabloya foreign key ile baglanmis
+- [x] `path` benzersiz (ayni proje iki kez kayitli olmuyor, normalize edilmis yol)
+- [x] `memories.project_id` ve `sessions.project_id` bu tabloya foreign key ile baglanmis
       (ASU-030'da birakilan migration plani uygulanmis)
-- [ ] Proje silinince bagli hafizalarin ne olacagi kararlastirilmis ve migration'da uygulanmis
+- [x] Proje silinince bagli hafizalarin ne olacagi kararlastirilmis ve migration'da uygulanmis
       (onerilen: project_id null'a duser, hafiza silinmez)
-- [ ] Index: path, last_opened_at, status
+- [x] Index: path, last_opened_at, status
+
+### Uygulama notlari
+- Migration `003_projects.up.sql` / `.down.sql`; `EXPECTED_SCHEMA_VERSION = 3`.
+- `projects.id` **TEXT slug** (INTEGER degil): `memories.project_id` 001'den beri metin ve
+  kullanicinin verisi orada. Sayisal id'ye gecis o veriyi tasiyamazdi.
+- SQLite'ta FK eklemenin tek yolu tabloyu yeniden yaratmak. Siralama FK zorlamasi **acikken**
+  de guvenli olacak sekilde secildi: hicbir ebeveyn tablo, cocugu hala ona bakarken
+  dusurulmuyor. Naif siralama `DROP TABLE sessions` ortuk DELETE'i ile
+  `memories.source_session_id` uzerindeki `ON DELETE SET NULL`'u tetikleyip tum
+  "bu neden hatirlaniyor?" baglarini silerdi.
+- Devralinan serbest metin etiketler icin `status = 'unlinked'` satirlari acilir
+  (`path` NULL, sema CHECK'i `unlinked <=> path IS NULL` iki yonlu zorlar). ASU-040 ayni id'li
+  bir dizin kaydedildiginde bu satiri **sahiplenir** — eski hafizalar oksuz kalmaz.
+- `db::project_repository::ensure_label` ayni kurali ileriye donuk uygular: `memory_create`,
+  `memory_update` ve `session_start` bilinmeyen bir etiketle geldiginde etiketi NULL'a cekmez,
+  ona yolsuz bir ev acar. `unlinked` satirlar hicbir dosya sistemi yetkisi tasimaz.
+- Tip aynasi: `src-tauri/src/db/model.rs` (`ProjectRecord`, `ProjectStatus`) +
+  `src/shared/project.ts`; `schema-mirror.spec.ts` tablo **yeniden yaratmalarini** anlayacak
+  sekilde guncellendi (son `CREATE TABLE` gecerli tanimdir).
 
 ---
 

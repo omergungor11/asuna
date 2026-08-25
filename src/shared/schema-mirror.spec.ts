@@ -28,6 +28,7 @@ import { describe, expect, it } from 'vitest';
 
 import { toCamelCase } from './contract';
 import { MEMORY_COLUMNS_NOT_MIRRORED, MEMORY_KINDS, MEMORY_RECORD_KEYS } from './memory';
+import { PROJECT_RECORD_KEYS, PROJECT_STATUSES } from './project';
 import { SESSION_END_REASONS, SESSION_RECORD_KEYS } from './session';
 
 const MIGRATIONS_DIR = 'src-tauri/src/db/migrations';
@@ -43,6 +44,7 @@ const MIGRATIONS_DIR = 'src-tauri/src/db/migrations';
 const MIGRATION_FILES = [
   '001_memories_sessions.up.sql',
   '002_session_end_reason.up.sql',
+  '003_projects.up.sql',
 ] as const;
 
 function readMigration(name: string): string {
@@ -52,12 +54,24 @@ function readMigration(name: string): string {
 /** Tum migration'larin metni, sirayla birlestirilmis. */
 const schema = MIGRATION_FILES.map(readMigration).join('\n');
 
+/**
+ * Bir tablonun **son** `CREATE TABLE` blogunun basladigi konum.
+ *
+ * `lastIndexOf`: SQLite'ta bir tabloya FK eklemenin tek yolu onu yeniden
+ * yaratmaktir (003, `project_id` -> `projects.id`). Yani `memories` ve
+ * `sessions` icin semada birden fazla `CREATE TABLE` blogu var ve gecerli olan
+ * **sonuncusu**. `indexOf` kullanmak, aynayi 001'deki (artik gecmis) tanima
+ * baglar ve bir yeniden yaratmada dusen kolonu sessizce kacirir.
+ */
+function lastCreateOf(table: string): number {
+  const start = schema.lastIndexOf(`CREATE TABLE ${table} (`);
+  expect(start, `\`${table}\` tablosu semada bulunmali`).toBeGreaterThanOrEqual(0);
+  return start;
+}
+
 /** `CREATE TABLE <name> ( ... ) STRICT;` blogundaki kolon adlari, sirasiyla. */
 function createdColumnsOf(table: string): string[] {
-  const start = schema.indexOf(`CREATE TABLE ${table} (`);
-  expect(start, `\`${table}\` tablosu semada bulunmali`).toBeGreaterThanOrEqual(0);
-
-  const body = schema.slice(start);
+  const body = schema.slice(lastCreateOf(table));
   const end = body.indexOf(') STRICT;');
   expect(end, `\`${table}\` tablosu \`) STRICT;\` ile kapanmali`).toBeGreaterThan(0);
 
@@ -71,16 +85,21 @@ function createdColumnsOf(table: string): string[] {
 }
 
 /**
- * Bir tablonun **guncel** kolonlari: `CREATE TABLE` + sonraki migration'larin
- * `ALTER TABLE ... ADD COLUMN`'lari, uygulanma sirasiyla.
+ * Bir tablonun **guncel** kolonlari: son `CREATE TABLE` + ondan **sonra** gelen
+ * `ALTER TABLE ... ADD COLUMN`'lar, uygulanma sirasiyla.
  *
  * Sira onemli: SQLite `ADD COLUMN` ile gelen kolonu tablonun **sonuna** koyar
  * (`PRAGMA table_info` sirasi budur) ve Rust `SESSION_COLUMNS` ile TypeScript
  * `SESSION_RECORD_KEYS` bu siraya gore yazilmistir.
+ *
+ * `ADD COLUMN`'lar son `CREATE TABLE`'dan once kaldiysa (002'nin `end_reason`'i
+ * gibi) tekrar sayilmaz: yeniden yaratma o kolonu zaten govdeye almistir.
  */
 function columnsOf(table: string): string[] {
   const added = [
-    ...schema.matchAll(new RegExp(`ALTER TABLE ${table} ADD COLUMN\\s+([a-z][a-z0-9_]*)`, 'g')),
+    ...schema
+      .slice(lastCreateOf(table))
+      .matchAll(new RegExp(`ALTER TABLE ${table} ADD COLUMN\\s+([a-z][a-z0-9_]*)`, 'g')),
   ].map((match) => match[1] ?? '');
 
   return [...createdColumnsOf(table), ...added];
@@ -151,9 +170,15 @@ describe('sessions tablosu <-> src/shared/session.ts', () => {
     expect(columnsOf('sessions').map(toCamelCase)).toEqual([...SESSION_RECORD_KEYS]);
   });
 
-  it('sonraki migration"larla eklenen kolonlar da aynada', () => {
-    expect(columnsOf('sessions')).toContain('end_reason');
-    expect(createdColumnsOf('sessions')).not.toContain('end_reason');
+  /**
+   * `end_reason` 002'de `ADD COLUMN` ile geldi, 003'te tablo yeniden
+   * yaratilirken govdeye **sonda** yazildi. Ikisi de tablonun sonunu gosterir;
+   * ayna sirasi degismedi.
+   */
+  it('ADD COLUMN ile gelen kolon yeniden yaratmadan sonra da sonda', () => {
+    const columns = columnsOf('sessions');
+    expect(columns).toContain('end_reason');
+    expect(columns.at(-1)).toBe('end_reason');
   });
 
   it('endReason degerleri semadaki CHECK kisitiyla birebir', () => {
@@ -161,15 +186,67 @@ describe('sessions tablosu <-> src/shared/session.ts', () => {
   });
 });
 
+describe('projects tablosu <-> src/shared/project.ts', () => {
+  it('kolon adlari sozlesme alanlariyla birebir esleisiyor (sira dahil)', () => {
+    expect(columnsOf('projects').map(toCamelCase)).toEqual([...PROJECT_RECORD_KEYS]);
+  });
+
+  it('status degerleri semadaki CHECK kisitiyla birebir', () => {
+    expect(valuesInCheck('status IN (')).toEqual([...PROJECT_STATUSES]);
+  });
+
+  /** PROJECT.md Bolum 12.2'deki alan listesi — kaynak spec ile de bagli kalsin. */
+  it('PROJECT.md Bolum 12.2 alanlarinin tamamini tasiyor', () => {
+    for (const field of [
+      'id',
+      'name',
+      'path',
+      'description',
+      'status',
+      'primary_language',
+      'framework',
+      'git_remote',
+      'last_opened_at',
+      'created_at',
+      'updated_at',
+      'metadata_json',
+    ]) {
+      expect(columnsOf('projects')).toContain(field);
+    }
+  });
+
+  /**
+   * `path` hem benzersiz hem sorgulanabilir olmali (ASU-039). Tek UNIQUE index
+   * ikisini birden karsilar; ayri bir `UNIQUE` kisiti + ayri bir index ikinci
+   * bir index uretirdi.
+   */
+  it('path benzersiz ve index"li', () => {
+    expect(schema).toContain('CREATE UNIQUE INDEX idx_projects_path ON projects (path);');
+  });
+
+  /** Yolsuz kayit yalnizca `unlinked` olabilir — iki yonlu CHECK. */
+  it('unlinked <=> path IS NULL kisiti semada', () => {
+    expect(schema).toContain("CHECK ((status = 'unlinked') = (path IS NULL))");
+  });
+});
+
 describe('sema disiplini', () => {
   /**
-   * ASU-030 kabul kriteri: `project_id` alanlari simdilik nullable ve FK'siz;
-   * Phase 4 migration plani semada **not edilmis** olmali.
+   * ASU-030'da birakilan plan ASU-039'da uygulandi: `project_id` artik
+   * `projects(id)`'ye FK ile bagli. `ON DELETE SET NULL` sart — proje silinince
+   * hafiza **silinmez**, yalnizca izi kopar (kabul kriteri).
    */
-  it('project_id icin Phase 4 FK plani semada not edilmis', () => {
-    expect(schema).toContain('ASU-039');
-    expect(schema).toMatch(/project_id\s+TEXT/);
-    expect(schema).not.toMatch(/project_id\s+TEXT[^\n]*REFERENCES/);
+  it('project_id artik projects(id) yabanci anahtari', () => {
+    const declarations = [...schema.matchAll(/project_id\s+TEXT[^\n]*/g)]
+      .map((match) => match[0])
+      // Son tanim gecerli: 001'deki FK'siz hali gecmis, 003'teki hali guncel.
+      .slice(-2);
+
+    expect(declarations).toHaveLength(2);
+    for (const declaration of declarations) {
+      expect(declaration).toContain('REFERENCES projects (id)');
+      expect(declaration).toContain('ON DELETE SET NULL');
+    }
   });
 
   /** Sorgu icin gerekli index'ler (kabul kriteri). */
@@ -180,8 +257,22 @@ describe('sema disiplini', () => {
       'idx_memories_importance',
       'idx_memories_is_archived',
       'idx_memories_created_at',
+      'idx_projects_path',
+      'idx_projects_last_opened_at',
+      'idx_projects_status',
     ]) {
       expect(schema).toContain(index);
+    }
+  });
+
+  /**
+   * 003 `memories` ve `sessions`i FK eklemek icin yeniden yaratti. Eski
+   * kabuklar (`*_old`) migration icinde dusurulmus olmali; kalan bir kabuk
+   * kullanicinin DB'sinde sessizce iki kat yer kaplardi.
+   */
+  it('yeniden yaratmada kullanilan gecici tablolar dusurulmus', () => {
+    for (const shell of ['memories_old', 'sessions_old']) {
+      expect(schema).toContain(`DROP TABLE ${shell};`);
     }
   });
 

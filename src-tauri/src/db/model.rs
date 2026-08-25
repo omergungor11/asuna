@@ -315,6 +315,133 @@ impl SessionRecord {
     }
 }
 
+// ---------------------------------------------------------------------------
+// projects
+// ---------------------------------------------------------------------------
+
+/// Kayitli projenin durumu (ASU-039, migration 003).
+///
+/// Degerler semadaki CHECK kisitindan gelir ve `src/shared/project.ts`
+/// `PROJECT_STATUSES` ile testlerle baglidir.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectStatus {
+    /// Kayitli ve yolu erisilebilir.
+    Active,
+    /// Kayitli ama yol artik yok. Kayit **silinmez** — kullanici diski
+    /// baglamayi unutmus olabilir (ASU-040).
+    Missing,
+    /// Kullanici gecmis icin tutuyor; aktif calisilmiyor.
+    Archived,
+    /// Kayitli kok **yok**: yalnizca hafizada gecen bir proje etiketi.
+    /// `path` bu durumda her zaman NULL'dur ve satir hicbir dosya sistemi
+    /// yetkisi tasimaz (bkz. `db::project_repository`).
+    Unlinked,
+}
+
+impl ProjectStatus {
+    /// Tum degerler — sira semadaki CHECK kisiti ile ayni (test ile baglidir).
+    pub const ALL: [Self; 4] = [Self::Active, Self::Missing, Self::Archived, Self::Unlinked];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Missing => "missing",
+            Self::Archived => "archived",
+            Self::Unlinked => "unlinked",
+        }
+    }
+
+    /// Sessiz default **yok**: bilinmeyen deger `None` doner.
+    pub fn parse(raw: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|status| status.as_str() == raw)
+    }
+
+    /// Bu durumdaki bir projenin kayitli bir kok dizini var mi?
+    ///
+    /// `Unlinked` disindaki her durum bir yol tasir; sema bunu CHECK ile de
+    /// zorlar. Sandbox (ASU-049) yalnizca yolu olan kayitlari gorecek.
+    pub const fn has_registered_root(self) -> bool {
+        !matches!(self, Self::Unlinked)
+    }
+}
+
+impl ToSql for ProjectStatus {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(ToSqlOutput::from(self.as_str()))
+    }
+}
+
+impl FromSql for ProjectStatus {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        let raw = value.as_str()?;
+        Self::parse(raw).ok_or_else(|| FromSqlError::Other("bilinmeyen projects.status".into()))
+    }
+}
+
+/// `projects` satiri (PROJECT.md Bolum 12.2).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectRecord {
+    /// Slug (`asuna`). INTEGER degil: `memories.project_id` 001'den beri TEXT.
+    pub id: String,
+    pub name: String,
+    /// Normalize edilmis, symlink'i cozulmus mutlak yol.
+    /// `None` yalnizca [`ProjectStatus::Unlinked`] icin mumkundur.
+    pub path: Option<String>,
+    pub description: Option<String>,
+    pub status: ProjectStatus,
+    pub primary_language: Option<String>,
+    pub framework: Option<String>,
+    /// Remote **adi** — kimlik bilgisi/token tasiyan URL buraya yazilmaz
+    /// (ASU-042 redaksiyondan gecirir).
+    pub git_remote: Option<String>,
+    /// `None` = hic acilmadi. Tahmin edilmez; kullanicinin acik secimiyle dolar.
+    pub last_opened_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub metadata_json: String,
+}
+
+/// `ProjectRecord`'un okudugu kolonlar — sema kolon sirasiyla ayni.
+pub const PROJECT_COLUMNS: [&str; 12] = [
+    "id",
+    "name",
+    "path",
+    "description",
+    "status",
+    "primary_language",
+    "framework",
+    "git_remote",
+    "last_opened_at",
+    "created_at",
+    "updated_at",
+    "metadata_json",
+];
+
+impl ProjectRecord {
+    pub fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: row.get("id")?,
+            name: row.get("name")?,
+            path: row.get("path")?,
+            description: row.get("description")?,
+            status: row.get("status")?,
+            primary_language: row.get("primary_language")?,
+            framework: row.get("framework")?,
+            git_remote: row.get("git_remote")?,
+            last_opened_at: row.get("last_opened_at")?,
+            created_at: row.get("created_at")?,
+            updated_at: row.get("updated_at")?,
+            metadata_json: row.get("metadata_json")?,
+        })
+    }
+
+    pub fn select_columns() -> String {
+        PROJECT_COLUMNS.join(", ")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -426,6 +553,13 @@ mod tests {
 
         let (session, memory) = db
             .with_connection(|conn| {
+                // 003'ten beri `project_id` bir yabanci anahtar: etiketin bir
+                // karsiligi olmali (bkz. `db::project_repository::ensure_label`).
+                conn.execute(
+                    "INSERT INTO projects (id, name, path, status, created_at, updated_at)
+                     VALUES ('asuna', 'asuna', NULL, 'unlinked', ?1, ?1)",
+                    rusqlite::params!["2026-08-25T10:00:00Z"],
+                )?;
                 conn.execute(
                     "INSERT INTO sessions (started_at, ended_at, model, input_tokens, created_at)
                      VALUES (?1, ?2, ?3, ?4, ?1)",
@@ -482,6 +616,94 @@ mod tests {
         assert_eq!(memory.metadata_json, "{}");
         assert_eq!(memory.last_accessed_at, None);
         assert_eq!(memory.expires_at, None);
+    }
+
+    // --- projects (ASU-039) -------------------------------------------------
+
+    #[test]
+    fn project_status_matches_the_schema_check_constraint() {
+        let from_schema = migrations::project_statuses_declared_in_schema();
+        let from_enum: Vec<String> = ProjectStatus::ALL
+            .iter()
+            .map(|status| status.as_str().to_owned())
+            .collect();
+        assert_eq!(from_enum, from_schema);
+    }
+
+    #[test]
+    fn unknown_project_status_is_rejected() {
+        assert_eq!(ProjectStatus::parse("silinmis"), None);
+        assert_eq!(ProjectStatus::parse("Active"), None);
+        assert!(serde_json::from_str::<ProjectStatus>("\"deleted\"").is_err());
+    }
+
+    /// Yalnizca `unlinked` bir projenin kayitli koku yoktur; sandbox (ASU-049)
+    /// bu ayrima gore filtreleyecek.
+    #[test]
+    fn only_unlinked_projects_lack_a_registered_root() {
+        for status in ProjectStatus::ALL {
+            assert_eq!(
+                status.has_registered_root(),
+                status != ProjectStatus::Unlinked,
+                "{status:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn project_columns_cover_the_table() {
+        let db = AsunaDb::open_in_memory().expect("DB acilmali");
+        let mut actual = table_columns(&db, "projects");
+        actual.sort();
+
+        let mut expected: Vec<String> = PROJECT_COLUMNS
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect();
+        expected.sort();
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn project_rows_round_trip_through_the_database() {
+        let db = AsunaDb::open_in_memory().expect("DB acilmali");
+
+        let project = db
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO projects
+                       (id, name, path, description, status, primary_language, framework,
+                        git_remote, last_opened_at, created_at, updated_at, metadata_json)
+                     VALUES ('asuna', 'Asuna', '/tmp/asuna', 'Sesli companion', ?1,
+                             'TypeScript', 'Tauri', 'github.com/omergungor/asuna',
+                             '2026-08-25T11:00:00Z', ?2, ?2, '{\"pinned\":true}')",
+                    rusqlite::params![ProjectStatus::Active, "2026-08-25T10:00:00Z"],
+                )?;
+                conn.query_row(
+                    &format!("SELECT {} FROM projects", ProjectRecord::select_columns()),
+                    [],
+                    ProjectRecord::from_row,
+                )
+            })
+            .expect("kayit okunmali");
+
+        assert_eq!(project.id, "asuna");
+        assert_eq!(project.status, ProjectStatus::Active);
+        assert_eq!(project.path.as_deref(), Some("/tmp/asuna"));
+        assert_eq!(project.primary_language.as_deref(), Some("TypeScript"));
+        assert_eq!(
+            project.git_remote.as_deref(),
+            Some("github.com/omergungor/asuna")
+        );
+
+        let json = serde_json::to_value(&project).expect("serialize");
+        let object = json.as_object().expect("JSON nesnesi");
+        assert!(object.contains_key("primaryLanguage"));
+        assert!(object.contains_key("lastOpenedAt"));
+        assert!(object.contains_key("gitRemote"));
+        assert!(!object.contains_key("primary_language"));
+        assert_eq!(json["status"], "active");
     }
 
     /// Renderer'a giden JSON `camelCase`; `snake_case` uygulama icine sizmaz.
