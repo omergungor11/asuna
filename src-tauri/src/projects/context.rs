@@ -24,8 +24,13 @@
 //!   cozuldukten sonra uygulanir — kok icindeki `README.md -> ~/.ssh/id_ed25519`
 //!   gibi bir bag boylece takilir.
 //! - Cozulen yol kok **disina** cikiyorsa dosya okunmaz (symlink escape).
-//! - `.git/config` icerigi ozete **hic girmez**: yalnizca remote adi turetilir
-//!   ve kimlik bilgisi/token redaksiyondan gecirilir (ASU-042 ile ayni kural).
+//! - `.git/config` **hic acilmaz** (ASU-049): dosya blok listesine girdi, cunku
+//!   repo-yerel remote URL'i `https://kullanici:ghp_TOKEN@github.com/...`
+//!   bicimiyle canli bir token tasiyabilir ve `[credential]` bolumu helper
+//!   ayarlarini barindirir. Remote **adi** artik tek bir yerden geliyor:
+//!   ASU-042'nin `git remote get-url origin` ciktisi, [`sanitise_remote_url`]
+//!   ile redakte edilmis halde ([`super::view::collect`] kaydeder). Iki ayri
+//!   turetme yolu olmasi zaten ikisinin zamanla ayrisma riskiydi.
 //!
 //! # "Guncel proje" belirsizse
 //!
@@ -77,15 +82,16 @@ enum SourceKind {
     NodeManifest,
     /// `Cargo.toml` / `pyproject.toml`: minimal TOML taramasi.
     TomlManifest,
-    /// `.git/config`: icerigi ozete girmez, yalnizca remote adi turetilir.
-    GitConfig,
 }
 
 /// Okunacak dosyalar — PROJECT.md Bolum 15'teki sira.
 ///
 /// **Bu liste sabittir.** Model ya da renderer buraya bir dosya ekleyemez;
 /// "sadece su dosyayi da oku" diye bir yuzey yok.
-const CONTEXT_SOURCES: [(&str, SourceKind); 8] = [
+///
+/// `.git/config` ASU-049'da listeden **cikarildi** (modul dokumantasyonu):
+/// dosya blok listesine girdi, remote adi ASU-042 yolundan geliyor.
+const CONTEXT_SOURCES: [(&str, SourceKind); 7] = [
     ("PROJECT.md", SourceKind::Prose),
     ("README.md", SourceKind::Prose),
     ("CLAUDE.md", SourceKind::Prose),
@@ -93,7 +99,6 @@ const CONTEXT_SOURCES: [(&str, SourceKind); 8] = [
     ("package.json", SourceKind::NodeManifest),
     ("pyproject.toml", SourceKind::TomlManifest),
     ("Cargo.toml", SourceKind::TomlManifest),
-    (".git/config", SourceKind::GitConfig),
 ];
 
 // ---------------------------------------------------------------------------
@@ -278,7 +283,10 @@ impl ProjectContextService {
             status: project.status,
             primary_language: collected.detected.primary_language.clone(),
             framework: collected.detected.framework.clone(),
-            git_remote: collected.detected.git_remote.clone(),
+            // ASU-049: `.git/config` artik acilmiyor. Remote adi ASU-042
+            // yolundan geliyor ve **kayda** yaziliyor ([`super::view::collect`]);
+            // burada yalnizca kayitli deger yansitiliyor, tahmin edilmiyor.
+            git_remote: project.git_remote.clone(),
             total_chars: collected.total_chars,
             max_chars: MAX_TOTAL_CONTEXT_CHARS,
             budget_exhausted: collected.budget_exhausted,
@@ -302,9 +310,11 @@ impl ProjectContextService {
         // Tespit edilen metadata kayda islenir — ama yalnizca **degistiyse**:
         // her okumada bir UPDATE atmak, salt okuma gibi gorunen bir cagriyi
         // sessiz bir yazma yoluna cevirirdi.
+        // `git_remote` bu karsilastirmada **yok**: bu modul artik onu
+        // uretmiyor, yalnizca kayittan yansitiyor. Karsilastirmaya dahil etmek
+        // her cagride bosuna bir yazma denemesi uretirdi.
         let changed = project.primary_language != summary.primary_language
-            || project.framework != summary.framework
-            || project.git_remote != summary.git_remote;
+            || project.framework != summary.framework;
         if changed {
             registry::record_detected_metadata(
                 db,
@@ -396,11 +406,6 @@ fn collect_sources(root: &Path) -> Collected {
         };
 
         match kind {
-            SourceKind::GitConfig => {
-                // Icerik ozete **girmez**; yalnizca remote adi turetilir.
-                detected.git_remote = git_remote_from_config(&read.content);
-                continue;
-            }
             SourceKind::NodeManifest => {
                 let (excerpt, hint) = summarise_node_manifest(&read.content);
                 stack_candidates.push(hint);
@@ -821,39 +826,6 @@ fn join_capped(items: &[String]) -> String {
     } else {
         shown.join(", ")
     }
-}
-
-/// `.git/config` icinden remote **adini** turetir.
-///
-/// Deger ozete ham girmez: once URL'den kimlik bilgisi (`https://user:token@`)
-/// atilir, sonra sonuc [`redact_sensitive_text`]'ten gecer. Yani hem yapisal
-/// hem desen tabanli iki kapi var (ASU-042 ile ayni kural).
-pub fn git_remote_from_config(content: &str) -> Option<String> {
-    let mut in_origin = false;
-    let mut first_remote: Option<String> = None;
-
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') {
-            in_origin = trimmed.starts_with("[remote ") && trimmed.contains("\"origin\"");
-            continue;
-        }
-        let Some((key, value)) = trimmed.split_once('=') else {
-            continue;
-        };
-        if key.trim() != "url" {
-            continue;
-        }
-        let sanitised = sanitise_remote_url(value.trim());
-        if in_origin {
-            return sanitised;
-        }
-        if first_remote.is_none() {
-            first_remote = sanitised;
-        }
-    }
-
-    first_remote
 }
 
 /// Remote URL'ini **kimlik bilgisi tasimayan** bir ada indirger.
@@ -1279,10 +1251,13 @@ mod tests {
 
     // --- Git remote ---------------------------------------------------------
 
-    /// `.git/config` icerigi ozete girmez; remote yalnizca **ad** olarak ve
-    /// kimlik bilgisi atilmis halde doner.
+    /// **ASU-049**: `.git/config` artik hic acilmiyor — blok listesinde.
+    ///
+    /// Dosyanin icerigi (token dahil) ozete hicbir bicimde girmez ve bu modul
+    /// remote adi **turetmez**; o is ASU-042'nin `git remote get-url` yolunda
+    /// ([`super::view::collect`] kaydeder).
     #[test]
-    fn the_git_remote_never_carries_credentials() {
+    fn the_repo_local_git_config_is_never_opened() {
         let temp = TempDir::new("remote");
         let root = temp.root("asuna");
         write(
@@ -1291,14 +1266,14 @@ mod tests {
             "[core]\n\trepositoryformatversion = 0\n[remote \"origin\"]\n\turl = https://omer:ghp_COK_GIZLI_TOKEN@github.com/omergungor/asuna.git\n",
         );
 
+        // Blok listesi kapisi dosyanin kendisinde de kapali olmali.
+        assert!(crate::security::blocklist::is_blocked(&root.join(".git/config")).is_some());
+
         let db = db();
         registered_current(&db, &root);
         let summary = summary_of(&ProjectContextService::new(), &db);
 
-        assert_eq!(
-            summary.git_remote.as_deref(),
-            Some("github.com/omergungor/asuna")
-        );
+        assert_eq!(summary.git_remote, None, "bu modul remote turetmemeli");
         let serialised = serde_json::to_string(&summary).expect("serialize");
         assert!(!serialised.contains("ghp_COK_GIZLI_TOKEN"), "{serialised}");
         assert!(
@@ -1306,6 +1281,34 @@ mod tests {
             "{serialised}"
         );
         assert!(source(&summary, ".git/config").is_none());
+    }
+
+    /// Kayitli `git_remote` degeri ozete **yansitilir** (uretilmez): ASU-042
+    /// yazar, bu modul okur.
+    #[test]
+    fn a_recorded_remote_is_reflected_into_the_summary() {
+        let temp = TempDir::new("remote-recorded");
+        let root = temp.root("asuna");
+        write(&root, "README.md", "Asuna");
+
+        let db = db();
+        let project_id = registered_current(&db, &root);
+        registry::record_detected_metadata(
+            &db,
+            &project_id,
+            &DetectedMetadata {
+                git_remote: Some("github.com/omergungor/asuna".to_owned()),
+                ..DetectedMetadata::default()
+            },
+            NOW,
+        )
+        .expect("yazilmali");
+
+        let summary = summary_of(&ProjectContextService::new(), &db);
+        assert_eq!(
+            summary.git_remote.as_deref(),
+            Some("github.com/omergungor/asuna")
+        );
     }
 
     #[test]
@@ -1335,25 +1338,6 @@ mod tests {
                 "girdi: {raw}"
             );
         }
-    }
-
-    /// `origin` varsa o secilir; yoksa ilk remote. Tahmin degil, sabit kural.
-    #[test]
-    fn origin_wins_over_other_remotes() {
-        let config = "[remote \"upstream\"]\n\turl = https://github.com/ust/repo.git\n\
-                      [remote \"origin\"]\n\turl = https://github.com/benim/repo.git\n";
-        assert_eq!(
-            git_remote_from_config(config).as_deref(),
-            Some("github.com/benim/repo")
-        );
-
-        let only_upstream = "[remote \"upstream\"]\n\turl = https://github.com/ust/repo.git\n";
-        assert_eq!(
-            git_remote_from_config(only_upstream).as_deref(),
-            Some("github.com/ust/repo")
-        );
-
-        assert_eq!(git_remote_from_config("[core]\n\tbare = false\n"), None);
     }
 
     // --- Onbellek -----------------------------------------------------------

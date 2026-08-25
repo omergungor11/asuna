@@ -43,7 +43,7 @@ use crate::db::{AsunaDb, DbState};
 use super::context::{ContextUnknownReason, ProjectContext, ProjectContextService, ProjectSummary};
 use super::git_metadata::{self, GitMetadata};
 use super::handoff::{self, HandoffRead};
-use super::registry::{self, RegistryError};
+use super::registry::{self, DetectedMetadata, RegistryError};
 
 /// Komut ciktisinin olculen toplam karakter tavani.
 ///
@@ -119,7 +119,7 @@ pub fn collect(
     db: &AsunaDb,
     service: &ProjectContextService,
 ) -> Result<ProjectContextView, RegistryError> {
-    let summary = match service.current(db)? {
+    let mut summary = match service.current(db)? {
         ProjectContext::Unknown { reason, message } => {
             return Ok(ProjectContextView::Unknown { reason, message });
         }
@@ -130,9 +130,53 @@ pub fn collect(
     let git = git_metadata::collect(root);
     let handoff = handoff::read(root);
 
+    record_remote(db, service, &mut summary, &git)?;
+
     Ok(ProjectContextView::Known {
         project: Box::new(fit_to_budget(summary, git, handoff)),
     })
+}
+
+/// Remote adini kayda isler — **tek** turetme yolu (ASU-049).
+///
+/// ASU-049'da `.git/config` blok listesine girdi, cunku repo-yerel remote URL'i
+/// canli bir token tasiyabilir. Remote adi artik yalnizca ASU-042'nin
+/// `git remote get-url origin` ciktisindan geliyor ve
+/// [`super::context::sanitise_remote_url`] ile redakte edilmis halde geliyor.
+/// Iki ayri turetme yolu tutmak, ikisinin zamanla farkli seyler soylemesi
+/// riskiydi.
+///
+/// Yazma yalnizca **degistiyse**: salt okuma gorunen bir cagriyi her seferinde
+/// bir UPDATE'e cevirmemek icin (`context::current` ile ayni kural). Git remote
+/// okunamadiysa kayitli deger **silinmez** — "git calismadi" bilgisi
+/// "remote yok" demek degil.
+fn record_remote(
+    db: &AsunaDb,
+    service: &ProjectContextService,
+    summary: &mut ProjectSummary,
+    git: &GitMetadata,
+) -> Result<(), RegistryError> {
+    let Some(remote) = git.remote.clone() else {
+        return Ok(());
+    };
+    if summary.git_remote.as_deref() == Some(remote.as_str()) {
+        return Ok(());
+    }
+
+    registry::record_detected_metadata(
+        db,
+        &summary.project_id,
+        &DetectedMetadata {
+            git_remote: Some(remote.clone()),
+            ..DetectedMetadata::default()
+        },
+        &crate::db::clock::now_utc(),
+    )?;
+    summary.git_remote = Some(remote);
+    // Onbellekteki ozet eski `git_remote` degerini tasiyor; bosaltilmazsa
+    // sonraki her cagri ayni UPDATE'i tekrar denerdi.
+    service.invalidate(&summary.project_id);
+    Ok(())
 }
 
 /// Uc kaynagin toplamini [`MAX_VIEW_CHARS`] icine sokar.
@@ -256,6 +300,93 @@ mod tests {
             max_chars: crate::projects::context::MAX_TOTAL_CONTEXT_CHARS,
             budget_exhausted: false,
         }
+    }
+
+    /// **ASU-049 regresyonu**: `.git/config` blok listesine girdikten sonra
+    /// remote adinin **tek** kaynagi ASU-042'nin `git remote get-url` yolu.
+    /// Bu test o zincirin ucundan ucuna kopmadigini olcuyor: git'ten okunan
+    /// deger kayda islenir, ozete yansir ve token tasimaz.
+    #[test]
+    fn the_git_remote_reaches_the_summary_through_the_git_cli_path() {
+        use std::process::{Command, Stdio};
+
+        let git = |root: &Path, args: &[&str]| -> bool {
+            Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false)
+        };
+
+        let unique = format!(
+            "asuna-view-remote-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        );
+        let root = std::env::temp_dir().join(unique);
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("gecici dizin");
+        std::fs::write(root.join("README.md"), b"# Asuna\n").expect("README");
+
+        if !git(&root, &["init", "-b", "asuna-dali"]) {
+            eprintln!("[test] `git` bulunamadi — CLI testi atlandi.");
+            let _ = std::fs::remove_dir_all(&root);
+            return;
+        }
+        // Remote URL'i **canli bir token tasiyor**: tam da `.git/config`i
+        // bloklamamizin sebebi.
+        assert!(git(
+            &root,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://omer:ghp_COK_GIZLI_TOKEN@github.com/omergungor/asuna.git",
+            ]
+        ));
+
+        let db = AsunaDb::open_in_memory().expect("bellek ici DB");
+        let now = "2026-08-25T10:00:00Z";
+        let id = match registry::add(&db, root.to_str().expect("UTF-8"), None, now)
+            .expect("proje eklenmeli")
+        {
+            crate::projects::registry::ProjectAddOutcome::Registered { project } => project.id,
+            crate::projects::registry::ProjectAddOutcome::AlreadyRegistered { project } => {
+                project.id
+            }
+        };
+        registry::set_current(&db, &id, now).expect("guncel proje");
+
+        let service = ProjectContextService::new();
+        let view = collect(&db, &service).expect("baglam");
+        let known = view.known().expect("proje bilinmeli");
+
+        assert_eq!(
+            known.summary.git_remote.as_deref(),
+            Some("github.com/omergungor/asuna"),
+            "remote git CLI yolundan gelmeli"
+        );
+        assert_eq!(known.git.remote, known.summary.git_remote);
+
+        let serialised = serde_json::to_string(&view).expect("serialize");
+        assert!(!serialised.contains("ghp_COK_GIZLI_TOKEN"), "{serialised}");
+
+        // Ikinci cagri ayni cevabi verir ve yeni bir yazma denemesi uretmez.
+        let again = collect(&db, &service).expect("baglam");
+        assert_eq!(
+            again.known().expect("bilinmeli").summary.git_remote,
+            known.summary.git_remote
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     fn loaded(blockers: usize, decisions: usize, item_chars: usize) -> HandoffRead {

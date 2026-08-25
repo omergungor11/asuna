@@ -130,26 +130,77 @@ Mevcut durum: tek komut (`get_frontend_config`), tek pencere (`main`),
 Bunun doğal sonucu: webview'da harici origin **yüklenmez**. Uzak içerik (link, iframe,
 model çıktısındaki URL) sistem tarayıcısına açılır, webview'a değil.
 
-## 6. Path sandbox (plan — Phase 5)
+## 6. Path sandbox (ASU-049 — uygulandı)
 
-Henüz kod yok; mimari kural şimdiden sabit:
+Kod: `src-tauri/src/security/sandbox.rs` (çözüm + okuma kapısı) ve
+`src-tauri/src/security/blocklist.rs` (tek merkezî blok listesi). Tamamı Rust tarafında:
+renderer güvenilmez, dolayısıyla **root'u da yolu da o seçemez**.
 
 ```text
 tool args ──▶ [renderer: schema doğrulama (UX)] ──▶ IPC ──▶ Rust:
-    kayıtlı proje root'u al  (renderer root SEÇMEZ)
-      → normalize + realpath ile ÇÖZ
-        → root prefix kontrolü   (string startsWith YETMEZ)
-          → blocklist glob'u (symlink çözümünden SONRA uygula)
-            → boyut / binary kontrolü
-              → izin ver, audit'e yaz
+  resolve_in_project(project_id, relative)
+    1. registry'den kayıtlı kök           (yalnızca `active`; renderer root SEÇMEZ)
+    2. kökü canonicalize                  (kökün KENDİSİ symlink olabilir)
+    3. göreceli yolun LEKSİK çözümü       (`.`/`..` diske dokunmadan sayılır)
+    4. aday = kök + leksik yol
+    5. adayın KENDİSİ canonicalize        (symlink çözümü; yol yoksa en yakın var
+                                           olan ata + kalan bileşenler)
+    6. sonuç hâlâ kök altında mı?         (Path::starts_with — BİLEŞEN bazlı,
+                                           string startsWith YETMEZ)
+    7. blocklist (çözülmüş TAM yol üstünde, symlink çözümünden SONRA)
+    → SandboxedPath   ──▶ read_text: düz dosya mı → boyut → binary → UTF-8
 ```
 
-- Yazma MVP'de yalnızca `.asuna/notes/` altına. Başka hiçbir yere yazma yok.
-- Proje root'ları kullanıcı tarafından **explicit** kaydedilir; "her yeri tara" davranışı yok.
-- Blocklist tek merkezî modülde durur (`.env*`, `~/.ssh/**`, `*.pem`, keychain, cloud
-  credential'ları — tam liste `asuna-config/security.md` Bölüm 1). Tool'lar kendi
-  kopyasını tutmaz.
-- Sandbox mantığı için unit test **zorunlu** (`asuna-config/testing.md`).
+**Reddetme tipli.** `SandboxViolation` 15 varyant taşır ve her biri ayrı bir cevaptır:
+`not_registered`, `root_missing`, `empty`, `too_long`, `null_byte`, `absolute`, `tilde`,
+`traversal`, `symlink_escape`, `blocklisted`, `not_a_file`, `not_found`, `too_large`,
+`binary`, `unreadable`. `is_escape_attempt()` bunlardan dördünü (kaçış denemesi) ayırır —
+"dosya yok" ile "`../../.ssh` denendi" kullanıcıya aynı şey gibi sunulmaz.
+`audit_outcome()` her ihlali `approval_state = not_requested` + yol içermeyen bir
+`result_summary`'ye çevirir; **sessizce boş içerik dönmek yasak**.
+
+**Tip düzeyinde koruma.** `SandboxedPath` yalnızca `resolve_in_project` /
+`resolve_in_root` ile üretilebilir (`RegisteredRoot` ile aynı desen). Bir fonksiyon
+`&Path` yerine `SandboxedPath` alıyorsa kontrolün yapıldığı derleme zamanında okunur.
+
+**Kararlar ve gerekçeleri**
+
+| Karar | Gerekçe |
+|---|---|
+| `..` **leksik** çözülür, `canonicalize`'dan önce | Var olmayan dosya için de karar verilebilsin ("dosya yok" ≠ "kaçış denendi"); ayrıca `link/../x` linkin *hedefinin* üstüne değil kök içindeki `x`e çözülür — kabuk semantiğinden daha kısıtlayıcı yorum bilerek seçildi |
+| `canonicalize` yine de çağrılır | Leksik çözüm symlink görmez; kök içindeki bir bağın dışarıyı göstermesi ancak gerçek çözümle yakalanır (`symlink_escape`) |
+| Percent-encoding **decode EDİLMEZ** | `%2F` decode etmek "hangi katman kaç kez çözer?" sorusunu açar (çift-decode açıkları). Ham metin tek bir dosya adı bileşeni olur: kökten kaçamaz, yalnızca anlamsızlaşır ve okuma `not_found` ile düşer |
+| `~` genişletilmez | Kabuk sözdizimi; hangi home dizini olduğu tahmin edilmez (`projects::registry` ile aynı kural) |
+| Blocklist **çözülmüş tam yol** üstünde | Kökün kendi bileşenleri de taranır: `~/.ssh` ya da `~/secrets/x` proje olarak kaydedilse bile altındaki dosyalar `blocklisted` döner. Bilinçli yanlış pozitif |
+| Traversal kontrolü blocklist'ten **önce** | Kaçış leksik olarak, adın ne olduğu sorulmadan karara bağlanır: `../../.ssh/id_ed25519` → `traversal` (`blocklisted` değil) |
+| 256 KiB üstü **reddedilir**, kırpılmaz | Kırpma bir sunum kararı ve ASU-051'in işi; güvenlik katmanının kırpması "ne kadarını gördüm?" cevabını iki yere dağıtırdı |
+
+**Blok listesi (ASU-049 genişlemesi).** `.env*`, `*.pem/*.key/*.p12/*.p8/*.keystore/*.jks`,
+`*.keychain`/`*.keychain-db`, `.ssh/` `.aws/` `.azure/` `.kube/` `gcloud/` `secrets/`
+`Keychains/` dizinleri, `.npmrc` `.netrc` `.pgpass` `.gitconfig` `.git-credentials`
+`.pypirc`, `**/credentials*`. Bu turda eklenenler:
+
+- Anahtar adları artık **ön ek** olarak eşleşir (`id_rsa.pub`, `id_ed25519_sk`,
+  `id_ecdsa-cert.pub`) — `.pub` zararsız görünür ama yanında özel anahtarın durduğunu
+  ele verir.
+- **`.git/config` komple bloklandı** (submodule'ler dahil: yolun herhangi bir bileşeni
+  `.git` ise ve dosya adı `config` ise). Repo-yerel remote URL'i
+  `https://kullanıcı:ghp_TOKEN@github.com/...` biçiminde canlı token taşıyabilir.
+  Kaybedilen bilgi yok: remote **adı** artık tek bir yerden geliyor — ASU-042'nin
+  `git remote get-url origin` çıktısı, `sanitise_remote_url` ile redakte edilmiş halde
+  (`projects::view::collect` kaydeder). İki ayrı türetme yolu zaten ikisinin zamanla
+  ayrışma riskiydi.
+
+**Değişmeyenler.** Yazma MVP'de yalnızca `.asuna/notes/` altına. Proje root'ları kullanıcı
+tarafından **explicit** kaydedilir; "her yeri tara" davranışı yok. Blocklist tek modülde
+durur, tool'lar kendi kopyasını tutmaz.
+
+**Test.** `sandbox.rs` içinde `case_01` … `case_31` numaralı **31 kötü yol vakası**
+(kabul kriteri minimum 15) + 4 pozitif kontrol (kök içi symlink **izinli**, kökün kendisi
+symlink, gürültülü ama içeride kalan yollar, sıradan dosya) + sözleşme testleri (her ihlal
+audit satırına çevrilebiliyor, hiçbir mesaj yol sızdırmıyor). Her vaka **hangi varyantın**
+döndüğünü assert eder — "reddedildi" demek yetmez. Testler gerçek geçici dizin ve **gerçek
+symlink** oluşturur; sahte filesystem yok.
 
 ## 7. Ses gizliliği (mimari sonuç)
 
@@ -173,7 +224,7 @@ ASU-008b spike'ında ölçülüyor.**
 |---|---|---|
 | T1 | Token minting'in gerçek implementasyonu + hata/yenileme davranışı | ASU-011 |
 | T2 | `isBrowserEnvironment()` / `ek_` guard'ının bundle'da aktif olduğunu assert eden test | Phase 1 (`voice.md` V8) |
-| T3 | Path sandbox + blocklist kodu ve testleri | ASU-049, ASU-055 |
+| ~~T3~~ | ~~Path sandbox + blocklist kodu ve testleri~~ — kapandı (ASU-049, Bölüm 6). Uçtan uca kabul senaryosu ASU-055'te | ASU-055 |
 | T4 | Redaction pattern seti (log, hata, `arguments_redacted`, session summary) | ASU-055 |
 | T5 | Navigasyon kısıtı: harici URL'lerin sistem tarayıcısına yönlendirilmesi | Phase 1/2 |
 | T6 | Keychain'e geçiş (`.env` → macOS Keychain) | Post-MVP, PROJECT.md 20 |

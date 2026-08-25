@@ -17,6 +17,26 @@
 //! - "Acik onay ile okunabilir" bir kapi **bu MVP'de yok**. Boyle bir kapi
 //!   acilirsa cagiran taraf kullaniciya neyi okuyacagini gostermek ve
 //!   `tool_events`'e yazmak zorunda kalacak; o karar Phase 5'in (ASU-047/048).
+//!
+//! # ASU-049 genislemesi
+//!
+//! Liste [`super::sandbox`] tarafindan **cozulmus tam yol** uzerinde cagriliyor.
+//! Bu turda eklenenler:
+//!
+//! - Anahtar dosyalari artik **on ek** olarak da eslesiyor: `id_rsa.pub`,
+//!   `id_ed25519_sk`, `id_ecdsa-cert.pub` ... Tam ad listesi `.pub` gibi zararsiz
+//!   gorunen ama yaninda ozel anahtari bulundugunu ele veren varyantlari
+//!   kaciriyordu.
+//! - Keychain **dosyalari** (`*.keychain`, `*.keychain-db`) — daha once yalnizca
+//!   `Keychains/` dizini bloktaydi; kopyalanmis bir keychain dosyasi listeyi
+//!   atlardi.
+//! - `.git/config` **komple** bloklandi: repo-yerel remote URL'i
+//!   `https://kullanici:ghp_TOKEN@github.com/...` bicimiyle canli bir token
+//!   tasiyabilir ve `[credential]` bolumu helper ayarlarini barindirir.
+//!   Kaybedilen bir sey yok: ASU-042 remote **adini** `git remote get-url`
+//!   ciktisindan alip [`crate::projects::context::sanitise_remote_url`] ile
+//!   redakte ediyor — dosyanin kendisine ihtiyaci yok.
+//! - `.kube/` ve `.config/` altindaki bilinen bulut dizinleri.
 
 use std::path::{Component, Path};
 
@@ -53,10 +73,12 @@ impl BlockReason {
 ///
 /// Kok icinde bir `secrets/` dizini olsa bile gecerli: "projenin kendi
 /// secrets'i" diye bir istisna yok.
-const SENSITIVE_DIRECTORIES: [&str; 8] = [
+const SENSITIVE_DIRECTORIES: [&str; 10] = [
     ".ssh",
     ".aws",
+    ".azure",
     ".gnupg",
+    ".kube",
     "gcloud",
     "secrets",
     "Keychains",
@@ -65,30 +87,46 @@ const SENSITIVE_DIRECTORIES: [&str; 8] = [
 ];
 
 /// Tam dosya adiyla reddedilen anahtar materyali.
-const PRIVATE_KEY_FILES: [&str; 8] = [
-    "id_rsa",
-    "id_dsa",
-    "id_ecdsa",
-    "id_ed25519",
-    "id_ed25519_sk",
-    "id_ecdsa_sk",
-    "identity",
-    "server.key",
-];
+const PRIVATE_KEY_FILES: [&str; 3] = ["identity", "server.key", "authorized_keys"];
+
+/// **On ek** olarak reddedilen anahtar materyali.
+///
+/// Tam ad listesi yetmiyordu: `id_rsa.pub`, `id_ed25519_sk`,
+/// `id_ecdsa-cert.pub` gibi varyantlar hem kendileri bilgi sizdirir hem de
+/// yaninda ozel anahtarin durdugunu ele verir. On ek eslesmesi
+/// (`asuna-config/security.md` Bolum 1: `id_rsa`, `id_ed25519`) hepsini kapatir.
+const PRIVATE_KEY_PREFIXES: [&str; 5] = ["id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "id_dss"];
 
 /// Uzantiyla reddedilen anahtar materyali (kucuk harfe indirgenmis).
-const PRIVATE_KEY_EXTENSIONS: [&str; 8] =
-    ["pem", "key", "p12", "pfx", "keystore", "jks", "asc", "gpg"];
+const PRIVATE_KEY_EXTENSIONS: [&str; 14] = [
+    "pem",
+    "key",
+    "p12",
+    "p8",
+    "pfx",
+    "pkcs12",
+    "ppk",
+    "keystore",
+    "jks",
+    "asc",
+    "gpg",
+    "kdbx",
+    "keychain",
+    "keychain-db",
+];
 
 /// Tam dosya adiyla reddedilen credential depolari.
-const CREDENTIAL_FILES: [&str; 7] = [
+const CREDENTIAL_FILES: [&str; 10] = [
     ".npmrc",
     ".netrc",
     "_netrc",
     ".pgpass",
+    ".my.cnf",
     ".gitconfig",
     ".git-credentials",
     ".pypirc",
+    ".dockercfg",
+    ".s3cfg",
 ];
 
 /// Bu yol okunabilir mi?
@@ -140,6 +178,15 @@ pub fn is_blocked(path: &Path) -> Option<BlockReason> {
         return Some(BlockReason::PrivateKeyMaterial);
     }
 
+    // On ek eslesmesi: `id_rsa`, `id_rsa.pub`, `id_ed25519_sk`,
+    // `id_ecdsa-cert.pub` ... (bkz. modul dokumantasyonu).
+    if PRIVATE_KEY_PREFIXES
+        .iter()
+        .any(|blocked| lowercase.starts_with(blocked))
+    {
+        return Some(BlockReason::PrivateKeyMaterial);
+    }
+
     if let Some(extension) = path.extension().and_then(|value| value.to_str()) {
         if PRIVATE_KEY_EXTENSIONS
             .iter()
@@ -156,7 +203,25 @@ pub fn is_blocked(path: &Path) -> Option<BlockReason> {
         return Some(BlockReason::CredentialStore);
     }
 
+    // Repo-yerel `.git/config`. Dosyanin **tamami** bloklu; icinden bir satir
+    // ayiklamak icin bile acilmaz. Remote adi ASU-042'de `git remote get-url`
+    // ciktisindan redakte edilerek geliyor.
+    //
+    // Dogrudan ust dizin degil, yolun **herhangi bir bileseninde** `.git`
+    // araniyor: submodule'lerin ayari `.git/modules/<ad>/config` altinda durur
+    // ve o dosya da ayni remote URL'ini tasir.
+    if lowercase == "config" && has_component(path, ".git") {
+        return Some(BlockReason::CredentialStore);
+    }
+
     None
+}
+
+/// Yolun bilesenlerinden biri tam olarak `name` mi?
+fn has_component(path: &Path, name: &str) -> bool {
+    path.components().any(
+        |component| matches!(component, Component::Normal(part) if part.eq_ignore_ascii_case(name)),
+    )
 }
 
 /// [`is_blocked`]'in "yol zaten `canonicalize` edilmis" sozlesmesini isaretleyen
@@ -222,6 +287,65 @@ mod tests {
         }
     }
 
+    /// **ASU-049 genislemesi**: anahtar adlari on ek olarak eslesir. `.pub`
+    /// zararsiz gorunur ama yaninda ozel anahtarin durdugunu ele verir.
+    #[test]
+    fn key_file_variants_are_refused_by_prefix() {
+        for path in [
+            "/Users/omer/Work/asuna/id_rsa",
+            "/Users/omer/Work/asuna/id_rsa.pub",
+            "/Users/omer/Work/asuna/id_ed25519_sk",
+            "/Users/omer/Work/asuna/id_ecdsa-cert.pub",
+            "/Users/omer/Work/asuna/id_dsa.old",
+        ] {
+            assert_eq!(
+                blocked(path),
+                Some(BlockReason::PrivateKeyMaterial),
+                "okunmamali: {path}"
+            );
+        }
+    }
+
+    /// Kopyalanmis bir keychain dosyasi `Keychains/` dizini disinda da bloklu.
+    #[test]
+    fn keychain_files_are_refused_outside_the_keychains_directory() {
+        for path in [
+            "/Users/omer/Desktop/yedek/login.keychain-db",
+            "/Users/omer/Work/asuna/eski.keychain",
+            "/Users/omer/Work/asuna/parolalar.kdbx",
+            "/Users/omer/Work/asuna/apple-auth.p8",
+        ] {
+            assert_eq!(
+                blocked(path),
+                Some(BlockReason::PrivateKeyMaterial),
+                "okunmamali: {path}"
+            );
+        }
+    }
+
+    /// **ASU-049 karari**: repo-yerel `.git/config` komple bloklandi — remote
+    /// URL'i canli token tasiyabilir. Ayni adli baska bir `config` dosyasi
+    /// etkilenmez.
+    #[test]
+    fn the_repo_local_git_config_is_refused_but_other_config_files_are_not() {
+        assert_eq!(
+            blocked("/Users/omer/Work/asuna/.git/config"),
+            Some(BlockReason::CredentialStore)
+        );
+        assert_eq!(
+            blocked("/Users/omer/Work/asuna/.git/modules/alt/config"),
+            Some(BlockReason::CredentialStore)
+        );
+
+        for readable in [
+            "/Users/omer/Work/asuna/config",
+            "/Users/omer/Work/asuna/src/config",
+            "/Users/omer/Work/asuna/.github/config",
+        ] {
+            assert_eq!(blocked(readable), None, "okunabilmeli: {readable}");
+        }
+    }
+
     #[test]
     fn credential_stores_and_sensitive_directories_are_refused() {
         for (path, reason) in [
@@ -272,9 +396,12 @@ mod tests {
             "/Users/omer/Work/asuna/package.json",
             "/Users/omer/Work/asuna/Cargo.toml",
             "/Users/omer/Work/asuna/pyproject.toml",
-            "/Users/omer/Work/asuna/.git/config",
             "/Users/omer/Work/asuna/src/keyboard.ts",
             "/Users/omer/Work/asuna/docs/monkey.md",
+            // On ek kurali `id_` ile baslayan her seyi degil, yalnizca bilinen
+            // anahtar adlarini kesiyor.
+            "/Users/omer/Work/asuna/src/identity-provider.ts",
+            "/Users/omer/Work/asuna/src/id_generator.ts",
         ] {
             assert_eq!(blocked(path), None, "okunabilmeli: {path}");
         }

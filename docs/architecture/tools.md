@@ -143,9 +143,9 @@ kozmetik değil (PROJECT.md 19 "Visible action state").
 | ~~T1~~ | ~~`ToolContext` / `ToolResult` tiplerinin kesin şekli~~ — kapandı (ASU-047, `tools/types.ts`) | — |
 | ~~T2~~ | ~~Registry API'si: kayıt, keşif, SDK'ya adaptasyon fonksiyonu~~ — kapandı (ASU-047) | — |
 | T3 | Risk 1 için onay politikası davranışı (`safe` modda sorar mı) | ASU-048 |
-| T4 | Path sandbox implementasyonu: `realpath` + root prefix + symlink escape | ASU-049 |
-| T5 | Blocklist modülünün yeri ve glob eşleşme sırası (symlink çözümünden **sonra**) | ASU-049 |
-| T6 | Max dosya boyutu ve binary tespiti eşikleri | ASU-051 |
+| ~~T4~~ | ~~Path sandbox implementasyonu: `realpath` + root prefix + symlink escape~~ — kapandı (ASU-049, `src-tauri/src/security/sandbox.rs`) | — |
+| ~~T5~~ | ~~Blocklist modülünün yeri ve glob eşleşme sırası~~ — kapandı (ASU-049): tek modül `src-tauri/src/security/blocklist.rs`, eşleşme `canonicalize` **sonrası** | — |
+| ~~T6~~ | ~~Max dosya boyutu ve binary tespiti eşikleri~~ — kapandı (ASU-049): `MAX_READABLE_FILE_BYTES` 256 KiB (aşan **reddedilir**), ilk 8 KiB'de NUL / %10 kontrol baytı → binary. ASU-051 kendi kırpma bütçesini bu tavanın **altında** uygular | — |
 | T7 | Tool timeout varsayılanları ve alt process öldürme davranışı | Phase 5 |
 | T8 | Redaction pattern seti + unit testleri | ASU-055 |
 | T9 | `.asuna/notes/` dizin yerleşimi ve isimlendirme | Phase 5 |
