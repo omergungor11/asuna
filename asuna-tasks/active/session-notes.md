@@ -73,3 +73,27 @@
 - Yeni backlog: ASU-065 (oturum ozeti + transcript temizligi), sunucu tarafli sayfalama.
 - Kullaniciyi bekleyen: ASU-038 M3 sesli kabul testi, gecikme A/B (eagerness=high + WARP),
   KWS gercek mikrofon testi (Phase 2 kilidi).
+
+## 2026-08-25 — Session 1 kapanis kaydi (sonraki session devri)
+
+**Durum:** Phase 0+1+3 tamam (M1 gecti; M3 sesli kabul ASU-038 bekliyor). Phase 4 kod tamam
+(ASU-046 sesli kabul bekliyor). Phase 5: Wave A+B TAMAM — ASU-047 (registry), ASU-050 (audit),
+ASU-048 (approval matrisi), ASU-049 (path sandbox, 31 kotu yol vakasi). 540 Rust + 789 TS
+testi yesil, hepsi push'lu. Uygulama KAPALI (agent rebuild'leri pencereyi acip kapatiyordu).
+
+**Sonraki session ilk adimlar:**
+1. **Wave C**: ASU-051 (read_project_file — migration 005 `outcome` kolonu dahil, karar
+   DECISIONS'ta; sandbox sozlesmesi ASU-049 raporunda: `resolve_in_project` + `read_text` +
+   `audit_outcome`) + ASU-052 (open_project) backend; ASU-053 (approval UI — API sozlesmesi
+   ASU-048 raporunda: `pendingApproval`/`approveTool`/`rejectTool`) + ASU-054 (tools sekmesi)
+   frontend. Sonra ASU-055 otomatize guvenlik testleri + IKINCI Gate 3 review (guvenlik odakli).
+2. **Kullanici manuel test kuyrugu** (tek seansta): M3 Bolum 3 tekrari (hafiza + oturum sil →
+   "hatirlamiyorum"), ASU-038 kapanisi, ASU-046 (proje sesli testi), ASU-055 sesli maddeleri.
+   Test icin `pnpm tauri dev`.
+3. **Phase 2 kilidi kullanicida**: KWS gercek mikrofon testi (~30 dk, `spike/asu-008b-kws`).
+4. Milestone'da graphify tazele (korpus kopyalari eskidi — scratchpad silinmis olabilir,
+   yeniden kopyala).
+
+**Islenecek acik konular:** ASU-066 (Cmd+Q finalize yarisi — task-index'e HENUZ islenmedi),
+gecikme A/B (eagerness=high aktif, WARP kapali denenmedi), API key rotasyonu onerisi,
+`docs/architecture/tools.md`'ye onay akisi bolumu (ASU-048 ekleyemedi — dosya kilitliydi).
