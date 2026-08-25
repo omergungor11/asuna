@@ -65,6 +65,14 @@ Katman mimarileri: `docs/architecture/{voice,memory,tools,security}.md`.
 
 ### Phase 3 kararlari (Gate 3 review, 2026-08-25)
 
+- **Prompt `core.v1` → `core.v2`** (M3 canli test bulgusu, 2026-08-25): kullanici "bunu
+  hafizaya kaydet" deyince Asuna "boyle bir kayit yapamam" diye reddetti — v1, oturum-sonu
+  otomatik kayit mekanizmasindan (ozet → cikarim → kalici hafiza) habersizdi ve durustluk
+  ilkesi geregi yetenegi inkar etti. v2 # Memory bolumune mekanik anlatimi eklendi: oturum
+  icinde yazamaz ama kapaniste islenir; "bunu hatirla" istegine dogru cevap "oturum kapaninca
+  kalici hafizaya islenecek" + noktayi tek cumleyle netlestirmek (pipeline dogru yakalasin).
+  Aktif surum secimi: `src/asuna/prompts/index.ts`.
+
 - **Saklanan metinde redaksiyon zorunlu** (HIGH-2, `asuna-config/security.md` Bolum 5):
   `redact_secrets` ASU-011'den beri yalnizca log/IPC mesajlarini suzuyordu; **kalici** metin
   (oturum ozeti, hafiza adaylari) suzgecsizdi. Suzgec ortak bir module tasindi

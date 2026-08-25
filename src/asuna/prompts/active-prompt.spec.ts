@@ -8,8 +8,16 @@ import { ASUNA_CORE_PROMPT, ASUNA_CORE_PROMPT_VERSION, buildAsunaInstructions } 
  */
 describe('ASUNA_CORE_PROMPT', () => {
   it('bos degil ve tek kaynaktan (index) export ediliyor', () => {
-    expect(ASUNA_CORE_PROMPT_VERSION).toBe('core.v1');
+    expect(ASUNA_CORE_PROMPT_VERSION).toBe('core.v2');
     expect(ASUNA_CORE_PROMPT.trim().length).toBeGreaterThan(200);
+  });
+
+  it('hafiza mekanigini anlatiyor — "kaydedemem" reddi yerine otomatik kayit (core.v2)', () => {
+    expect(ASUNA_CORE_PROMPT).toContain(
+      'cannot write to persistent memory during the conversation',
+    );
+    expect(ASUNA_CORE_PROMPT).toContain('do not refuse');
+    expect(ASUNA_CORE_PROMPT).toContain('oturum kapanınca kalıcı hafızaya işlenecek');
   });
 
   it('kimligi ve gorevi tanimliyor (Bolum 11)', () => {

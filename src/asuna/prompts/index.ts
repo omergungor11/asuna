@@ -10,5 +10,5 @@ export {
   ASUNA_CORE_PROMPT,
   ASUNA_CORE_PROMPT_VERSION,
   buildAsunaInstructions,
-} from './core.v1';
-export type { AsunaInstructionsContext } from './core.v1';
+} from './core.v2';
+export type { AsunaInstructionsContext } from './core.v2';
