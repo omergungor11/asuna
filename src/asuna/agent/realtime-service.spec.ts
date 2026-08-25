@@ -18,6 +18,9 @@ import type {
 } from './realtime-session-port';
 import {
   AsunaRealtimeService,
+  TOOL_FAILURE_PREFIX,
+  toModelOutput,
+  toSdkTool,
   toTurnDetectionSpec,
   type AsunaRealtimeServiceOptions,
 } from './realtime-service';
@@ -25,6 +28,7 @@ import type { EphemeralRealtimeToken } from './realtime-token';
 import type { FrontendConfig } from '../config/frontend-config';
 import { buildAsunaInstructions } from '../prompts';
 import { VoiceStateMachine, type VoiceState } from '../state/voice-state-machine';
+import type { AsunaToolDefinition, ToolResult } from '../tools/types';
 
 const CONFIG: FrontendConfig = {
   realtimeModel: 'gpt-realtime-2.1-mini',
@@ -602,15 +606,16 @@ describe('AsunaRealtimeService — SDK sinyali -> durum eslemesi', () => {
     ]);
   });
 
-  it('Phase 5 tool sinyalleri TOOL_PENDING / AWAITING_APPROVAL yoluna baglanir', () => {
+  /** ASU-044'ten beri bu yol gercekten kullaniliyor (`get_current_project`). */
+  it('tool sinyalleri TOOL_PENDING / AWAITING_APPROVAL yoluna baglanir', () => {
     harness.emit({ type: 'agent_start' });
-    harness.emit({ type: 'tool_start', toolName: 'git_status' });
+    harness.emit({ type: 'tool_start', toolName: 'get_current_project' });
     expect(harness.service.getState()).toBe('TOOL_PENDING');
 
-    harness.emit({ type: 'tool_approval_requested', toolName: 'git_status' });
+    harness.emit({ type: 'tool_approval_requested', toolName: 'get_current_project' });
     expect(harness.service.getState()).toBe('AWAITING_APPROVAL');
 
-    harness.emit({ type: 'tool_end', toolName: 'git_status' });
+    harness.emit({ type: 'tool_end', toolName: 'get_current_project' });
     expect(harness.service.getState()).toBe('ASSISTANT_THINKING');
 
     expect(eventTypes(harness.events)).toEqual([
@@ -867,5 +872,69 @@ describe('AsunaRealtimeService — abonelik', () => {
     expect(harness.service.getState()).toBe('LISTENING');
     expect(eventTypes(seen)).toEqual(['connecting', 'connected']);
     expect(listenerErrors).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SDK `tool()` adaptoru (ASU-044)
+// ---------------------------------------------------------------------------
+
+describe('AsunaToolDefinition -> SDK tool adaptoru', () => {
+  const readOnly: AsunaToolDefinition = {
+    name: 'get_current_project',
+    description: 'Guncel projeyi dondurur.',
+    risk: 0,
+    requiresApproval: false,
+    timeoutMs: 25_000,
+    execute: (): Promise<ToolResult> => Promise.resolve({ ok: true, summary: 'Proje: Asuna' }),
+  };
+
+  it('tanim SDK tool"una birebir tasiniyor', () => {
+    const sdkTool = toSdkTool(readOnly);
+
+    expect(sdkTool.type).toBe('function');
+    expect(sdkTool.name).toBe('get_current_project');
+    expect(sdkTool.description).toBe('Guncel projeyi dondurur.');
+    // Asili kalan bir tool sesli oturumda cevapsiz bir sessizliktir.
+    expect(sdkTool.timeoutMs).toBe(25_000);
+    // Parametresiz: model hangi projenin okunacagini secemez.
+    expect(sdkTool.parameters.properties).toEqual({});
+    expect(sdkTool.strict).toBe(true);
+  });
+
+  /**
+   * `conventions.md` pazarliksiz kurali: risk 2/3 her zaman onay ister. Registry
+   * (ASU-047) gelene kadar zorlama burada; sessizce onaysiz calistirmak yerine
+   * acilista patlar.
+   */
+  it('risk 2+ bir tool onaysiz kaydedilemiyor', () => {
+    expect(() => toSdkTool({ ...readOnly, risk: 2 })).toThrow(AsunaRealtimeError);
+    expect(() => toSdkTool({ ...readOnly, risk: 3, requiresApproval: true })).not.toThrow();
+  });
+
+  it('modele giden metin ozet; basarisizlik acikca isaretleniyor', () => {
+    expect(toModelOutput({ ok: true, summary: 'Proje: Asuna', data: { gizli: 1 } })).toBe(
+      'Proje: Asuna',
+    );
+
+    const failed = toModelOutput({
+      ok: false,
+      summary: 'Proje baglami okunamadi.',
+      errorKind: 'project_context_unavailable',
+    });
+    expect(failed.startsWith(TOOL_FAILURE_PREFIX)).toBe(true);
+    expect(failed).toContain('Proje baglami okunamadi.');
+  });
+
+  /** Yapisal veri ses oturumuna dokulmez (PROJECT.md Bolum 15). */
+  it('`data` alani modele gonderilmiyor', () => {
+    const output = toModelOutput({
+      ok: true,
+      summary: 'Proje: Asuna',
+      data: { path: '/Users/omer/Work/asuna', sources: ['README.md'] },
+    });
+
+    expect(output).not.toContain('sources');
+    expect(output).not.toContain('{');
   });
 });

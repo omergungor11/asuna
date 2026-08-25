@@ -25,7 +25,7 @@ pub fn get_frontend_config(config: State<'_, AsunaConfig>) -> FrontendConfig {
 /// etkinlestirme) ve `lib.rs` (`generate_handler!`) ile karsilastirir. Yeni bir
 /// `#[tauri::command]` eklerken dort yerin hepsi guncellenmeli.
 #[cfg(test)]
-pub const EXPOSED_COMMANDS: [&str; 21] = [
+pub const EXPOSED_COMMANDS: [&str; 22] = [
     "get_frontend_config",
     "mint_realtime_token",
     "db_status",
@@ -42,6 +42,7 @@ pub const EXPOSED_COMMANDS: [&str; 21] = [
     "session_delete",
     "session_clear_all",
     "project_list",
+    "project_context",
     "project_add",
     "project_remove",
     "project_set_current",
@@ -99,9 +100,15 @@ pub const SESSION_WRITE_COMMANDS: [&str; 4] = [
     "session_clear_all",
 ];
 
-/// Kayitli proje koklerini **okuyan** komutlar (ASU-040).
+/// Kayitli proje koklerini **okuyan** komutlar (ASU-040, ASU-044).
+///
+/// `project_context` neden okuma tarafinda: guncel projenin ozetini, git
+/// durumunu ve devir teslim artefaktini dondurur ama hicbirini **degistirmez** —
+/// "guncel proje" secimi bile bu cagriyla kaymaz (o `project_set_current`'in
+/// isi). Yazma iznine konsaydi, salt okunur bir kurulumda Asuna hangi projede
+/// oldugunu soyleyemez hale gelirdi.
 #[cfg(test)]
-pub const PROJECT_READ_COMMANDS: [&str; 1] = ["project_list"];
+pub const PROJECT_READ_COMMANDS: [&str; 2] = ["project_list", "project_context"];
 
 /// Kayitli proje koklerini **degistiren** komutlar (ASU-040).
 ///

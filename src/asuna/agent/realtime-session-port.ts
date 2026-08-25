@@ -46,7 +46,11 @@ export interface RealtimeSessionSpec {
    * gecikme/erken-kesme takasi rebuild olmadan env ile ayarlanabilir (ASU-064).
    */
   readonly turnDetection: TurnDetectionSpec;
-  /** Phase 1'de bos. Phase 5'te (ASU-05x) doldurulacak. */
+  /**
+   * Modele acilan tool'lar. ASU-044'ten beri dolu (`get_current_project`, risk 0);
+   * SDK `tool()` cevrimi `realtime-service.ts` icinde yapilir — SDK tipi bu
+   * dosyaya girmez.
+   */
   readonly tools: readonly AsunaToolDefinition[];
 }
 

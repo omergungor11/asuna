@@ -231,7 +231,7 @@ PROJECT.md Bolum 16. Proje basina kompakt, makine okunur devir teslim artefakti.
 
 ## ASU-044: `get_current_project` Tool (Risk 0)
 
-**Scope**: backend | **Boyut**: M | **Durum**: PENDING | **Bagimlilik**: ASU-042, ASU-043, ASU-013
+**Scope**: backend | **Boyut**: M | **Durum**: DONE (2026-08-25) | **Bagimlilik**: ASU-042, ASU-043, ASU-013
 
 ### Aciklama
 Asuna'nin ilk gercek tool'u. PROJECT.md Bolum 17: risk 0, onay gerektirmez.
@@ -239,13 +239,51 @@ Asuna'nin ilk gercek tool'u. PROJECT.md Bolum 17: risk 0, onay gerektirmez.
 oturumuna dogrudan tanimlanir; Phase 5'te registry'ye tasinir.
 
 ### Acceptance Criteria
-- [ ] Tool donuyor: project id, name, path, git branch, kisa proje ozeti
-- [ ] Tool cagrisi UI'da gorunuyor (`TOOL_PENDING` durumu kullaniliyor)
-- [ ] Kayitli proje yoksa tool bunu acikca donuyor; Asuna proje uyduramiyor
-- [ ] Cikti boyutu sinirli, sema ile dogrulanmis
+- [x] Tool donuyor: project id, name, path, git branch, kisa proje ozeti
+- [x] Tool cagrisi UI'da gorunuyor (`TOOL_PENDING` durumu kullaniliyor)
+- [x] Kayitli proje yoksa tool bunu acikca donuyor; Asuna proje uyduramiyor
+- [x] Cikti boyutu sinirli, sema ile dogrulanmis
 - [ ] Sesli test: "Su an hangi projedeyim?" -> dogru proje ve branch
-- [ ] Tool hata verirse Asuna basarili gibi konusmuyor (PROJECT.md Bolum 30)
-- [ ] Phase 5'te registry'ye tasinacagi kod icinde not edilmis
+      **MANUEL — ASU-046'da** (canli oturum gerektirir; otomatik test kapsami disinda)
+- [x] Tool hata verirse Asuna basarili gibi konusmuyor (PROJECT.md Bolum 30)
+- [x] Phase 5'te registry'ye tasinacagi kod icinde not edilmis
+
+### Uygulama notlari
+- **Tek komut: `project_context`** (`src-tauri/src/projects/view.rs`). Tool ve Projeler sekmesi
+  (ASU-045) ayni komuttan beslenir; iki ayri komut yazmak, ekranda gorunen branch ile Asuna'nin
+  sesli soyledigi branch'in zamanla ayrismasi demekti. Zincir tek yerde kuruluyor:
+  `registry::current` → `ProjectContextService::current` → `git_metadata::collect` → `handoff::read`.
+- `ProjectContextService` `lib.rs`'te **`manage()`** ediliyor. Komut basina yeni ornek kurulsaydi
+  ASU-041'in TTL + parmak izi onbellegi olu kalir, her cagri diski yeniden okurdu.
+- Capability mevcut `asuna-projects-read.json`'a eklendi (yeni dosya acilmadi): komut salt okuma
+  ve "guncel proje" secimini **degistirmiyor**. ACL uc adimi (build.rs manifest + capability +
+  `generate_handler!`) ve `EXPOSED_COMMANDS` senkron testleri guncellendi.
+- **`Unknown` uc nedeni ayri tasiniyor** (`no-registered-project` / `no-current-selection` /
+  `root-missing`) ve tool her biri icin farkli bir yonerge uretiyor: "hangi dizinde
+  calisiyorsun?" ile "disk takili mi?" ayni soru degil. Ucu tek bir "bilmiyorum" kovasina
+  indirgemek modeli proje uydurmaya iterdi. Belirsizlik `ok: true` doner — "bilmiyorum" dogru
+  bir cevaptir, tool hatasi degil.
+- **`GitMetadata::degraded` yutulmuyor**: ozete "git durumu tam okunamadi" satiri olarak giriyor.
+  Bozuk `.asuna/context.json` de (`HandoffRead::Ignored`) gorunur kaliyor.
+- **Dorduncu tavan**: `context.rs` uc tavani zaten uyguluyordu (dosya / kaynak / toplam ozet);
+  `view.rs` ucunun **toplamina** `MAX_VIEW_CHARS = 9000` ekliyor. Kirpma sirasi deterministik ve
+  proje ozetine dokunmuyor: once devir teslim kararlari, sonra blocker'lar, en son commit
+  basliklari. Modele giden ozetin ayrica 700 karakter tavani var.
+- **Modele ham JSON dokulmuyor** (PROJECT.md Bolum 15): tool `ToolResult.summary` (kisa,
+  konusulabilir metin) donduruyor; yapisal veri `data` alaninda kalip UI/audit icin duruyor ve
+  SDK'ya gecmiyor.
+- SDK siniri korundu: `tool()` yalnizca `realtime-service.ts` icinde cagriliyor
+  (`toSdkTool` adaptoru, zod parametresiz sema). Tool tanimi (`src/asuna/tools/get-current-project.ts`)
+  SDK'siz duz veri. `sdk-import-boundary.spec.ts`'e `src/asuna/tools/**` icin ayri bir tarama eklendi.
+- Adaptor **risk 2/3 + onaysiz** bir tool'u kabul etmiyor, acilista patliyor. Registry (ASU-047)
+  gelene kadar bu pazarliksiz kuralin tek zorlama noktasi orasi.
+- `ToolContext.sessionId` `string | null` yapildi ve `null` geciliyor: uydurulmus bir korelasyon
+  kimligi, audit kaydini dogru gorunen ama yanlis bir zincire baglardi. ASU-047 gercek degeri baglayacak.
+- Phase 1'den beri bos duran `AsunaRealtimeServiceOptions.tools` ilk kez doluyor
+  (`use-asuna-session` → `DEFAULT_ASUNA_TOOLS`). `createOpenAiRealtimeSession`'in
+  "tool destegi yok" hatasi kaldirildi.
+- UI: `voice-panel`'deki "Aktif araç" satiri zaten `session.activeTool` gosteriyordu; testle
+  baglandi (`tool_call_started` → tool adi, `tool_call_completed` → bos).
 
 ---
 

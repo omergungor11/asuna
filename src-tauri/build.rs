@@ -48,6 +48,10 @@ fn main() {
             // ASU-040: kayitli proje kokleri (capabilities/asuna-projects-read.json).
             // Salt okuma; renderer parametre veremez.
             "project_list",
+            // ASU-044: guncel projenin baglami — `get_current_project` tool'u ve
+            // Projeler sekmesi ayni komuttan beslenir. Salt okuma; renderer
+            // hangi projenin ya da hangi dosyanin okunacagini secemez.
+            "project_context",
             // ASU-040: proje kaydi (capabilities/asuna-projects-write.json).
             // Komut bir yol metni alir ama yalnizca **var olan**, mutlak,
             // symlink'i cozulmus bir dizini kabul eder; `~` genisletilmez.

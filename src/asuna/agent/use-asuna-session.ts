@@ -64,6 +64,7 @@ import type {
   VoiceStateMachine,
   VoiceTransitionReason,
 } from '../state/voice-state-machine';
+import { DEFAULT_ASUNA_TOOLS } from '../tools';
 import type { SessionUsageInput, TranscriptLineInput } from '../../shared/session';
 
 // ---------------------------------------------------------------------------
@@ -342,7 +343,13 @@ interface SessionFacts {
   readonly connected: boolean;
   /** Hangi modelde konusuluyor (hard-code yok, event'ten gelir). */
   readonly model: string | null;
-  /** Phase 5'te dolacak; Phase 1'de tool yok ama gorunurluk yolu hazir. */
+  /**
+   * Su an calisan tool'un adi (ASU-044'ten beri gercekten doluyor).
+   *
+   * `tool_call_started` ile dolar, `tool_call_completed` ile bosalir; panelde
+   * "Aktif araç" satiri bunu gosterir. Tool cagrisinin gorunmez olmasi, Asuna'nin
+   * arka planda ne yaptigini kullanicidan saklamak demekti (PROJECT.md Bolum 21).
+   */
   readonly activeTool: string | null;
   readonly error: UserFacingError | null;
   /**
@@ -527,6 +534,10 @@ function defaultCreateService(context: AsunaSessionContext): AsunaSessionPort {
   return new AsunaRealtimeService({
     config: context.config,
     stateMachine: context.stateMachine,
+    // ASU-044: Phase 1'den beri bos duran `tools` parametresi ilk kez doluyor.
+    // Hepsi risk 0 / onaysiz; MVP kurali "once salt okuma" (PROJECT.md Bolum 17).
+    // Phase 5'te (ASU-047) bu liste registry'den gelecek.
+    tools: DEFAULT_ASUNA_TOOLS,
     // ASU-035: oturum acilmadan once Stage A baglami cekilir ve talimata
     // enjekte edilir. Hafiza kapali/bozuksa `buildSessionInstructions` durust
     // bir "hatirlamiyorum" satiriyla doner — konusma bloklanmaz.

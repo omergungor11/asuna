@@ -10,6 +10,7 @@
 //! | [`context`] | Kayitli bir projeden guvenli ve kisa ozet (ASU-041) |
 //! | [`git_metadata`] | Salt okuma git durumu: branch, kirli/temiz, son commit'ler (ASU-042) |
 //! | [`handoff`] | `.asuna/context.json` devir teslim artefakti (ASU-043) |
+//! | [`view`] | Yukaridakilerin tek kod yolunda birlestigi `project_context` komutu (ASU-044) |
 //!
 //! # Cakisma kurali
 //!
@@ -20,3 +21,4 @@ pub mod context;
 pub mod git_metadata;
 pub mod handoff;
 pub mod registry;
+pub mod view;

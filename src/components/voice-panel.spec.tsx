@@ -196,6 +196,58 @@ describe('VoicePanel', () => {
     ).toBeInTheDocument();
   });
 
+  /**
+   * ASU-044 kabul kriteri: "tool cagrisi UI'da gorunuyor". Asuna arka planda bir
+   * sey calistiriyorsa kullanici bunu **o an** gormeli (PROJECT.md Bolum 21).
+   */
+  it('calisan tool"un adini "Aktif araç" satirinda gosterir', async () => {
+    let publish: ((event: AsunaRealtimeEvent) => void) | null = null;
+    const options: UseAsunaSessionOptions = {
+      ...createOptions(),
+      createService: (context): AsunaSessionPort => {
+        const listeners = new Set<AsunaRealtimeEventListener>();
+        publish = (event: AsunaRealtimeEvent): void => {
+          for (const listener of [...listeners]) {
+            listener(event);
+          }
+        };
+        return {
+          connect: (): Promise<void> => {
+            context.stateMachine.transition('CONNECTING', 'REALTIME_CONNECTING');
+            context.stateMachine.transition('LISTENING', 'REALTIME_CONNECTED');
+            publish?.({ type: 'connected', model: context.config.realtimeModel });
+            return Promise.resolve();
+          },
+          disconnect: (): void => undefined,
+          interrupt: (): void => undefined,
+          subscribe: (listener): (() => void) => {
+            listeners.add(listener);
+            return (): void => {
+              listeners.delete(listener);
+            };
+          },
+          getState: () => context.stateMachine.getState(),
+        };
+      },
+    };
+
+    render(<VoicePanel options={options} projectPort={NO_PROJECTS} />);
+    await click('Talk to Asuna');
+
+    const emit = (event: AsunaRealtimeEvent): void => {
+      act(() => {
+        publish?.(event);
+      });
+    };
+
+    emit({ type: 'tool_call_started', toolName: 'get_current_project' });
+    expect(screen.getByText('get_current_project')).toBeInTheDocument();
+
+    // Tool bitince satir bosalir: biten bir is "hala calisiyor" gibi durmaz.
+    emit({ type: 'tool_call_completed', toolName: 'get_current_project' });
+    expect(screen.queryByText('get_current_project')).not.toBeInTheDocument();
+  });
+
   it('sohbet arayuzu degil: metin girisi ve gonder butonu yok', () => {
     render(<VoicePanel options={createOptions()} projectPort={NO_PROJECTS} />);
 

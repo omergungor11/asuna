@@ -746,7 +746,10 @@ fn validated_name(raw: &str) -> Result<String, RegistryError> {
 /// `Disabled` burada **hata**: `memory_create` gibi sessizce atlanamaz. "Proje
 /// ekle" dedikten sonra hicbir sey olmamasi ve basari donmesi, kullanicinin
 /// kaydettigini sandigi bir projeyle calismasi demek olurdu.
-fn database(state: &DbState) -> Result<&AsunaDb, RegistryError> {
+///
+/// `pub(crate)`: [`super::view::project_context`] ayni kapiyi kullanir — ikinci
+/// bir "DB kapali mi?" yorumu iki farkli davranis uretirdi.
+pub(crate) fn database(state: &DbState) -> Result<&AsunaDb, RegistryError> {
     match state.access() {
         Ok(Some(db)) => Ok(db),
         Ok(None) => Err(RegistryError::Disabled),

@@ -277,3 +277,368 @@ export function toRegistryError(value: unknown): AsunaRegistryError {
   }
   return new AsunaRegistryError(UNKNOWN_REGISTRY_ERROR_CODE, 'Proje islemi basarisiz oldu.');
 }
+
+// ---------------------------------------------------------------------------
+// Guncel proje baglami — `project_context` (ASU-044)
+// ---------------------------------------------------------------------------
+
+/**
+ * Bu bolum `src-tauri/src/projects/view.rs` (`ProjectContextView`) ve onun
+ * besledigi `context.rs` / `git_metadata.rs` / `handoff.rs` tiplerinin aynasidir.
+ *
+ * # Neden kati parser
+ *
+ * Bu sozlesmenin tuketicisi `get_current_project` tool'u — yani ciktisi
+ * **modele** gidiyor. Sessizce yanlis okunan bir alan, Asuna'nin sesli olarak
+ * yanlis bir branch soylemesi demek. Beklenmedik/eksik alan burada gurultulu
+ * bir hataya donusur ve tool `ok: false` doner (PROJECT.md Bolum 30).
+ *
+ * Projeler sekmesinin (`asuna/projects/project-context.ts`) **hosgorulu** bir
+ * okuyucusu var ve bu bilincli: orada eksik bir alan ekranin bir satirini
+ * bosaltir, burada ise modele yanlis bilgi verirdi.
+ */
+
+/** Ozete giren tek kaynak dosya (`context.rs` `ContextSource` aynasi). */
+export interface ContextSource {
+  /** Kok'e gore dosya adi (`README.md`). Mutlak yol **donmez**. */
+  readonly name: string;
+  /** Kisaltilmis icerik; manifest'lerde ham dosya degil turetilmis ozet. */
+  readonly excerpt: string;
+  /** Icerik kirpildi mi? Sessiz kirpma yok. */
+  readonly truncated: boolean;
+  /** Diskteki ham boyut — "ne kadarini gormedim?" sorusunun cevabi. */
+  readonly sizeBytes: number;
+}
+
+/** Kayitli bir projenin olculmus ozeti (`context.rs` `ProjectSummary` aynasi). */
+export interface ProjectSummary {
+  readonly projectId: string;
+  readonly name: string;
+  readonly path: string;
+  readonly status: ProjectStatus;
+  /** Manifest kanitiyla **tespit edilmis** dil; tahmin degil. */
+  readonly primaryLanguage: string | null;
+  readonly framework: string | null;
+  readonly gitRemote: string | null;
+  readonly sources: readonly ContextSource[];
+  readonly totalChars: number;
+  readonly maxChars: number;
+  /** Toplam butce doldugu icin en az bir kaynak kisaldi/dusuruldu. */
+  readonly budgetExhausted: boolean;
+}
+
+/** Salt okuma git durumu (`git_metadata.rs` `GitMetadata` aynasi). */
+export interface GitMetadata {
+  /** Kokun **kendisi** bir git calisma agaci mi? Ust dizindeki repo sayilmaz. */
+  readonly isRepository: boolean;
+  /** `null` = detached HEAD, depo degil ya da okunamadi. */
+  readonly branch: string | null;
+  readonly detached: boolean;
+  readonly isDirty: boolean;
+  /** Degisen **takip edilen** dosya sayisi (untracked sayilmaz). */
+  readonly changedTrackedFiles: number;
+  /** Son commit basliklari (en yeni once), kirpilmis ve redakte edilmis. */
+  readonly recentCommits: readonly string[];
+  /** Redakte edilmis remote **adi**; URL/token hicbir zaman burada olmaz. */
+  readonly remote: string | null;
+  /**
+   * Bir alt komut basarisiz oldu ya da zaman asimina ugradi.
+   *
+   * Yutulmaz: Asuna bu bayrak aciksa "git durumunu tam okuyamadim" demeli
+   * (PROJECT.md Bolum 30).
+   */
+  readonly degraded: boolean;
+}
+
+/** `.asuna/context.json` semasi (`handoff.rs` `HandoffContext` aynasi). */
+export interface HandoffContext {
+  readonly projectName: string | null;
+  readonly objective: string | null;
+  readonly currentMilestone: string | null;
+  readonly activeTask: string | null;
+  readonly blockers: readonly string[];
+  readonly recentDecisions: readonly string[];
+}
+
+/** Devir teslim dosyasinin neden yok sayildigi (`handoff.rs` aynasi). */
+export const HANDOFF_IGNORE_REASONS = [
+  'invalid-json',
+  'not-an-object',
+  'too-large',
+  'unreadable',
+  'outside-root',
+] as const;
+
+export type HandoffIgnoreReason = (typeof HANDOFF_IGNORE_REASONS)[number];
+
+/**
+ * Devir teslim dosyasinin okunma sonucu.
+ *
+ * Uc durum bilerek ayri: "dosya yok" bir hata degil, "bozuk dosya" bir uyari,
+ * "okundu" bir veri. `absent` ile `ignored`'i birlestirmek, bozuk bir dosyayi
+ * sessizce "bos baglam" gibi gostermek olurdu.
+ */
+export type HandoffRead =
+  | { readonly status: 'loaded'; readonly context: HandoffContext }
+  | { readonly status: 'absent' }
+  | {
+      readonly status: 'ignored';
+      readonly reason: HandoffIgnoreReason;
+      readonly message: string;
+    };
+
+/** Guncel proje biliniyor: ozet + git durumu + devir teslim artefakti. */
+export interface KnownProjectContext {
+  readonly summary: ProjectSummary;
+  readonly git: GitMetadata;
+  readonly handoff: HandoffRead;
+  /** Olculen toplam karakter (ozet + git + devir teslim). */
+  readonly totalChars: number;
+  readonly maxChars: number;
+  /** Tavan asildigi icin en az bir liste kisaldi. */
+  readonly truncated: boolean;
+}
+
+/**
+ * "Guncel proje" neden bilinmiyor? (`context.rs` `ContextUnknownReason`)
+ *
+ * Uc neden **ayri** tutulur cunku Asuna'nin soracagi soru her birinde farkli:
+ * "hangi dizinde calisiyorsun?" ile "disk takili mi?" ayni soru degil. Tek bir
+ * "bilmiyorum" kovasi modeli proje uydurmaya iterdi.
+ */
+export const CONTEXT_UNKNOWN_REASONS = [
+  'no-registered-project',
+  'no-current-selection',
+  'root-missing',
+] as const;
+
+export type ContextUnknownReason = (typeof CONTEXT_UNKNOWN_REASONS)[number];
+
+/** `project_context` komutunun ciktisi. */
+export type ProjectContextView =
+  | { readonly status: 'known'; readonly project: KnownProjectContext }
+  | {
+      readonly status: 'unknown';
+      readonly reason: ContextUnknownReason;
+      readonly message: string;
+    };
+
+const CONTEXT_SOURCE_KEYS = ['name', 'excerpt', 'truncated', 'sizeBytes'] as const;
+
+const PROJECT_SUMMARY_KEYS = [
+  'projectId',
+  'name',
+  'path',
+  'status',
+  'primaryLanguage',
+  'framework',
+  'gitRemote',
+  'sources',
+  'totalChars',
+  'maxChars',
+  'budgetExhausted',
+] as const;
+
+const GIT_METADATA_KEYS = [
+  'isRepository',
+  'branch',
+  'detached',
+  'isDirty',
+  'changedTrackedFiles',
+  'recentCommits',
+  'remote',
+  'degraded',
+] as const;
+
+const HANDOFF_CONTEXT_KEYS = [
+  'projectName',
+  'objective',
+  'currentMilestone',
+  'activeTask',
+  'blockers',
+  'recentDecisions',
+] as const;
+
+const KNOWN_CONTEXT_KEYS = [
+  'summary',
+  'git',
+  'handoff',
+  'totalChars',
+  'maxChars',
+  'truncated',
+] as const;
+
+/** Bos olabilen metin — `readers.text` bos string'i reddeder, alinti bos olabilir. */
+function readMaybeEmptyText(source: Record<string, unknown>, field: string): string {
+  const value = source[field];
+  if (typeof value !== 'string') {
+    fail(field, 'string');
+  }
+  return value;
+}
+
+function readTextList(source: Record<string, unknown>, field: string): readonly string[] {
+  const value = source[field];
+  if (!Array.isArray(value)) {
+    fail(field, 'string dizisi');
+  }
+  return value.map((item) => {
+    if (typeof item !== 'string') {
+      fail(field, 'yalnizca string iceren bir dizi');
+    }
+    return item;
+  });
+}
+
+function parseContextSource(value: unknown): ContextSource {
+  if (!isRecord(value)) {
+    throw new ProjectContractError('Baglam kaynagi bir nesne olmali.');
+  }
+  assertNoUnexpectedKeys(value, CONTEXT_SOURCE_KEYS, failWith);
+
+  const read = readers(value, fail);
+  return {
+    name: read.text('name'),
+    excerpt: readMaybeEmptyText(value, 'excerpt'),
+    truncated: read.boolean('truncated'),
+    sizeBytes: read.count('sizeBytes'),
+  };
+}
+
+export function parseProjectSummary(value: unknown): ProjectSummary {
+  if (!isRecord(value)) {
+    throw new ProjectContractError('Proje ozeti bir nesne olmali.');
+  }
+  assertNoUnexpectedKeys(value, PROJECT_SUMMARY_KEYS, failWith);
+
+  const read = readers(value, fail);
+  const sources = value['sources'];
+  if (!Array.isArray(sources)) {
+    fail('sources', 'bir dizi');
+  }
+
+  return {
+    projectId: read.text('projectId'),
+    name: read.text('name'),
+    path: read.text('path'),
+    status: read.enumeration('status', PROJECT_STATUSES),
+    primaryLanguage: read.nullableText('primaryLanguage'),
+    framework: read.nullableText('framework'),
+    gitRemote: read.nullableText('gitRemote'),
+    sources: sources.map(parseContextSource),
+    totalChars: read.count('totalChars'),
+    maxChars: read.count('maxChars'),
+    budgetExhausted: read.boolean('budgetExhausted'),
+  };
+}
+
+export function parseGitMetadata(value: unknown): GitMetadata {
+  if (!isRecord(value)) {
+    throw new ProjectContractError('Git durumu bir nesne olmali.');
+  }
+  assertNoUnexpectedKeys(value, GIT_METADATA_KEYS, failWith);
+
+  const read = readers(value, fail);
+  return {
+    isRepository: read.boolean('isRepository'),
+    branch: read.nullableText('branch'),
+    detached: read.boolean('detached'),
+    isDirty: read.boolean('isDirty'),
+    changedTrackedFiles: read.count('changedTrackedFiles'),
+    recentCommits: readTextList(value, 'recentCommits'),
+    remote: read.nullableText('remote'),
+    degraded: read.boolean('degraded'),
+  };
+}
+
+export function parseHandoffContext(value: unknown): HandoffContext {
+  if (!isRecord(value)) {
+    throw new ProjectContractError('Devir teslim baglami bir nesne olmali.');
+  }
+  assertNoUnexpectedKeys(value, HANDOFF_CONTEXT_KEYS, failWith);
+
+  const read = readers(value, fail);
+  return {
+    projectName: read.nullableText('projectName'),
+    objective: read.nullableText('objective'),
+    currentMilestone: read.nullableText('currentMilestone'),
+    activeTask: read.nullableText('activeTask'),
+    blockers: readTextList(value, 'blockers'),
+    recentDecisions: readTextList(value, 'recentDecisions'),
+  };
+}
+
+export function parseHandoffRead(value: unknown): HandoffRead {
+  if (!isRecord(value)) {
+    throw new ProjectContractError('Devir teslim sonucu bir nesne olmali.');
+  }
+
+  const read = readers(value, fail);
+  switch (value['status']) {
+    case 'loaded':
+      assertNoUnexpectedKeys(value, ['status', 'context'], failWith);
+      return { status: 'loaded', context: parseHandoffContext(value['context']) };
+
+    case 'absent':
+      assertNoUnexpectedKeys(value, ['status'], failWith);
+      return { status: 'absent' };
+
+    case 'ignored':
+      assertNoUnexpectedKeys(value, ['status', 'reason', 'message'], failWith);
+      return {
+        status: 'ignored',
+        reason: read.enumeration('reason', HANDOFF_IGNORE_REASONS),
+        message: read.text('message'),
+      };
+
+    default:
+      fail('status', 'su degerlerden biri: loaded, absent, ignored');
+  }
+}
+
+function parseKnownProjectContext(value: unknown): KnownProjectContext {
+  if (!isRecord(value)) {
+    throw new ProjectContractError('Proje baglami bir nesne olmali.');
+  }
+  assertNoUnexpectedKeys(value, KNOWN_CONTEXT_KEYS, failWith);
+
+  const read = readers(value, fail);
+  return {
+    summary: parseProjectSummary(value['summary']),
+    git: parseGitMetadata(value['git']),
+    handoff: parseHandoffRead(value['handoff']),
+    totalChars: read.count('totalChars'),
+    maxChars: read.count('maxChars'),
+    truncated: read.boolean('truncated'),
+  };
+}
+
+/**
+ * `project_context` ciktisini dogrular.
+ *
+ * `unknown` bir **hata degil**: sozlesmenin gecerli bir dali. Nedeni oldugu gibi
+ * tasinir; tool onu kendi cumlesine cevirir ama bilgiyi kaybetmez.
+ */
+export function parseProjectContextView(value: unknown): ProjectContextView {
+  if (!isRecord(value)) {
+    throw new ProjectContractError('Proje baglami sonucu bir nesne olmali.');
+  }
+
+  const read = readers(value, fail);
+  switch (value['status']) {
+    case 'known':
+      assertNoUnexpectedKeys(value, ['status', 'project'], failWith);
+      return { status: 'known', project: parseKnownProjectContext(value['project']) };
+
+    case 'unknown':
+      assertNoUnexpectedKeys(value, ['status', 'reason', 'message'], failWith);
+      return {
+        status: 'unknown',
+        reason: read.enumeration('reason', CONTEXT_UNKNOWN_REASONS),
+        message: read.text('message'),
+      };
+
+    default:
+      fail('status', 'su degerlerden biri: known, unknown');
+  }
+}

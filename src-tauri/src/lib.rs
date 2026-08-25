@@ -94,6 +94,11 @@ pub fn run() {
         .manage(std::sync::Arc::new(extraction::ExtractionService::new()))
         // ASU-037: hafiza yazma yollari config'in ham alanina degil buna bakar.
         .manage(privacy)
+        // ASU-041/044: proje ozeti uretimi + kisa sureli onbellek. Servis
+        // **burada** yasamak zorunda: komut basina yeni bir ornek kurulsaydi
+        // onbellek her cagride bos olur ve `project_context` her seferinde
+        // diski yeniden okurdu (ASU-041'in TTL + parmak izi tasarimi olu kalirdi).
+        .manage(projects::context::ProjectContextService::new())
         // Webview'e acilan her komut ayri bir yetki yuzeyidir ve kendi
         // capability kaydiyla birlikte eklenir (`capabilities/`).
         .invoke_handler(tauri::generate_handler![
@@ -116,6 +121,7 @@ pub fn run() {
             projects::registry::project_add,
             projects::registry::project_remove,
             projects::registry::project_set_current,
+            projects::view::project_context,
             privacy::get_privacy_settings,
             privacy::set_privacy_settings
         ])

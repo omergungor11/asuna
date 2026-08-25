@@ -103,6 +103,27 @@ describe('SDK import siniri', () => {
     );
   });
 
+  /**
+   * ASU-044: ilk gercek tool geldi. `tool()` SDK'dan re-export edilen bir
+   * fonksiyon; tool tanimlarinin icine sizarsa sinir delinmis olur. Tool'lar duz
+   * veri (`AsunaToolDefinition`) olarak yazilir, SDK'ya cevrim adaptorde kalir.
+   */
+  it('tool tanimlari SDK`siz yaziliyor (adaptor tek dosyada)', () => {
+    const toolFiles = sourceFiles
+      .map(toRepoPath)
+      .filter((path) => path.startsWith('src/asuna/tools/'));
+
+    expect(toolFiles.length).toBeGreaterThan(0);
+
+    const offenders = toolFiles.filter((path) =>
+      moduleSpecifiers(readFileSync(resolve(SOURCE_ROOT, '..', path), 'utf8')).some(
+        (specifier) => specifier.startsWith(SDK_SCOPE),
+      ),
+    );
+
+    expect(offenders).toEqual([]);
+  });
+
   it('`useInsecureApiKey` kacis kapisi hicbir yerde kullanilmiyor', () => {
     const offenders = sourceFiles
       .filter((file) => readFileSync(file, 'utf8').includes(FORBIDDEN_ESCAPE_HATCH))

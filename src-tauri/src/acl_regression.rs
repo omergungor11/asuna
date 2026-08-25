@@ -84,6 +84,10 @@ fn build_test_app_with_privacy(db_state: DbState, privacy: PrivacyState) -> App<
     let app = mock_builder()
         .manage(test_config())
         .manage(Arc::new(privacy))
+        // ASU-044: `project_context` bu servisi bekler. Uretimdeki `lib.rs` ile
+        // ayni sekilde `manage` ediliyor — ag'a cikmaz, yalnizca kayitli kokun
+        // altindaki sabit allowlist'i okur.
+        .manage(crate::projects::context::ProjectContextService::new())
         // `RealtimeTokenService` BILEREK yok — bkz. modul dokumantasyonu.
         .invoke_handler(tauri::generate_handler![
             crate::commands::get_frontend_config,
@@ -105,6 +109,7 @@ fn build_test_app_with_privacy(db_state: DbState, privacy: PrivacyState) -> App<
             crate::projects::registry::project_add,
             crate::projects::registry::project_remove,
             crate::projects::registry::project_set_current,
+            crate::projects::view::project_context,
             crate::privacy::get_privacy_settings,
             crate::privacy::set_privacy_settings
         ])
@@ -1385,4 +1390,151 @@ fn project_list_surfaces_a_typed_error_when_the_database_is_unavailable() {
     let error = invoke(&webview, "project_list").expect_err("ariza hata olarak donmeli");
     assert!(!is_acl_denial(&error), "hata: {error}");
     assert!(error.contains("unavailable"), "hata: {error}");
+}
+
+// ---------------------------------------------------------------------------
+// Guncel proje baglami (ASU-044)
+// ---------------------------------------------------------------------------
+
+/// **ASU-044 kabul kaniti** — `get_current_project` tool'unun arkasindaki komut
+/// gercek ACL uzerinden calisiyor ve **uc belirsizlik nedenini** ayri ayri
+/// donuyor. Asuna'nin soracagi soru her birinde farkli; tek bir "bilmiyorum"
+/// kovasi modeli proje uydurmaya iterdi.
+#[test]
+fn project_context_reports_each_reason_it_cannot_name_a_project() {
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+
+    // 1) Hic proje kaydedilmemis.
+    let response = invoke(&webview, "project_context").expect("komut calismali");
+    assert!(
+        response.contains("\"status\":\"unknown\"")
+            && response.contains("\"reason\":\"no-registered-project\""),
+        "yanit: {response}"
+    );
+
+    let directory = std::env::temp_dir().join(format!("asuna-acl-context-{}", std::process::id()));
+    let root = directory.join("asuna");
+    std::fs::create_dir_all(&root).expect("gecici proje dizini");
+    std::fs::write(
+        root.join("README.md"),
+        "# Asuna\n\nSesli kisisel AI companion.\n",
+    )
+    .expect("README yazilmali");
+
+    invoke_with(
+        &webview,
+        "project_add",
+        serde_json::json!({ "path": root.to_str().expect("UTF-8 yol") }),
+    )
+    .expect("kayit calismali");
+
+    // 2) Proje var ama secilmemis — kayit bir secim degildir.
+    let response = invoke(&webview, "project_context").expect("komut calismali");
+    assert!(
+        response.contains("\"reason\":\"no-current-selection\""),
+        "yanit: {response}"
+    );
+
+    // 3) Secim yapildi: artik proje biliniyor.
+    invoke_with(
+        &webview,
+        "project_set_current",
+        serde_json::json!({ "projectId": "asuna" }),
+    )
+    .expect("secim calismali");
+
+    let response = invoke(&webview, "project_context").expect("komut calismali");
+    assert!(
+        response.contains("\"status\":\"known\""),
+        "yanit: {response}"
+    );
+    assert!(response.contains("\"name\":\"asuna\""), "yanit: {response}");
+    assert!(response.contains("\"README.md\""), "yanit: {response}");
+    // Cikti tavani olculuyor ve donuyor (kabul kriteri: "cikti boyutu sinirli").
+    assert!(response.contains("\"maxChars\":"), "yanit: {response}");
+    assert!(response.contains("\"totalChars\":"), "yanit: {response}");
+    // Devir teslim dosyasi yok: hata degil, `absent`.
+    assert!(
+        response.contains("\"handoff\":{\"status\":\"absent\"}"),
+        "yanit: {response}"
+    );
+
+    // 4) Kok kaybolursa cevap "bilmiyorum" olur, eski ozet tekrar edilmez.
+    std::fs::remove_dir_all(&root).expect("kok silinmeli");
+    let response = invoke(&webview, "project_context").expect("komut calismali");
+    assert!(
+        response.contains("\"reason\":\"root-missing\""),
+        "yanit: {response}"
+    );
+
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// `.env` iceriginin tool ciktisina sizmadigini **IPC sinirinda** dogrular.
+/// `context.rs` bunu birim testinde de kanitliyor; buradaki kontrol renderer'in
+/// gercekten gordugu payload uzerinde.
+#[test]
+fn project_context_never_leaks_dotenv_contents_over_ipc() {
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+
+    let directory =
+        std::env::temp_dir().join(format!("asuna-acl-context-env-{}", std::process::id()));
+    let root = directory.join("gizli");
+    std::fs::create_dir_all(&root).expect("gecici proje dizini");
+    std::fs::write(
+        root.join(".env"),
+        "OPENAI_API_KEY=sk-proj-SIZMAMALI-DEGER\n",
+    )
+    .expect(".env yazilmali");
+    std::fs::write(root.join("README.md"), "# Gizli\n").expect("README yazilmali");
+
+    invoke_with(
+        &webview,
+        "project_add",
+        serde_json::json!({ "path": root.to_str().expect("UTF-8 yol") }),
+    )
+    .expect("kayit calismali");
+    invoke_with(
+        &webview,
+        "project_set_current",
+        serde_json::json!({ "projectId": "gizli" }),
+    )
+    .expect("secim calismali");
+
+    let response = invoke(&webview, "project_context").expect("komut calismali");
+    assert!(
+        response.contains("\"status\":\"known\""),
+        "yanit: {response}"
+    );
+    assert!(
+        !response.contains("SIZMAMALI-DEGER") && !response.contains("OPENAI_API_KEY"),
+        "`.env` icerigi IPC ciktisina sizdi: {response}"
+    );
+    assert!(!response.contains("\".env\""), "yanit: {response}");
+
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// Hafiza kapali/arizaliyken komut sessizce "proje yok" demez: tipli hata doner.
+/// "Kayitli proje yok" ile "bakamadim" farkli cevaplardir (PROJECT.md Bolum 30).
+#[test]
+fn project_context_surfaces_typed_errors_instead_of_claiming_no_project() {
+    for (state, expected) in [
+        (DbState::Disabled, "disabled"),
+        (
+            DbState::Unavailable {
+                reason: "sema migration'lari uygulanamadi".to_owned(),
+            },
+            "unavailable",
+        ),
+    ] {
+        let app = build_test_app_with(state);
+        let webview = main_webview(&app);
+
+        let error = invoke(&webview, "project_context").expect_err("hata donmeli");
+        assert!(!is_acl_denial(&error), "hata: {error}");
+        assert!(error.contains(expected), "hata: {error}");
+    }
 }

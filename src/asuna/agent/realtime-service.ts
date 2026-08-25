@@ -25,7 +25,13 @@
  * - Model ID config'ten gelir (`ASUNA_REALTIME_MODEL`), hard-code yok.
  */
 
-import { RealtimeAgent, RealtimeSession, type RealtimeItem } from '@openai/agents-realtime';
+import {
+  RealtimeAgent,
+  RealtimeSession,
+  tool,
+  type RealtimeItem,
+} from '@openai/agents-realtime';
+import { z } from 'zod';
 
 import {
   AsunaRealtimeError,
@@ -50,13 +56,14 @@ import type {
 } from './realtime-session-port';
 import { mintRealtimeToken, type EphemeralRealtimeToken } from './realtime-token';
 import type { FrontendConfig } from '../config/frontend-config';
+import { logger } from '../observability';
 import { buildAsunaInstructions } from '../prompts';
 import {
   VoiceStateMachine,
   type VoiceState,
   type VoiceTransitionReason,
 } from '../state/voice-state-machine';
-import type { AsunaToolDefinition } from '../tools/types';
+import type { AsunaToolDefinition, ToolContext, ToolResult } from '../tools/types';
 
 // ---------------------------------------------------------------------------
 // Sabitler
@@ -142,6 +149,97 @@ export function toTranscriptEntries(items: readonly RealtimeItem[]): TranscriptE
 }
 
 /**
+ * Parametresiz tool semasi.
+ *
+ * ASU-044'un tek tool'u (`get_current_project`) argument almiyor ve bu bilincli:
+ * modelin "hangi projeyi okuyayim?" diye bir secim yapabilmesi, kayitli kok
+ * disina cikma yuzeyi acardi. Tool'a ozel semalar Phase 5'te (ASU-047) registry
+ * ile birlikte gelecek; erken bir sema soyutlamasi simdi olu kod olurdu.
+ */
+const NO_TOOL_PARAMETERS = z.object({});
+
+/**
+ * Tool basarisiz oldugunda modele giden metnin basi.
+ *
+ * Hata sessizce bos bir sonuca donusmez: model reddi acikca gorur ve
+ * "basarili gibi" konusamaz (PROJECT.md Bolum 30).
+ */
+export const TOOL_FAILURE_PREFIX = 'TOOL BASARISIZ.';
+
+/**
+ * Tool'lara verilen calisma context'i.
+ *
+ * Su an iki alan da `null` ve bu **uydurma yerine bos birakma** karari:
+ * `sessionId` kalici oturum kaydinin kimligidir ve bu katman onu gormuyor;
+ * `projectRoot` ise ASU-049 sandbox'i ile gelecek. Yer tutucu bir deger
+ * yazmak, audit kaydini dogru gorunen ama yanlis bir zincire baglardi.
+ * ASU-047 registry'si ikisini de gercek degerlerle dolduracak.
+ */
+const TOOL_CONTEXT: ToolContext = { sessionId: null, projectRoot: null };
+
+/** Tool adaptorunun log kanali. Tool ciktisi log'lanmaz, yalnizca hata bilgisi. */
+const toolLogger = logger.child('realtime-tool');
+
+/**
+ * [`ToolResult`] -> modelin gorecegi metin.
+ *
+ * Ayri ve saf: SDK'yi calistirmadan test edilebilsin diye. Basarisiz sonuc
+ * sessizce bos bir cikti olmaz, [`TOOL_FAILURE_PREFIX`] ile isaretlenir —
+ * model "yaptim" diyemez (PROJECT.md Bolum 30).
+ */
+export function toModelOutput(result: ToolResult): string {
+  return result.ok ? result.summary : `${TOOL_FAILURE_PREFIX} ${result.summary}`;
+}
+
+/**
+ * [`AsunaToolDefinition`] -> SDK `tool()` adaptasyonu (voice.md Bolum 9).
+ *
+ * SDK tipi buradan **disari cikmaz**: tool tanimlari SDK'siz duz veri olarak
+ * yazilir, SDK'ya cevrilmeleri bu dosyanin isidir (`sdk-import-boundary.spec.ts`).
+ *
+ * Modele donen sey [`ToolResult.summary`] — yani kisa, konusulabilir metin.
+ * `data` alani bilerek gonderilmez: yapisal veriyi ses oturumuna dokmek hem
+ * token israfi hem de "repoyu dumpleme" yasagina aykiri (PROJECT.md Bolum 15).
+ */
+export function toSdkTool(definition: AsunaToolDefinition): ReturnType<typeof tool> {
+  if (definition.risk >= 2 && !definition.requiresApproval) {
+    // Sessizce onaysiz calistirmak yerine acilista patla: risk 2/3 bir tool'un
+    // onay istememesi `conventions.md`'nin pazarliksiz kurallarindan biri.
+    throw new AsunaRealtimeError({
+      kind: 'internal',
+      cause: 'tool_approval_missing',
+      message: `\`${definition.name}\` risk ${definition.risk.toString()} ama onay istemiyor.`,
+      retryable: false,
+    });
+  }
+
+  return tool({
+    name: definition.name,
+    description: definition.description,
+    parameters: NO_TOOL_PARAMETERS,
+    strict: true,
+    needsApproval: definition.requiresApproval,
+    timeoutMs: definition.timeoutMs,
+    execute: async (args: unknown): Promise<string> => {
+      let result: ToolResult;
+      try {
+        result = await definition.execute(args, TOOL_CONTEXT);
+      } catch (error) {
+        // Tool implementasyonu kendi hatasini ele almadiysa da oturum dusmez;
+        // ama olay gizlenmez (ASU-019 log formati).
+        const info = describeSessionError(error);
+        toolLogger.warn(`\`${definition.name}\` calistirilamadi: ${info.message}`, {
+          tool: definition.name,
+          kind: info.kind,
+        });
+        return `${TOOL_FAILURE_PREFIX} ${info.message}`;
+      }
+      return toModelOutput(result);
+    },
+  });
+}
+
+/**
  * Gercek SDK oturumunu kurar.
  *
  * WebRTC olmayan bir ortamda `new RealtimeSession(...)` **kurucu asamasinda** hata
@@ -151,21 +249,10 @@ export const createOpenAiRealtimeSession: RealtimeSessionFactory = (
   spec: RealtimeSessionSpec,
   onSignal: RealtimeSessionSignalListener,
 ): RealtimeSessionPort => {
-  if (spec.tools.length > 0) {
-    // Sessizce dusurmek yerine acikca patlat: model'e vaat edilen bir yetenegin
-    // sessizce kaybolmasi, olmayan bir yetenegi vaat etmekten daha kotu.
-    throw new AsunaRealtimeError({
-      kind: 'internal',
-      cause: 'tools_not_supported',
-      message:
-        'Realtime oturumuna tool verildi ama tool destegi henuz yok (Phase 5 / ASU-05x).',
-      retryable: false,
-    });
-  }
-
   const agent = new RealtimeAgent({
     name: ASUNA_AGENT_NAME,
     instructions: spec.instructions,
+    tools: spec.tools.map(toSdkTool),
   });
 
   const session = new RealtimeSession(agent, {

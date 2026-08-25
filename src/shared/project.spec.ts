@@ -2,14 +2,19 @@ import { describe, expect, it } from 'vitest';
 
 import {
   AsunaRegistryError,
+  CONTEXT_UNKNOWN_REASONS,
   PROJECT_RECORD_KEYS,
   ProjectContractError,
   UNKNOWN_REGISTRY_ERROR_CODE,
   hasRegisteredRoot,
+  parseGitMetadata,
+  parseHandoffRead,
   parseProjectAddOutcome,
+  parseProjectContextView,
   parseProjectRecord,
   parseProjectRecords,
   parseProjectRemoveOutcome,
+  parseProjectSummary,
   toRegistryError,
 } from './project';
 
@@ -154,5 +159,140 @@ describe('registry sonuclari (ASU-040)', () => {
     const acl = toRegistryError('project_add not allowed. Command not found');
     expect(acl.code).toBe(UNKNOWN_REGISTRY_ERROR_CODE);
     expect(acl.message).toContain('not allowed');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `project_context` sozlesmesi (ASU-044)
+// ---------------------------------------------------------------------------
+
+function summaryPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    projectId: 'asuna',
+    name: 'Asuna',
+    path: '/Users/omer/Work/asuna',
+    status: 'active',
+    primaryLanguage: 'Rust',
+    framework: 'Tauri',
+    gitRemote: 'github.com/omergungor/asuna',
+    sources: [{ name: 'README.md', excerpt: '# Asuna', truncated: false, sizeBytes: 128 }],
+    totalChars: 1200,
+    maxChars: 6000,
+    budgetExhausted: false,
+    ...overrides,
+  };
+}
+
+function gitPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    isRepository: true,
+    branch: 'main',
+    detached: false,
+    isDirty: true,
+    changedTrackedFiles: 3,
+    recentCommits: ['feat(ASU-044): ilk gercek tool'],
+    remote: 'github.com/omergungor/asuna',
+    degraded: false,
+    ...overrides,
+  };
+}
+
+function contextPayload(): Record<string, unknown> {
+  return {
+    status: 'known',
+    project: {
+      summary: summaryPayload(),
+      git: gitPayload(),
+      handoff: { status: 'absent' },
+      totalChars: 2000,
+      maxChars: 9000,
+      truncated: false,
+    },
+  };
+}
+
+describe('parseProjectContextView', () => {
+  it('bilinen projeyi ozet + git + devir teslim olarak cozer', () => {
+    const view = parseProjectContextView(contextPayload());
+
+    expect(view.status).toBe('known');
+    if (view.status !== 'known') {
+      throw new Error('known bekleniyordu');
+    }
+    expect(view.project.summary.projectId).toBe('asuna');
+    expect(view.project.git.branch).toBe('main');
+    expect(view.project.git.recentCommits).toHaveLength(1);
+    expect(view.project.handoff.status).toBe('absent');
+    expect(view.project.maxChars).toBe(9000);
+  });
+
+  /**
+   * Uc neden ayri tasinir: Asuna'nin soracagi soru her birinde farkli. Tek bir
+   * "bilmiyorum" kovasi modeli proje uydurmaya iterdi.
+   */
+  it('uc belirsizlik nedenini de oldugu gibi tasir', () => {
+    for (const reason of CONTEXT_UNKNOWN_REASONS) {
+      const view = parseProjectContextView({
+        status: 'unknown',
+        reason,
+        message: 'Bilinmiyor.',
+      });
+      expect(view).toEqual({ status: 'unknown', reason, message: 'Bilinmiyor.' });
+    }
+  });
+
+  it('taninmayan belirsizlik nedeni sessizce kabul edilmez', () => {
+    expect(() =>
+      parseProjectContextView({ status: 'unknown', reason: 'bilinmiyor', message: 'x' }),
+    ).toThrow(ProjectContractError);
+  });
+
+  it('devir teslim dosyasinin uc durumu birbirine karismaz', () => {
+    expect(parseHandoffRead({ status: 'absent' })).toEqual({ status: 'absent' });
+
+    expect(
+      parseHandoffRead({
+        status: 'ignored',
+        reason: 'invalid-json',
+        message: 'gecerli JSON degil',
+      }),
+    ).toMatchObject({ status: 'ignored', reason: 'invalid-json' });
+
+    const loaded = parseHandoffRead({
+      status: 'loaded',
+      context: {
+        projectName: 'Asuna',
+        objective: 'Sesli companion',
+        currentMilestone: null,
+        activeTask: null,
+        blockers: [],
+        recentDecisions: ['DB kazanir'],
+      },
+    });
+    expect(loaded).toMatchObject({ status: 'loaded' });
+    if (loaded.status === 'loaded') {
+      expect(loaded.context.recentDecisions).toEqual(['DB kazanir']);
+    }
+  });
+
+  /** `degraded` bir alan degil bir uyari: tip aynasinda kaybolmamali. */
+  it('git degraded bayragi sozlesmede duruyor', () => {
+    const git = parseGitMetadata(gitPayload({ degraded: true, branch: null, detached: true }));
+
+    expect(git.degraded).toBe(true);
+    expect(git.branch).toBeNull();
+    expect(git.detached).toBe(true);
+  });
+
+  it('beklenmeyen alan sessizce gecmez', () => {
+    expect(() => parseProjectSummary(summaryPayload({ embedding: [0.1] }))).toThrow(
+      ProjectContractError,
+    );
+  });
+
+  it('eksik alan "bos" diye yorumlanmaz', () => {
+    const withoutBranch = gitPayload();
+    delete withoutBranch['branch'];
+    expect(() => parseGitMetadata(withoutBranch)).toThrow(ProjectContractError);
   });
 });
