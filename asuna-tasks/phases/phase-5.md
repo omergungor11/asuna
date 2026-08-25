@@ -102,17 +102,53 @@ PROJECT.md Bolum 19 "Filesystem sandbox". Bu, guvenlik modelinin en cok test edi
 
 ## ASU-050: `tool_events` Tablosu + Audit Logger
 
-**Scope**: db | **Boyut**: M | **Durum**: PENDING | **Bagimlilik**: ASU-047, ASU-030
+**Scope**: db | **Boyut**: M | **Durum**: DONE | **Bagimlilik**: ASU-047, ASU-030
 
 ### Acceptance Criteria
-- [ ] `tool_events`: id, session_id, tool_name, risk_level, arguments_redacted, approval_state,
-      result_summary, created_at (PROJECT.md Bolum 12.2)
-- [ ] **Her** tool cagrisi yaziliyor: onaylanan, reddedilen, hata veren, timeout olan
-- [ ] Argumanlar redakte ediliyor; dosya icerigi ve secret'lar audit'e girmiyor
-- [ ] Audit yazimi basarisiz olursa bu durum gorunur oluyor (sessiz kayip yok)
-- [ ] Audit kayitlari UI'dan gorunebiliyor (Tools sekmesi veya oturum detayi)
-- [ ] Audit kayitlari uygulamadan silinemiyor (MVP'de salt yazilir)
-- [ ] Unit test: redaction, reddedilen cagrinin da yazilmasi
+- [x] `tool_events`: id, session_id, tool_name, risk_level, arguments_redacted, approval_state,
+      result_summary, created_at (PROJECT.md Bolum 12.2) — migration 004, `STRICT`, sema surumu 4
+- [x] **Her** tool cagrisi yaziliyor: onaylanan, reddedilen, hata veren, timeout olan
+      (`approval_state` alti degeri de yaziliyor; ACL testi hepsini ucdan uca olcuyor)
+- [x] Argumanlar redakte ediliyor; dosya icerigi ve secret'lar audit'e girmiyor
+      (ozetleme + redaksiyon **host tarafinda**; ic ice yapilar yalnizca sekil olarak yazilir)
+- [x] Audit yazimi basarisiz olursa bu durum gorunur oluyor (sessiz kayip yok)
+      — Rust tipli hata + `audit.ts` `{ status: 'failed', error }` + `error` seviyesinde log
+- [x] Audit kayitlari UI'dan gorunebiliyor (Tools sekmesi veya oturum detayi)
+      — **veri yolu hazir**: `tool_event_list` (oturum filtreli, tavanli) + `listToolEvents()`;
+      ekranin kendisi ASU-054'un isi
+- [x] Audit kayitlari uygulamadan silinemiyor (MVP'de salt yazilir) — silme/guncelleme komutu YOK;
+      `session_delete` de silmez (FK `ON DELETE SET NULL`)
+- [x] Unit test: redaction, reddedilen cagrinin da yazilmasi
+
+### Uygulama Notlari
+
+**Sema (migration 004, geri alinabilir).** `session_id` FK'si bilerek `ON DELETE SET NULL`:
+`CASCADE` olsaydi "konusma gecmisini sil" dugmesi ayni zamanda audit defterini silen bir
+primitif olurdu ve "audit silinemez" kriteri dolayli olarak delinirdi. Uzunluk tavanlari
+(`tool_name` 64, arguman/sonuc ozeti 512) semada da CHECK olarak yazili — Rust kirpmayi bir gun
+atlarsa satir INSERT aninda duser.
+
+**`approval_state` kumesi (6 deger).** `not_required` (risk 0), `auto_approved` (ayar izin verdi),
+`approved`, `denied`, `timeout` (varsayilan reddet), `not_requested` (onay asamasina hic
+gelinmedi — sema reddi, bilinmeyen tool, on-kontrol). `not_required` ile `not_requested` ayri:
+birinde onay GEREKMEDI, otekinde onay SORULAMADI.
+
+**Arguman ozeti bicimi.** Tek satir, alfabetik `anahtar=deger`. Metinler 64 karakterde kirpilir,
+sayilar/bool oldugu gibi, **dizi ve nesne yalnizca sekil** (`[3 oge]` / `{2 alan}`). Ic ice icerik
+hicbir zaman serilestirilmez — "dosya icerigi audit'e girmez" bir uzunluk tahminine degil bicimin
+kendisine bagli. Sonra `redact_sensitive_text` + 512 karakter tavani.
+
+**Append-only kilidi uc katmanda.** Repository'de `DELETE`/`UPDATE` yolu yok (kaynak metnini
+okuyan test), `EXPOSED_COMMANDS` icinde `tool_event` iceren yalnizca iki komut var (statik test),
+ACL'de `tool_event_delete` vb. deny-by-default ile duser (regresyon testi).
+
+### ASU-051 / ASU-052 icin acik nokta
+
+12.2'nin kolon listesinde **yapisal bir basari/hata alani yok**; `result_summary` metni ikisini de
+tasiyor. `approval_state` "calisti mi"yi soyler ama "calisti ve basarili miydi"yi soylemez.
+ASU-051/052 audit satirindan bunu ayirt etmek isterse migration 005 ile
+`outcome TEXT CHECK (outcome IN ('succeeded','failed','not_run'))` eklenmeli — sema degisikligi
+oldugu icin **orchestrator karari**.
 
 ---
 

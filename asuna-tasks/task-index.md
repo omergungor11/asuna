@@ -13,11 +13,11 @@
 | 2 | Wake Word | 8 | 1 | 0 | 0 | 7 | 0 |
 | 3 | Memory | 11 | 10 | 0 | 0 | 1 | 0 |
 | 4 | Project Context | 8 | 6 | 0 | 0 | 2 | 0 |
-| 5 | One Useful Action (Tools) | 9 | 1 | 0 | 0 | 8 | 0 |
+| 5 | One Useful Action (Tools) | 9 | 2 | 0 | 0 | 7 | 0 |
 | 6 | Focus Recovery (MVP) | 8 | 0 | 0 | 0 | 8 | 0 |
-| **Total** | | **66** | **40** | **0** | **0** | **26** | **0** |
+| **Total** | | **66** | **41** | **0** | **0** | **25** | **0** |
 
-**Progress**: 40/66 (61%)
+**Progress**: 41/66 (62%)
 
 > Phase 3 implementasyonu ASU-035 ile kapandi (2026-08-25): ASU-029..ASU-037 DONE.
 > Gate 3 review bulgulari duzeltildi (2026-08-25): calisma zamani gizlilik kapisi oturum
@@ -117,7 +117,7 @@
 | ASU-047 | `AsunaToolDefinition` + tool registry | 5 | L | backend | DONE |
 | ASU-048 | Risk / approval policy katmani | 5 | M | backend | PENDING |
 | ASU-049 | Path sandbox + hassas dosya blocklist | 5 | M | backend | PENDING |
-| ASU-050 | `tool_events` tablosu + audit logger | 5 | M | db | PENDING |
+| ASU-050 | `tool_events` tablosu + audit logger | 5 | M | db | DONE |
 | ASU-051 | `read_project_file` tool (risk 0, sandbox'li) | 5 | M | backend | PENDING |
 | ASU-052 | `open_project` tool (risk 1) | 5 | M | backend | PENDING |
 | ASU-053 | Approval UI (AWAITING_APPROVAL) | 5 | M | frontend | PENDING |

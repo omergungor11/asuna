@@ -30,6 +30,7 @@ import { toCamelCase } from './contract';
 import { MEMORY_COLUMNS_NOT_MIRRORED, MEMORY_KINDS, MEMORY_RECORD_KEYS } from './memory';
 import { PROJECT_RECORD_KEYS, PROJECT_STATUSES } from './project';
 import { SESSION_END_REASONS, SESSION_RECORD_KEYS } from './session';
+import { TOOL_APPROVAL_STATES, TOOL_EVENT_RECORD_KEYS, TOOL_RISK_LEVELS } from './tool-event';
 
 const MIGRATIONS_DIR = 'src-tauri/src/db/migrations';
 
@@ -45,6 +46,7 @@ const MIGRATION_FILES = [
   '001_memories_sessions.up.sql',
   '002_session_end_reason.up.sql',
   '003_projects.up.sql',
+  '004_tool_events.up.sql',
 ] as const;
 
 function readMigration(name: string): string {
@@ -227,6 +229,84 @@ describe('projects tablosu <-> src/shared/project.ts', () => {
   /** Yolsuz kayit yalnizca `unlinked` olabilir — iki yonlu CHECK. */
   it('unlinked <=> path IS NULL kisiti semada', () => {
     expect(schema).toContain("CHECK ((status = 'unlinked') = (path IS NULL))");
+  });
+});
+
+describe('tool_events tablosu <-> src/shared/tool-event.ts', () => {
+  it('kolon adlari sozlesme alanlariyla birebir esleisiyor (sira dahil)', () => {
+    expect(columnsOf('tool_events').map(toCamelCase)).toEqual([...TOOL_EVENT_RECORD_KEYS]);
+  });
+
+  it('approvalState degerleri semadaki CHECK kisitiyla birebir', () => {
+    expect(valuesInCheck('approval_state IN (')).toEqual([...TOOL_APPROVAL_STATES]);
+  });
+
+  /**
+   * Risk kumesi semada `BETWEEN` degil `IN (0, 1, 2, 3)` olarak yazili — tam da
+   * bu testin okuyabilmesi icin. `BETWEEN` yazilsaydi Rust enum'u ve TypeScript
+   * sabiti sema ile yalnizca yorum uzerinden bagli olurdu.
+   */
+  it('riskLevel kumesi semadan okunabiliyor ve sabitle ayni', () => {
+    expect(schema).toContain('CHECK (risk_level IN (0, 1, 2, 3))');
+    expect([...TOOL_RISK_LEVELS]).toEqual([0, 1, 2, 3]);
+  });
+
+  /** PROJECT.md Bolum 12.2 alan listesi — kaynak spec ile de bagli kalsin. */
+  it('PROJECT.md Bolum 12.2 alanlarinin tamamini tasiyor', () => {
+    expect(columnsOf('tool_events')).toEqual([
+      'id',
+      'session_id',
+      'tool_name',
+      'risk_level',
+      'arguments_redacted',
+      'approval_state',
+      'result_summary',
+      'created_at',
+    ]);
+  });
+
+  /**
+   * **ASU-050 kabul kriteri**: oturum silinince audit **kalir**.
+   *
+   * `ON DELETE CASCADE` yazilsaydi "konusma gecmisini sil" dugmesi ayni zamanda
+   * audit defterini silen bir primitif olurdu — yani "audit kayitlari
+   * uygulamadan silinemiyor" kriteri dolayli olarak delinirdi.
+   */
+  it('session_id bagi silinince kopar, audit satiri silinmez', () => {
+    const declaration = /session_id\s+INTEGER REFERENCES sessions \(id\)[^\n]*/.exec(
+      schema,
+    )?.[0];
+    expect(declaration).toBeDefined();
+    expect(declaration).toContain('ON DELETE SET NULL');
+
+    // Hicbir DDL satiri silmeyi yayan bir eylem tanimlamasin. Yorum satirlari
+    // atiliyor: 004'un bas yorumu tam da bu karari anlatirken ifadeyi geciyor.
+    const ddl = schema
+      .split('\n')
+      .filter((line) => !line.trim().startsWith('--'))
+      .join('\n');
+    expect(ddl).not.toContain('ON DELETE CASCADE');
+  });
+
+  /**
+   * Uzunluk tavanlari yorum degil calisan kisit: Rust kirpmayi bir gun
+   * atlarsa, bir dosya icerigi audit defterine sessizce sizmak yerine INSERT
+   * aninda duser.
+   */
+  it('arguman ve sonuc ozetlerinin uzunluk tavani semada zorlaniyor', () => {
+    expect(schema).toContain('length(arguments_redacted) <= 512');
+    expect(schema).toContain('length(result_summary) <= 512');
+    expect(schema).toContain('length(tool_name) <= 64');
+  });
+
+  it('audit sorgu eksenleri index"li', () => {
+    for (const index of [
+      'idx_tool_events_session_id',
+      'idx_tool_events_created_at',
+      'idx_tool_events_tool_name',
+    ]) {
+      expect(schema).toContain(index);
+    }
   });
 });
 

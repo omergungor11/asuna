@@ -442,6 +442,227 @@ impl ProjectRecord {
     }
 }
 
+// ---------------------------------------------------------------------------
+// tool_events (ASU-050)
+// ---------------------------------------------------------------------------
+
+/// Tool cagrisinin risk seviyesi — PROJECT.md Bolum 5.4.
+///
+/// DB'de `INTEGER`, IPC'de sayi (TypeScript `ToolRisk = 0 | 1 | 2 | 3`).
+/// Serbest bir `u8` **degil**: `risk: 7` gonderen bir istek serde sinirinde
+/// duser, DB'ye hic dokunmadan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "i64", into = "i64")]
+pub enum ToolRiskLevel {
+    /// Salt okuma; yan etkisi yok.
+    ReadOnly = 0,
+    /// Geri alinabilir dusuk risk (orn. editorde proje acmak).
+    LowRisk = 1,
+    /// Mutation — dosya duzenleme, paket kurma, build.
+    Mutation = 2,
+    /// Destructive / harici etki — silme, push, mail, deploy, harcama.
+    Destructive = 3,
+}
+
+impl ToolRiskLevel {
+    /// Tum degerler — sira semadaki CHECK kisiti ile ayni (test ile baglidir).
+    pub const ALL: [Self; 4] = [
+        Self::ReadOnly,
+        Self::LowRisk,
+        Self::Mutation,
+        Self::Destructive,
+    ];
+
+    pub const fn as_i64(self) -> i64 {
+        self as i64
+    }
+
+    /// Sessiz default **yok**: bilinmeyen deger `None` doner.
+    pub fn parse(raw: i64) -> Option<Self> {
+        Self::ALL.into_iter().find(|level| level.as_i64() == raw)
+    }
+
+    /// Bu seviye ASU-048'de **her zaman** acik onay gerektiriyor mu?
+    ///
+    /// `asuna-config/security.md` Bolum 3 ve `conventions.md`: risk 2 ve 3 icin
+    /// `requiresApproval` hicbir `ASUNA_TOOL_APPROVAL_MODE` degeriyle
+    /// gevsetilemez. Audit tarafi bunu zorlamaz (mod bilgisi burada yok) ama
+    /// politika katmani ile ayni tanimi paylasmasi, iki yerde iki farkli
+    /// "yuksek risk" tanimi olusmasini engeller.
+    pub const fn always_requires_approval(self) -> bool {
+        matches!(self, Self::Mutation | Self::Destructive)
+    }
+}
+
+impl From<ToolRiskLevel> for i64 {
+    fn from(value: ToolRiskLevel) -> Self {
+        value.as_i64()
+    }
+}
+
+impl TryFrom<i64> for ToolRiskLevel {
+    type Error = String;
+
+    fn try_from(value: i64) -> Result<Self, Self::Error> {
+        Self::parse(value).ok_or_else(|| {
+            // Mesaj yalnizca beklenen bicimi soyler; gelen degeri tekrarlamak
+            // bir sizinti riski degil ama gerekli de degil.
+            "`riskLevel` 0, 1, 2 ya da 3 olmali".to_owned()
+        })
+    }
+}
+
+impl ToSql for ToolRiskLevel {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(ToSqlOutput::from(self.as_i64()))
+    }
+}
+
+impl FromSql for ToolRiskLevel {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        let raw = value.as_i64()?;
+        Self::parse(raw)
+            .ok_or_else(|| FromSqlError::Other("bilinmeyen tool_events.risk_level".into()))
+    }
+}
+
+/// Bir tool cagrisinin onay yolculugunun sonucu (ASU-050, migration 004).
+///
+/// Alti degerin **hepsi** ayri bir gercek durumu anlatir; "onaylanmadi" tek bir
+/// kovaya konsaydi kullanici, kendisinin reddettigi bir cagri ile onay
+/// penceresi hic acilmadan dusen bir cagriyi ayirt edemezdi.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolApprovalState {
+    /// Bu risk seviyesi bu modda onay gerektirmiyordu (risk 0).
+    NotRequired,
+    /// Onay gerekebilirdi ama `ASUNA_TOOL_APPROVAL_MODE` izin verdi.
+    /// [`Self::NotRequired`]'dan bilerek ayri: "sorulabilirdi, ayarin izin
+    /// verdi" demek, ayari sonradan sorgulanabilir kilar.
+    AutoApproved,
+    /// Kullanici acikca onayladi.
+    Approved,
+    /// Kullanici acikca reddetti.
+    Denied,
+    /// Onay istegi zaman asimina ugradi → varsayilan **reddet** (ASU-048).
+    Timeout,
+    /// Onay asamasina hic gelinmedi: cagri daha once dustu (sema dogrulamasi,
+    /// bilinmeyen tool adi, sandbox on-kontrolu). [`Self::NotRequired`] ile
+    /// karistirilmamali — orada onay GEREKMEDI, burada onay SORULAMADI.
+    NotRequested,
+}
+
+impl ToolApprovalState {
+    /// Tum degerler — sira semadaki CHECK kisiti ile ayni (test ile baglidir).
+    pub const ALL: [Self; 6] = [
+        Self::NotRequired,
+        Self::AutoApproved,
+        Self::Approved,
+        Self::Denied,
+        Self::Timeout,
+        Self::NotRequested,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotRequired => "not_required",
+            Self::AutoApproved => "auto_approved",
+            Self::Approved => "approved",
+            Self::Denied => "denied",
+            Self::Timeout => "timeout",
+            Self::NotRequested => "not_requested",
+        }
+    }
+
+    /// Sessiz default **yok**: bilinmeyen deger `None` doner.
+    pub fn parse(raw: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|state| state.as_str() == raw)
+    }
+
+    /// Bu durumda tool **calistirildi mi**?
+    ///
+    /// UI'in "reddedildi" ile "calisti ama hata verdi"yi ayirmasi icin gerekli:
+    /// calismamis bir cagrida `result_summary` NULL'dur ve bos bir ozet
+    /// uydurulmaz.
+    pub const fn permitted_execution(self) -> bool {
+        matches!(
+            self,
+            Self::NotRequired | Self::AutoApproved | Self::Approved
+        )
+    }
+}
+
+impl ToSql for ToolApprovalState {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(ToSqlOutput::from(self.as_str()))
+    }
+}
+
+impl FromSql for ToolApprovalState {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        let raw = value.as_str()?;
+        Self::parse(raw)
+            .ok_or_else(|| FromSqlError::Other("bilinmeyen tool_events.approval_state".into()))
+    }
+}
+
+/// `tool_events` satiri (PROJECT.md Bolum 12.2).
+///
+/// Salt yazilir bir denetim satiridir: repository katmaninda `UPDATE` ya da
+/// `DELETE` yolu yoktur ve renderer'a acilan komut kumesinde de yoktur.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolEventRecord {
+    pub id: i64,
+    /// `None` = cagriyi ureten oturum bilinmiyor ya da oturum kaydi silinmis
+    /// (FK `ON DELETE SET NULL`). Uydurulmus bir korelasyon kimligi yazilmaz.
+    pub session_id: Option<i64>,
+    pub tool_name: String,
+    pub risk_level: ToolRiskLevel,
+    /// Anahtar adlari + kirpilmis skaler degerlerden olusan **tek satirlik**
+    /// ozet; ic ice yapilar yalnizca sekil olarak gorunur. Ham arguman degil
+    /// (bkz. `db::tool_event_repository::summarize_arguments`).
+    /// `None` = cagri argumansizdi.
+    pub arguments_redacted: Option<String>,
+    pub approval_state: ToolApprovalState,
+    /// Kisa, insan diliyle sonuc — **basari da hata da** buraya yazilir
+    /// (`conventions.md`: "tool basarisi taklit edilmez"). `None` = soylenecek
+    /// bir sonuc yok; tipik olarak cagri hic calismadi.
+    pub result_summary: Option<String>,
+    pub created_at: String,
+}
+
+/// `ToolEventRecord`'un okudugu kolonlar — sema kolon sirasiyla ayni.
+pub const TOOL_EVENT_COLUMNS: [&str; 8] = [
+    "id",
+    "session_id",
+    "tool_name",
+    "risk_level",
+    "arguments_redacted",
+    "approval_state",
+    "result_summary",
+    "created_at",
+];
+
+impl ToolEventRecord {
+    pub fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: row.get("id")?,
+            session_id: row.get("session_id")?,
+            tool_name: row.get("tool_name")?,
+            risk_level: row.get("risk_level")?,
+            arguments_redacted: row.get("arguments_redacted")?,
+            approval_state: row.get("approval_state")?,
+            result_summary: row.get("result_summary")?,
+            created_at: row.get("created_at")?,
+        })
+    }
+
+    pub fn select_columns() -> String {
+        TOOL_EVENT_COLUMNS.join(", ")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -704,6 +925,151 @@ mod tests {
         assert!(object.contains_key("gitRemote"));
         assert!(!object.contains_key("primary_language"));
         assert_eq!(json["status"], "active");
+    }
+
+    // --- tool_events (ASU-050) ----------------------------------------------
+
+    #[test]
+    fn tool_approval_state_matches_the_schema_check_constraint() {
+        let from_schema = migrations::approval_states_declared_in_schema();
+        let from_enum: Vec<String> = ToolApprovalState::ALL
+            .iter()
+            .map(|state| state.as_str().to_owned())
+            .collect();
+        assert_eq!(from_enum, from_schema);
+    }
+
+    #[test]
+    fn tool_risk_level_matches_the_schema_check_constraint() {
+        let from_schema = migrations::risk_levels_declared_in_schema();
+        let from_enum: Vec<String> = ToolRiskLevel::ALL
+            .iter()
+            .map(|level| level.as_i64().to_string())
+            .collect();
+        assert_eq!(from_enum, from_schema);
+    }
+
+    #[test]
+    fn unknown_approval_state_is_rejected() {
+        assert_eq!(ToolApprovalState::parse("onaylandi"), None);
+        assert_eq!(ToolApprovalState::parse("Approved"), None);
+        assert!(serde_json::from_str::<ToolApprovalState>("\"skipped\"").is_err());
+    }
+
+    /// Uydurulmus bir risk seviyesi IPC sinirinde duser — DB'ye dokunulmaz.
+    #[test]
+    fn unknown_risk_level_is_rejected_at_the_serde_boundary() {
+        assert_eq!(ToolRiskLevel::parse(4), None);
+        assert_eq!(ToolRiskLevel::parse(-1), None);
+        assert!(serde_json::from_str::<ToolRiskLevel>("7").is_err());
+        assert!(serde_json::from_str::<ToolRiskLevel>("\"0\"").is_err());
+
+        for level in ToolRiskLevel::ALL {
+            let json = serde_json::to_string(&level).expect("serialize");
+            assert_eq!(json, level.as_i64().to_string());
+            assert_eq!(
+                serde_json::from_str::<ToolRiskLevel>(&json).expect("deserialize"),
+                level
+            );
+        }
+    }
+
+    /// `security.md` Bolum 3: risk 2/3 **her zaman** onay ister; bu tanim
+    /// politika katmani ile paylasilir, iki yerde iki tanim olusmaz.
+    #[test]
+    fn only_mutation_and_destructive_always_require_approval() {
+        assert!(!ToolRiskLevel::ReadOnly.always_requires_approval());
+        assert!(!ToolRiskLevel::LowRisk.always_requires_approval());
+        assert!(ToolRiskLevel::Mutation.always_requires_approval());
+        assert!(ToolRiskLevel::Destructive.always_requires_approval());
+    }
+
+    /// "Calisti mi?" sorusunun cevabi tek yerde tanimli: reddedilen, zaman
+    /// asimina ugrayan ve onaya hic gitmeyen cagrilarda tool CALISMADI.
+    #[test]
+    fn only_the_three_permissive_states_mean_the_tool_ran() {
+        for state in ToolApprovalState::ALL {
+            let expected = matches!(
+                state,
+                ToolApprovalState::NotRequired
+                    | ToolApprovalState::AutoApproved
+                    | ToolApprovalState::Approved
+            );
+            assert_eq!(state.permitted_execution(), expected, "{state:?}");
+        }
+    }
+
+    #[test]
+    fn tool_event_columns_cover_the_table() {
+        let db = AsunaDb::open_in_memory().expect("DB acilmali");
+        let mut actual = table_columns(&db, "tool_events");
+        actual.sort();
+
+        let mut expected: Vec<String> = TOOL_EVENT_COLUMNS
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect();
+        expected.sort();
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn tool_event_rows_round_trip_through_the_database() {
+        let db = AsunaDb::open_in_memory().expect("DB acilmali");
+
+        let event = db
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO sessions (started_at, model, created_at)
+                     VALUES (?1, 'gpt-realtime-2.1', ?1)",
+                    rusqlite::params!["2026-08-25T10:00:00Z"],
+                )?;
+                let session_id = conn.last_insert_rowid();
+
+                conn.execute(
+                    "INSERT INTO tool_events
+                       (session_id, tool_name, risk_level, arguments_redacted,
+                        approval_state, result_summary, created_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    rusqlite::params![
+                        session_id,
+                        "open_project",
+                        ToolRiskLevel::LowRisk,
+                        "projectId=asuna",
+                        ToolApprovalState::Approved,
+                        "Proje VS Code ile acildi.",
+                        "2026-08-25T10:01:00Z",
+                    ],
+                )?;
+
+                conn.query_row(
+                    &format!(
+                        "SELECT {} FROM tool_events",
+                        ToolEventRecord::select_columns()
+                    ),
+                    [],
+                    ToolEventRecord::from_row,
+                )
+            })
+            .expect("kayit okunmali");
+
+        assert_eq!(event.tool_name, "open_project");
+        assert_eq!(event.risk_level, ToolRiskLevel::LowRisk);
+        assert_eq!(event.approval_state, ToolApprovalState::Approved);
+        assert_eq!(event.arguments_redacted.as_deref(), Some("projectId=asuna"));
+        assert_eq!(event.session_id, Some(1));
+
+        let json = serde_json::to_value(&event).expect("serialize");
+        let object = json.as_object().expect("JSON nesnesi");
+        assert!(object.contains_key("sessionId"));
+        assert!(object.contains_key("riskLevel"));
+        assert!(object.contains_key("argumentsRedacted"));
+        assert!(object.contains_key("approvalState"));
+        assert!(object.contains_key("resultSummary"));
+        assert!(!object.contains_key("risk_level"));
+        assert_eq!(json["approvalState"], "approved");
+        assert_eq!(json["riskLevel"], 1);
     }
 
     /// Renderer'a giden JSON `camelCase`; `snake_case` uygulama icine sizmaz.

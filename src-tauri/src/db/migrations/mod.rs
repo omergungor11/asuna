@@ -38,6 +38,10 @@ pub const V2_DOWN: &str = include_str!("002_session_end_reason.down.sql");
 pub const V3_UP: &str = include_str!("003_projects.up.sql");
 pub const V3_DOWN: &str = include_str!("003_projects.down.sql");
 
+/// Migration 4 — `tool_events` audit tablosu (ASU-050).
+pub const V4_UP: &str = include_str!("004_tool_events.up.sql");
+pub const V4_DOWN: &str = include_str!("004_tool_events.down.sql");
+
 /// Sirali migration tanimlari.
 ///
 /// **Bu vektore yalnizca sona ekleme yapilir.** Araya ekleme ya da silme, daha
@@ -47,11 +51,12 @@ fn definitions() -> Vec<M<'static>> {
         M::up(V1_UP).down(V1_DOWN),
         M::up(V2_UP).down(V2_DOWN),
         M::up(V3_UP).down(V3_DOWN),
+        M::up(V4_UP).down(V4_DOWN),
     ]
 }
 
 /// Bu kod surumunun bekledigi sema surumu (`PRAGMA user_version`).
-pub const EXPECTED_SCHEMA_VERSION: u32 = 3;
+pub const EXPECTED_SCHEMA_VERSION: u32 = 4;
 
 /// Migration kumesi. Testler `validate()` icin bunu kullanir.
 pub fn migrations() -> Migrations<'static> {
@@ -89,6 +94,24 @@ pub fn end_reasons_declared_in_schema() -> Vec<String> {
 /// testlerle baglidir.
 pub fn project_statuses_declared_in_schema() -> Vec<String> {
     values_in_check(V3_UP, "status IN (")
+}
+
+/// `tool_events.approval_state` CHECK kisitindaki degerleri **sema metninden**
+/// okur (ASU-050). Rust `ToolApprovalState` ve TypeScript
+/// `TOOL_APPROVAL_STATES` bu listeye testlerle baglidir.
+pub fn approval_states_declared_in_schema() -> Vec<String> {
+    values_in_check(V4_UP, "approval_state IN (")
+}
+
+/// `tool_events.risk_level` CHECK kisitindaki degerleri **sema metninden**
+/// okur (ASU-050).
+///
+/// Degerler tirnaksiz sayilardir (`0, 1, 2, 3`); [`values_in_check`] tirnak
+/// kirpmayi zaten kosulsuz yapar, dolayisiyla ayni ayristirici calisir.
+/// `BETWEEN 0 AND 3` yazilsaydi kume sema metninden okunamaz, Rust enum'u ile
+/// sema arasindaki bag yalnizca yoruma dayanirdi.
+pub fn risk_levels_declared_in_schema() -> Vec<String> {
+    values_in_check(V4_UP, "risk_level IN (")
 }
 
 /// `... IN ('a', 'b')` listesini ayristirir.
@@ -343,6 +366,10 @@ mod tests {
             "idx_sessions_started_at",
             "idx_sessions_project_id",
             "idx_sessions_open",
+            // ASU-050 — audit defterinin sorgulanabilir eksenleri.
+            "idx_tool_events_session_id",
+            "idx_tool_events_created_at",
+            "idx_tool_events_tool_name",
         ] {
             assert!(
                 names.iter().any(|name| name == expected),
@@ -783,5 +810,264 @@ mod tests {
                 "tool_state",
             ]
         );
+    }
+
+    // --- Migration 4: `tool_events` (ASU-050) -------------------------------
+
+    fn insert_tool_event(db: &crate::db::AsunaDb, sql: &str) -> Result<usize, crate::db::DbError> {
+        db.with_connection(|conn| conn.execute(sql, []))
+    }
+
+    #[test]
+    fn schema_declares_the_six_approval_states() {
+        assert_eq!(
+            approval_states_declared_in_schema(),
+            [
+                "not_required",
+                "auto_approved",
+                "approved",
+                "denied",
+                "timeout",
+                "not_requested",
+            ]
+        );
+    }
+
+    /// Risk kumesi sema metninden okunabilir olmali (`BETWEEN` degil `IN`);
+    /// aksi halde Rust enum'u ile sema arasindaki bag yalnizca yoruma dayanirdi.
+    #[test]
+    fn schema_declares_the_four_risk_levels() {
+        assert_eq!(risk_levels_declared_in_schema(), ["0", "1", "2", "3"]);
+    }
+
+    #[test]
+    fn approval_state_check_rejects_values_outside_the_spec() {
+        let db = fresh_db();
+        for state in ["", "APPROVED", "onaylandi", "auto", "skipped"] {
+            insert_tool_event(
+                &db,
+                &format!(
+                    "INSERT INTO tool_events (tool_name, risk_level, approval_state, created_at)
+                     VALUES ('get_current_project', 0, '{state}', '2026-08-25T10:00:00Z')"
+                ),
+            )
+            .expect_err("bilinmeyen approval_state reddedilmeli");
+        }
+    }
+
+    #[test]
+    fn risk_level_check_rejects_values_outside_zero_to_three() {
+        let db = fresh_db();
+        for risk in ["-1", "4", "9"] {
+            insert_tool_event(
+                &db,
+                &format!(
+                    "INSERT INTO tool_events (tool_name, risk_level, approval_state, created_at)
+                     VALUES ('open_project', {risk}, 'approved', '2026-08-25T10:00:00Z')"
+                ),
+            )
+            .expect_err("aralik disi risk seviyesi reddedilmeli");
+        }
+    }
+
+    /// Uzunluk tavanlari yorum degil, calisan kisit: bir dosya icerigi ya da
+    /// uzun bir stack trace audit defterine sessizce sizamaz.
+    #[test]
+    fn oversized_audit_fields_are_rejected_by_the_schema() {
+        let db = fresh_db();
+        let long = "x".repeat(513);
+
+        insert_tool_event(
+            &db,
+            &format!(
+                "INSERT INTO tool_events (tool_name, risk_level, arguments_redacted, approval_state, created_at)
+                 VALUES ('read_project_file', 0, '{long}', 'not_required', '2026-08-25T10:00:00Z')"
+            ),
+        )
+        .expect_err("tavani asan arguman ozeti reddedilmeli");
+
+        insert_tool_event(
+            &db,
+            &format!(
+                "INSERT INTO tool_events (tool_name, risk_level, result_summary, approval_state, created_at)
+                 VALUES ('read_project_file', 0, '{long}', 'not_required', '2026-08-25T10:00:00Z')"
+            ),
+        )
+        .expect_err("tavani asan sonuc ozeti reddedilmeli");
+
+        insert_tool_event(
+            &db,
+            &format!(
+                "INSERT INTO tool_events (tool_name, risk_level, approval_state, created_at)
+                 VALUES ('{}', 0, 'not_required', '2026-08-25T10:00:00Z')",
+                "t".repeat(65)
+            ),
+        )
+        .expect_err("tavani asan tool adi reddedilmeli");
+
+        // Bos metin de gecmez: "yazildi ama bos" ile "yazilmadi" ayni gorunmemeli.
+        insert_tool_event(
+            &db,
+            "INSERT INTO tool_events (tool_name, risk_level, arguments_redacted, approval_state, created_at)
+             VALUES ('read_project_file', 0, '', 'not_required', '2026-08-25T10:00:00Z')",
+        )
+        .expect_err("bos arguman ozeti reddedilmeli (NULL kullanilmali)");
+    }
+
+    #[test]
+    fn audit_timestamps_must_be_utc_iso_8601() {
+        let db = fresh_db();
+        for stamp in [
+            "1756108800",
+            "2026-08-25 10:00:00",
+            "2026-08-25T10:00:00+03:00",
+        ] {
+            insert_tool_event(
+                &db,
+                &format!(
+                    "INSERT INTO tool_events (tool_name, risk_level, approval_state, created_at)
+                     VALUES ('open_project', 1, 'approved', '{stamp}')"
+                ),
+            )
+            .expect_err("UTC ISO-8601 disi zaman damgasi reddedilmeli");
+        }
+    }
+
+    /// Var olmayan bir oturuma referans veren audit satiri yazilamaz.
+    #[test]
+    fn the_audit_session_link_is_a_real_foreign_key() {
+        let db = fresh_db();
+        insert_tool_event(
+            &db,
+            "INSERT INTO tool_events (session_id, tool_name, risk_level, approval_state, created_at)
+             VALUES (4242, 'open_project', 1, 'approved', '2026-08-25T10:00:00Z')",
+        )
+        .expect_err("var olmayan oturum referansi reddedilmeli");
+    }
+
+    /// **ASU-050 kabul kaniti.** Oturum silinince audit satiri **kalir**;
+    /// yalnizca oturuma olan izi kopar.
+    ///
+    /// `ON DELETE CASCADE` yazilsaydi "konusma gecmisini sil" dugmesi ayni
+    /// zamanda audit defterini silen bir primitif olurdu — yani "audit
+    /// kayitlari uygulamadan silinemiyor" kriteri dolayli olarak delinirdi.
+    #[test]
+    fn deleting_a_session_keeps_the_audit_row_but_clears_the_link() {
+        let db = fresh_db();
+        let (remaining, link, tool): (i64, Option<i64>, String) = db
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO sessions (started_at, model, created_at)
+                     VALUES ('2026-08-25T10:00:00Z', 'gpt-realtime-2.1', '2026-08-25T10:00:00Z')",
+                    [],
+                )?;
+                let session_id = conn.last_insert_rowid();
+                conn.execute(
+                    "INSERT INTO tool_events (session_id, tool_name, risk_level, approval_state, result_summary, created_at)
+                     VALUES (?1, 'open_project', 1, 'approved', 'Proje VS Code ile acildi.', '2026-08-25T10:01:00Z')",
+                    [session_id],
+                )?;
+                conn.execute("DELETE FROM sessions WHERE id = ?1", [session_id])?;
+                conn.query_row(
+                    "SELECT count(*), max(session_id), max(tool_name) FROM tool_events",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+            })
+            .expect("sorgu calismali");
+
+        assert_eq!(remaining, 1, "audit satiri oturumla birlikte silinmis");
+        assert_eq!(link, None, "kopan referans NULL'a cekilmeli");
+        assert_eq!(tool, "open_project", "audit icerigi degismemeli");
+    }
+
+    /// Migration 4 var olan veriye dokunmaz: sema 3'te yazilmis hafiza, oturum
+    /// ve proje satirlari yerinde kalir (yeni tablo ekleniyor, hicbiri yeniden
+    /// yaratilmiyor).
+    #[test]
+    fn migration_four_only_adds_a_table() {
+        let mut connection = Connection::open_in_memory().expect("bellek ici DB");
+        connection
+            .pragma_update(None, "foreign_keys", "ON")
+            .expect("FK zorlamasi acilmali");
+        migrations()
+            .to_version(&mut connection, 3)
+            .expect("sema 3 uygulanmali");
+
+        connection
+            .execute_batch(
+                "INSERT INTO projects (id, name, path, status, created_at, updated_at)
+                 VALUES ('asuna', 'Asuna', '/tmp/asuna-004', 'active', '2026-08-25T10:00:00Z', '2026-08-25T10:00:00Z');
+
+                 INSERT INTO sessions (id, started_at, project_id, model, created_at)
+                 VALUES (1, '2026-08-25T10:00:00Z', 'asuna', 'gpt-realtime-2.1', '2026-08-25T10:00:00Z');
+
+                 INSERT INTO memories (id, kind, title, content, project_id, importance, confidence, source_session_id, created_at, updated_at)
+                 VALUES (1, 'decision', 'Wake word yerel', 'Cihazda kalir.', 'asuna', 0.9, 1.0, 1, '2026-08-25T10:05:00Z', '2026-08-25T10:05:00Z');",
+            )
+            .expect("sema 3 verisi yazilmali");
+
+        apply(&mut connection).expect("sema 4'e yukseltilmeli");
+
+        let counts: (i64, i64, i64, i64) = connection
+            .query_row(
+                "SELECT (SELECT count(*) FROM projects),
+                        (SELECT count(*) FROM sessions),
+                        (SELECT count(*) FROM memories),
+                        (SELECT count(*) FROM tool_events)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("sayilar okunmali");
+        assert_eq!(
+            counts,
+            (1, 1, 1, 0),
+            "migration 4 var olan veriyi degistirdi"
+        );
+
+        // Hafiza→oturum bagi da yerinde: yeniden yaratma olmadigi icin hicbir
+        // ortuk DELETE tetiklenmedi.
+        let link: Option<i64> = connection
+            .query_row(
+                "SELECT source_session_id FROM memories WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("bag okunmali");
+        assert_eq!(link, Some(1));
+    }
+
+    /// Geri alma tabloyu dusurur ve ileri sarim yeniden kurar; kullanicinin
+    /// hafizasi/oturumlari bu yolculuktan etkilenmez.
+    #[test]
+    fn migration_four_can_be_rolled_back_and_reapplied() {
+        let mut connection = Connection::open_in_memory().expect("bellek ici DB");
+        apply(&mut connection).expect("migration uygulanmali");
+        connection
+            .execute(
+                "INSERT INTO tool_events (tool_name, risk_level, approval_state, created_at)
+                 VALUES ('get_current_project', 0, 'not_required', '2026-08-25T10:00:00Z')",
+                [],
+            )
+            .expect("audit satiri yazilmali");
+
+        migrations()
+            .to_version(&mut connection, 3)
+            .expect("sema 3'e donulebilmeli");
+
+        let remaining: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'tool_events'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("sqlite_master okunmali");
+        assert_eq!(remaining, 0, "down migration tabloyu birakmis");
+
+        apply(&mut connection).expect("yeniden ileri sarilmali");
+        let version: u32 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("user_version okunmali");
+        assert_eq!(version, EXPECTED_SCHEMA_VERSION);
     }
 }

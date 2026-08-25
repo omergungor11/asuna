@@ -25,7 +25,7 @@ pub fn get_frontend_config(config: State<'_, AsunaConfig>) -> FrontendConfig {
 /// etkinlestirme) ve `lib.rs` (`generate_handler!`) ile karsilastirir. Yeni bir
 /// `#[tauri::command]` eklerken dort yerin hepsi guncellenmeli.
 #[cfg(test)]
-pub const EXPOSED_COMMANDS: [&str; 22] = [
+pub const EXPOSED_COMMANDS: [&str; 24] = [
     "get_frontend_config",
     "mint_realtime_token",
     "db_status",
@@ -41,6 +41,8 @@ pub const EXPOSED_COMMANDS: [&str; 22] = [
     "session_list",
     "session_delete",
     "session_clear_all",
+    "record_tool_event",
+    "tool_event_list",
     "project_list",
     "project_context",
     "project_add",
@@ -99,6 +101,24 @@ pub const SESSION_WRITE_COMMANDS: [&str; 4] = [
     "session_delete",
     "session_clear_all",
 ];
+
+/// Tool audit defterini **okuyan** komutlar (ASU-050).
+///
+/// Ayri bir capability'de: `asuna-tool-audit-write`'i `tauri.conf.json`
+/// listesinden cikarmak yeni audit yazimini durdurur ama var olan defteri
+/// gorunur birakir.
+#[cfg(test)]
+pub const TOOL_AUDIT_READ_COMMANDS: [&str; 1] = ["tool_event_list"];
+
+/// Tool audit defterine **yazan** komutlar (ASU-050).
+///
+/// Bu liste bilerek **tek elemanli** ve boyle kalacak. `tool_events` MVP'de
+/// salt yazilir (append-only): silme ve guncelleme komutu yoktur, dolayisiyla
+/// "audit kayitlari uygulamadan silinemiyor" kriteri bir politika degil bir
+/// **yuzey eksikligi** olarak garanti edilir. Asagidaki
+/// [`tests::the_tool_audit_surface_is_append_only`] bunu kilitler.
+#[cfg(test)]
+pub const TOOL_AUDIT_WRITE_COMMANDS: [&str; 1] = ["record_tool_event"];
 
 /// Kayitli proje koklerini **okuyan** komutlar (ASU-040, ASU-044).
 ///
@@ -542,6 +562,131 @@ mod tests {
                 PROJECT_READ_COMMANDS.contains(command) ^ PROJECT_WRITE_COMMANDS.contains(command),
                 "`{command}` ya okuma ya yazma listesinde olmali (ikisinde birden degil)"
             );
+        }
+    }
+
+    /// **ASU-050 kabul kaniti**: tool audit okuma ve yazma ayri capability
+    /// dosyalari; okuma dosyasi hicbir yazma izni tasiyamaz.
+    #[test]
+    fn tool_audit_reads_and_writes_are_separate_permissions() {
+        let read_permissions = permissions_of("asuna-tool-audit-read.json");
+        let write_permissions = permissions_of("asuna-tool-audit-write.json");
+
+        assert_eq!(read_permissions, vec![permission_name("tool_event_list")]);
+        assert_eq!(
+            write_permissions,
+            vec![permission_name("record_tool_event")]
+        );
+
+        // Audit yuzeyleri hafiza, oturum ve proje yuzeylerine karismaz: audit
+        // ayri bir katman ve ayri bir yetki eksenidir.
+        for file in [
+            "asuna-memory-read.json",
+            "asuna-memory-write.json",
+            "asuna-session-read.json",
+            "asuna-session.json",
+            "asuna-projects-read.json",
+            "asuna-projects-write.json",
+        ] {
+            let permissions = permissions_of(file);
+            for command in TOOL_AUDIT_READ_COMMANDS
+                .iter()
+                .chain(&TOOL_AUDIT_WRITE_COMMANDS)
+            {
+                assert!(
+                    !permissions.contains(&permission_name(command)),
+                    "`{command}` `{file}` icinde de aciliyor"
+                );
+            }
+        }
+    }
+
+    /// **ASU-050 kabul kaniti**: "audit kayitlari uygulamadan silinemiyor".
+    ///
+    /// Kilit bir politika degil, bir **yuzey eksikligi**: `tool_events`'e
+    /// dokunan yalnizca iki komut var ve ikisi de ekleme/okuma. Bir gun
+    /// `tool_event_delete` ya da `tool_event_clear_all` eklenirse bu test duser
+    /// ve karar bilincli olarak verilmek zorunda kalir.
+    #[test]
+    fn the_tool_audit_surface_is_append_only() {
+        let audit_commands: Vec<&str> = EXPOSED_COMMANDS
+            .iter()
+            .copied()
+            .filter(|name| name.contains("tool_event"))
+            .collect();
+        assert_eq!(
+            audit_commands,
+            vec!["record_tool_event", "tool_event_list"],
+            "audit yuzeyine yeni bir komut eklenmis"
+        );
+
+        for forbidden in [
+            "tool_event_delete",
+            "tool_event_update",
+            "tool_event_clear_all",
+            "tool_event_purge",
+            "tool_event_archive",
+        ] {
+            assert!(
+                !EXPOSED_COMMANDS.contains(&forbidden),
+                "`{forbidden}` acilmis — audit artik salt yazilir degil"
+            );
+            let permission = format!("allow-{}", forbidden.replace('_', "-"));
+            for (file_name, content) in all_capability_files() {
+                assert!(
+                    !content.contains(&permission),
+                    "`{file_name}` `{permission}` izni tasiyor"
+                );
+            }
+        }
+    }
+
+    /// Yeni bir `tool_event` / `record_tool_event` komutu siniflandirilmadan
+    /// eklenemesin.
+    #[test]
+    fn every_tool_audit_command_is_classified_as_read_or_write() {
+        for command in EXPOSED_COMMANDS
+            .iter()
+            .filter(|name| name.contains("tool_event"))
+        {
+            assert!(
+                TOOL_AUDIT_READ_COMMANDS.contains(command)
+                    ^ TOOL_AUDIT_WRITE_COMMANDS.contains(command),
+                "`{command}` ya okuma ya yazma listesinde olmali (ikisinde birden degil)"
+            );
+        }
+    }
+
+    /// **ASU-045 devri**: dialog plugin'i yalnizca `open` acar.
+    ///
+    /// Statik kilit; ayni kural `acl_regression.rs` icinde gercek ACL uzerinde
+    /// de olculuyor. Ikisi birlikte: dosya yanlislikla genisletilirse bu test,
+    /// izin adi yanlis yazilirsa (sessiz red) oteki test duser.
+    #[test]
+    fn the_dialog_plugin_only_opens_a_directory_picker() {
+        let permissions = permissions_of("asuna-dialog.json");
+        assert_eq!(
+            permissions,
+            vec!["dialog:allow-open"],
+            "dialog capability'si genislemis"
+        );
+
+        // `save` bir dosya YAZMA hedefi sectirir; `message`/`ask`/`confirm`
+        // WKWebView'de modal sistem penceresi acar ve ses oturumunu kilitler —
+        // Asuna onaylari uygulama icinde, iptal edilebilir satir icinde alinir.
+        for forbidden in [
+            "dialog:allow-save",
+            "dialog:allow-message",
+            "dialog:allow-ask",
+            "dialog:allow-confirm",
+            "dialog:default",
+        ] {
+            for (file_name, content) in all_capability_files() {
+                assert!(
+                    !content.contains(&format!("\"{forbidden}\"")),
+                    "`{file_name}` `{forbidden}` iznini aciyor"
+                );
+            }
         }
     }
 

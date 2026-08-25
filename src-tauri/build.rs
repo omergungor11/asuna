@@ -45,6 +45,14 @@ fn main() {
             // disina cikmasi reddedilir.
             "session_delete",
             "session_clear_all",
+            // ASU-050: tool audit defteri
+            // (capabilities/asuna-tool-audit-{read,write}.json).
+            // `record_tool_event` **append-only**: yalnizca yeni satir yazar;
+            // guncelleme ve silme komutu bilerek YOK — audit kayitlari
+            // uygulamadan silinemez (PROJECT.md Bolum 19). Arguman ozetleme ve
+            // redaksiyon Rust tarafinda yapilir; renderer hazir metin veremez.
+            "record_tool_event",
+            "tool_event_list",
             // ASU-040: kayitli proje kokleri (capabilities/asuna-projects-read.json).
             // Salt okuma; renderer parametre veremez.
             "project_list",

@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "asuna-tool-audit-write",
+  "description": "Tool audit defterine YAZMA yuzeyi (ASU-050). Tek komut acar: `record_tool_event` — renderer'daki tool calistiricisi (ASU-047) HER cagriyi bildirir: onaylanan, reddedilen, hata veren ve zaman asimina ugrayan dahil. Yuzey bilerek TEK YONLU: yalnizca yeni satir eklenir. Guncelleme ve silme komutu YOKTUR ve eklenmeyecektir — audit kayitlari uygulamadan silinemez (PROJECT.md Bolum 19, ASU-050 kabul kriteri). Renderer HAZIR BIR ARGUMAN METNI GONDEREMEZ: sozlesmede `argumentsRedacted` diye bir alan yok; ham `arguments` JSON'u gonderilir ve `tool_events.arguments_redacted` degeri Rust tarafinda uretilir — anahtar adlari + kirpilmis skaler degerler, ic ice yapilar yalnizca sekil olarak (`{2 alan}` / `[3 oge]`), ardindan `redact_sensitive_text` suzgeci ve uzunluk tavani. Boylece dosya icerigi ve secret'lar audit'e yapisal olarak giremez ve redaksiyon webview'e devredilmis olmaz. Oturum kimligi bir metin degil kayitli bir satirin kimligidir; oturum silinmisse bag NULL'a duser ama satir yazilir. `ASUNA_MEMORY_ENABLED=false` ya da calisma zamani hafiza anahtari kapaliyken hicbir sey yazilmaz ve komut bunu acikca `skipped` olarak bildirir. Okuma bu dosyada YOKTUR (asuna-tool-audit-read). Kapsam ana pencere ile sinirlidir; wildcard izin yoktur.",
+  "platforms": ["macOS"],
+  "windows": ["main"],
+  "permissions": ["allow-record-tool-event"]
+}

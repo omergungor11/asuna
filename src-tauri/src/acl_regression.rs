@@ -82,6 +82,14 @@ fn build_test_app_with(db_state: DbState) -> App<MockRuntime> {
 
 fn build_test_app_with_privacy(db_state: DbState, privacy: PrivacyState) -> App<MockRuntime> {
     let app = mock_builder()
+        // ASU-045 devri (ASU-050): dialog plugin'i uretimdeki `run()` ile ayni
+        // sekilde yukleniyor. Yuklenmeseydi `plugin:dialog|save` cagrisi
+        // "Plugin not found" ile duserdi ve `plugin:dialog|open` ile ayni
+        // gorunurdu — yani ACL kilidini olcen test hicbir sey kanitlamazdi.
+        // `open` bu testlerde **cagrilmaz**: gercek bir sistem penceresi acmak
+        // mock runtime'da anlamsiz. Onun tek izin oldugu `commands.rs` icinde
+        // statik olarak dogrulanir.
+        .plugin(tauri_plugin_dialog::init())
         .manage(test_config())
         .manage(Arc::new(privacy))
         // ASU-044: `project_context` bu servisi bekler. Uretimdeki `lib.rs` ile
@@ -105,6 +113,8 @@ fn build_test_app_with_privacy(db_state: DbState, privacy: PrivacyState) -> App<
             crate::db::session_repository::session_list,
             crate::db::session_repository::session_delete,
             crate::db::session_repository::session_clear_all,
+            crate::db::tool_event_repository::record_tool_event,
+            crate::db::tool_event_repository::tool_event_list,
             crate::projects::registry::project_list,
             crate::projects::registry::project_add,
             crate::projects::registry::project_remove,
@@ -1253,6 +1263,393 @@ fn session_commands_are_no_ops_when_memory_is_disabled() {
         finalized.contains("\"status\":\"skipped\""),
         "yanit: {finalized}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// ASU-050 — tool audit defteri
+// ---------------------------------------------------------------------------
+
+/// Gecerli bir audit girdisi (risk 0, onaysiz calisan bir tool).
+fn tool_event_args(approval_state: &str) -> serde_json::Value {
+    serde_json::json!({
+        "input": {
+            "toolName": "get_current_project",
+            "riskLevel": 0,
+            "approvalState": approval_state,
+        }
+    })
+}
+
+/// **ASU-050 kabul kaniti** — yazma ve okuma gercek ACL uzerinden, renderer'in
+/// gonderdigi istegin aynisiyla.
+#[test]
+fn the_tool_audit_log_records_and_lists_over_the_real_acl() {
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+
+    let empty = invoke_with(&webview, "tool_event_list", serde_json::Value::Null)
+        .expect("tool_event_list calismali");
+    assert!(
+        empty.contains("\"events\":[]") && empty.contains("\"total\":0"),
+        "bos defterde beklenmeyen yanit: {empty}"
+    );
+    // Tavan gorunur: UI "hepsi bu kadar" diye tahmin yurutmez.
+    assert!(
+        empty.contains("\"limit\":50") && empty.contains("\"limitMax\":200"),
+        "sinirlar yanitta yok: {empty}"
+    );
+
+    let started = invoke_with(&webview, "session_start", serde_json::json!({}))
+        .expect("session_start calismali");
+    let session_id = serde_json::from_str::<serde_json::Value>(&started).expect("JSON")["session"]
+        ["id"]
+        .as_i64()
+        .expect("oturum kimligi");
+
+    let recorded = invoke_with(
+        &webview,
+        "record_tool_event",
+        serde_json::json!({
+            "input": {
+                "sessionId": session_id,
+                "toolName": "open_project",
+                "riskLevel": 1,
+                "arguments": { "projectId": "asuna" },
+                "approvalState": "approved",
+                "resultSummary": "Proje VS Code ile acildi."
+            }
+        }),
+    )
+    .expect("record_tool_event calismali");
+    assert!(
+        recorded.contains("\"status\":\"recorded\""),
+        "yanit: {recorded}"
+    );
+    assert!(
+        recorded.contains("\"argumentsRedacted\":\"projectId=asuna\""),
+        "yanit: {recorded}"
+    );
+    assert!(recorded.contains("\"riskLevel\":1"), "yanit: {recorded}");
+
+    let listed = invoke_with(&webview, "tool_event_list", serde_json::json!({}))
+        .expect("tool_event_list calismali");
+    assert!(listed.contains("\"total\":1"), "yanit: {listed}");
+    assert!(listed.contains("open_project"), "yanit: {listed}");
+
+    // Oturum filtresi: oturum detayi ekrani bunu kullanacak (ASU-054).
+    let filtered = invoke_with(
+        &webview,
+        "tool_event_list",
+        serde_json::json!({ "query": { "sessionId": session_id } }),
+    )
+    .expect("filtreli liste calismali");
+    assert!(filtered.contains("\"total\":1"), "yanit: {filtered}");
+
+    let other = invoke_with(
+        &webview,
+        "tool_event_list",
+        serde_json::json!({ "query": { "sessionId": 9_999 } }),
+    )
+    .expect("bos filtre hata degil");
+    assert!(
+        other.contains("\"events\":[]") && other.contains("\"total\":0"),
+        "yanit: {other}"
+    );
+}
+
+/// **ASU-050 kabul kriteri**: reddedilen, zaman asimina ugrayan ve onaya hic
+/// gitmeyen cagrilar da yaziliyor — hepsi gercek ACL uzerinden.
+#[test]
+fn refused_and_timed_out_tool_calls_are_audited_too() {
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+
+    for state in [
+        "not_required",
+        "auto_approved",
+        "approved",
+        "denied",
+        "timeout",
+        "not_requested",
+    ] {
+        let response = invoke_with(&webview, "record_tool_event", tool_event_args(state))
+            .unwrap_or_else(|error| panic!("`{state}` yazilmali: {error}"));
+        assert!(
+            response.contains(&format!("\"approvalState\":\"{state}\"")),
+            "yanit: {response}"
+        );
+    }
+
+    let listed = invoke_with(&webview, "tool_event_list", serde_json::json!({}))
+        .expect("tool_event_list calismali");
+    assert!(listed.contains("\"total\":6"), "yanit: {listed}");
+    for state in ["denied", "timeout", "not_requested"] {
+        assert!(
+            listed.contains(&format!("\"approvalState\":\"{state}\"")),
+            "`{state}` defterde yok: {listed}"
+        );
+    }
+
+    // Uydurulmus bir onay durumu IPC sinirinde duser; DB'ye dokunulmaz.
+    let error = invoke_with(&webview, "record_tool_event", tool_event_args("onaylandi"))
+        .expect_err("bilinmeyen approvalState reddedilmeli");
+    assert!(!is_acl_denial(&error), "hata: {error}");
+
+    // Aralik disi risk seviyesi de.
+    let error = invoke_with(
+        &webview,
+        "record_tool_event",
+        serde_json::json!({
+            "input": { "toolName": "x", "riskLevel": 7, "approvalState": "approved" }
+        }),
+    )
+    .expect_err("aralik disi riskLevel reddedilmeli");
+    assert!(!is_acl_denial(&error), "hata: {error}");
+
+    let listed = invoke_with(&webview, "tool_event_list", serde_json::json!({}))
+        .expect("tool_event_list calismali");
+    assert!(
+        listed.contains("\"total\":6"),
+        "reddedilen istekler yazilmis: {listed}"
+    );
+}
+
+/// **ASU-050 kabul kriteri**: argumanlar redakte ediliyor; dosya icerigi ve
+/// secret'lar audit'e girmiyor.
+///
+/// `tool_event_repository` bunu birim testinde de kanitliyor; buradaki kontrol
+/// renderer'in gercekten gordugu payload uzerinde — ve **renderer'in hazir bir
+/// ozet gonderemedigini** de olcuyor.
+#[test]
+fn tool_arguments_are_redacted_on_the_host_side_over_ipc() {
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+
+    let recorded = invoke_with(
+        &webview,
+        "record_tool_event",
+        serde_json::json!({
+            "input": {
+                "toolName": "read_project_file",
+                "riskLevel": 0,
+                "arguments": {
+                    "apiKey": "sk-proj-SIZMAMALI-DEGER",
+                    "password": "hunter2",
+                    "file": { "content": "OPENAI_API_KEY=cok-gizli-deger\nikinci satir" }
+                },
+                "approvalState": "not_required",
+                "resultSummary": "Anahtar sk-proj-SIZMAMALI-DEGER kullanildi."
+            }
+        }),
+    )
+    .expect("record_tool_event calismali");
+
+    assert!(
+        !recorded.contains("SIZMAMALI-DEGER"),
+        "kalici anahtar audit'e girdi: {recorded}"
+    );
+    assert!(
+        !recorded.contains("hunter2"),
+        "parola audit'e girdi: {recorded}"
+    );
+    assert!(
+        !recorded.contains("cok-gizli-deger"),
+        "dosya icerigi audit'e girdi: {recorded}"
+    );
+    // Ic ice yapi yalnizca **sekil** olarak gorunur.
+    assert!(recorded.contains("file={1 alan}"), "yanit: {recorded}");
+
+    // Ayni sey listede de gecerli (kayit gercekten redakte yazildi, yanit
+    // suslenmedi).
+    let listed = invoke_with(&webview, "tool_event_list", serde_json::json!({}))
+        .expect("tool_event_list calismali");
+    assert!(!listed.contains("SIZMAMALI-DEGER"), "yanit: {listed}");
+    assert!(!listed.contains("hunter2"), "yanit: {listed}");
+
+    // Renderer hazir bir "redakte edilmis" metin gonderemez: sozlesmede boyle
+    // bir alan yok (`deny_unknown_fields`).
+    let error = invoke_with(
+        &webview,
+        "record_tool_event",
+        serde_json::json!({
+            "input": {
+                "toolName": "read_project_file",
+                "riskLevel": 0,
+                "argumentsRedacted": "path=zararsiz.md",
+                "approvalState": "not_required"
+            }
+        }),
+    )
+    .expect_err("renderer arguman ozetini kendisi yazamaz");
+    assert!(!is_acl_denial(&error), "hata: {error}");
+}
+
+/// **ASU-050 kabul kriteri**: audit kayitlari uygulamadan silinemiyor.
+///
+/// Silme/guncelleme komutu ACL'de **yok**; boyle bir cagri deny-by-default ile
+/// duser. `commands.rs` ayni kurali statik olarak da kilitliyor.
+#[test]
+fn the_tool_audit_log_has_no_delete_or_update_surface() {
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+
+    invoke_with(&webview, "record_tool_event", tool_event_args("approved"))
+        .expect("kayit yazilmali");
+
+    for command in [
+        "tool_event_delete",
+        "tool_event_update",
+        "tool_event_clear_all",
+        "tool_event_purge",
+        "tool_event_archive",
+    ] {
+        let error = invoke_with(&webview, command, serde_json::json!({ "id": 1 }))
+            .expect_err("audit silme/guncelleme yuzeyi olmamali");
+        assert!(
+            is_acl_denial(&error),
+            "`{command}` renderer'a acik: {error}"
+        );
+    }
+
+    // Var olan hicbir toplu temizlik komutu da audit'e dokunmaz: oturum
+    // gecmisini silmek denetim defterini silmez (FK `ON DELETE SET NULL`).
+    invoke_with(
+        &webview,
+        "session_clear_all",
+        serde_json::json!({ "confirmationPhrase": "KONUSMA GECMISINI SIL" }),
+    )
+    .ok();
+    invoke_with(
+        &webview,
+        "memory_delete_all",
+        serde_json::json!({ "confirmationPhrase": "TUM HAFIZAYI SIL" }),
+    )
+    .expect("hafiza temizligi calismali");
+
+    let listed = invoke_with(&webview, "tool_event_list", serde_json::json!({}))
+        .expect("tool_event_list calismali");
+    assert!(
+        listed.contains("\"total\":1"),
+        "audit defteri temizlikle birlikte silinmis: {listed}"
+    );
+}
+
+/// Hafiza kapaliyken audit yazimi `skipped`, okuma bos sayfa doner; ikisi de
+/// hata degil. Sonuc kullaniciya gorunur: kalici audit izi tutulmaz.
+#[test]
+fn tool_audit_commands_are_no_ops_when_memory_is_disabled() {
+    let app = build_test_app(); // DbState::Disabled
+    let webview = main_webview(&app);
+
+    let recorded = invoke_with(&webview, "record_tool_event", tool_event_args("approved"))
+        .expect("kapali hafiza hata degil");
+    assert!(
+        recorded.contains("\"status\":\"skipped\"")
+            && recorded.contains("\"reason\":\"memory-disabled\""),
+        "yanit: {recorded}"
+    );
+
+    let listed = invoke_with(&webview, "tool_event_list", serde_json::Value::Null)
+        .expect("kapali hafiza hata degil");
+    assert!(
+        listed.contains("\"events\":[]") && listed.contains("\"total\":0"),
+        "yanit: {listed}"
+    );
+}
+
+/// **ASU-050 kabul kriteri**: audit yazimi basarisiz olursa sessizce
+/// kaybolmaz — komut tipli bir hata doner.
+///
+/// Burada ariza `DbState::Unavailable` ile temsil ediliyor: "audit tutulamadi"
+/// ile "audit bos" ayni cevap degildir (PROJECT.md Bolum 30).
+#[test]
+fn a_failed_audit_write_surfaces_a_typed_error_instead_of_vanishing() {
+    let app = build_test_app_with(DbState::Unavailable {
+        reason: "sema migration'lari uygulanamadi".to_owned(),
+    });
+    let webview = main_webview(&app);
+
+    let error = invoke_with(&webview, "record_tool_event", tool_event_args("approved"))
+        .expect_err("ariza hata olarak donmeli");
+    assert!(
+        !is_acl_denial(&error),
+        "ACL reddi degil, ariza bekleniyordu: {error}"
+    );
+    assert!(error.contains("unavailable"), "hata: {error}");
+
+    let error = invoke_with(&webview, "tool_event_list", serde_json::Value::Null)
+        .expect_err("ariza hata olarak donmeli");
+    assert!(error.contains("unavailable"), "hata: {error}");
+}
+
+// ---------------------------------------------------------------------------
+// ASU-045 devri — dialog plugin kilidi
+// ---------------------------------------------------------------------------
+
+/// **ASU-045 kabul kaniti (ASU-050 devri)**: dialog plugin'i yukludur ama
+/// yalnizca `open` acilmistir.
+///
+/// Plugin `build_test_app_with_privacy` icinde uretimdekiyle **ayni sekilde**
+/// yukleniyor; dolayisiyla asagidaki redler "plugin yok" degil, **ACL reddi**.
+/// Ayrimi olcen sey `commands.rs` icindeki statik esi: orada `asuna-dialog.json`
+/// izin listesinin tam olarak `["dialog:allow-open"]` oldugu dogrulaniyor.
+///
+/// Neden bu izinler kapali:
+///
+/// - `save` bir dosya YAZMA hedefi sectirir. Dizin secici bir okuma yetkisi
+///   bile degil (donen sey yalnizca bir metin yoldur); yazma hedefi sectirmek
+///   bu ekranin isi degil ve `fs` izni zaten yok.
+/// - `message` / `ask` / `confirm` WKWebView'de **modal sistem penceresi** acar
+///   ve ses oturumunu kilitler. Asuna'nin onaylari uygulama icinde, iptal
+///   edilebilir ve klavyeyle erisilebilir bir satir icinde alinir (ASU-053).
+#[test]
+fn the_dialog_plugin_only_exposes_the_directory_picker() {
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+
+    // Plugin'in gercekten var olan iki komutu. Red **ACL'den** gelmeli:
+    // mesaj eksik izni adlandirir (`dialog.save not allowed. Permissions
+    // associated with this command: dialog:allow-save, dialog:default`).
+    // Plugin yuklu olmasaydi mesaj "Plugin not found" olurdu ve bu test hicbir
+    // sey kanitlamazdi — ayrim testin can alici noktasi.
+    for (command, permission) in [
+        ("plugin:dialog|save", "dialog:allow-save"),
+        ("plugin:dialog|message", "dialog:allow-message"),
+    ] {
+        let error = invoke_with(&webview, command, serde_json::json!({}))
+            .expect_err("`{command}` reddedilmeli");
+        assert!(
+            is_acl_denial(&error),
+            "`{command}` renderer'a acik: {error}"
+        );
+        assert!(
+            error.contains(permission),
+            "`{command}` reddi ACL izniyle iliskilendirilmemis: {error}"
+        );
+    }
+
+    // `ask` / `confirm` plugin'in 2.x komut yuzeyinde zaten yok (`message`
+    // uzerine kurulu JS yardimcilaridir): red "Command not found" olur.
+    // Yine de aranyor — bir gun komut haline gelirlerse sessizce acilmasinlar.
+    for command in ["plugin:dialog|ask", "plugin:dialog|confirm"] {
+        let error = invoke_with(&webview, command, serde_json::json!({}))
+            .expect_err("`{command}` reddedilmeli");
+        assert!(
+            is_acl_denial(&error),
+            "`{command}` renderer'a acik: {error}"
+        );
+    }
+
+    // Dosya sistemi plugin'i hic yuklu degil: dizin secici bir `fs` yetkisi
+    // degildir ve o kapi ayrica kapali.
+    for command in ["plugin:fs|read_file", "plugin:fs|write_text_file"] {
+        let error = invoke_with(&webview, command, serde_json::json!({}))
+            .expect_err("`{command}` reddedilmeli");
+        assert!(
+            is_acl_denial(&error),
+            "`{command}` renderer'a acik: {error}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

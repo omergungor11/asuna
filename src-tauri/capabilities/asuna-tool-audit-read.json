@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "asuna-tool-audit-read",
+  "description": "Tool audit defteri OKUMA yuzeyi (ASU-050). Tek komut acar: `tool_event_list` — en yeni tool cagrilarini dondurur (zaman, tool adi, risk seviyesi, REDAKTE EDILMIS arguman ozeti, onay durumu, sonuc ozeti) ve istege bagli olarak tek bir oturuma filtreler. Tools sekmesi ve oturum detayi ayni komuttan beslenir; boylece ekranda gorunen ile defterde yazan ayrisamaz (PROJECT.md Bolum 19: 'kullanici, ajanin bilgisayarini sessizce degistirip degistirmedigini merak etmemeli'). Renderer siralamayi ya da alanlari secemez; yalnizca kac satir ve hangi oturum diyebilir ve limit sunucu tavanina kirpilir (kirpma yanitta `limit` / `limitMax` / `total` ile gorunur). SALT OKUMA: bu dosya hicbir yazma, guncelleme ya da silme izni tasimaz — yazma ayri bir capability'dedir (asuna-tool-audit-write) ve silme komutu HIC YOKTUR. Ayrim bilincli: `asuna-tool-audit-write`'i tauri.conf.json listesinden cikarmak yeni audit yazimini durdurur ama var olan defteri gorunur birakir. Kapsam ana pencere ile sinirlidir; wildcard izin yoktur.",
+  "platforms": ["macOS"],
+  "windows": ["main"],
+  "permissions": ["allow-tool-event-list"]
+}

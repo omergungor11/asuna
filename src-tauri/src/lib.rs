@@ -117,6 +117,10 @@ pub fn run() {
             db::session_repository::session_list,
             db::session_repository::session_delete,
             db::session_repository::session_clear_all,
+            // ASU-050: tool audit defteri. Yazma **append-only** (tek yon),
+            // okuma salt okunur; silme/guncelleme komutu bilerek YOK.
+            db::tool_event_repository::record_tool_event,
+            db::tool_event_repository::tool_event_list,
             projects::registry::project_list,
             projects::registry::project_add,
             projects::registry::project_remove,
