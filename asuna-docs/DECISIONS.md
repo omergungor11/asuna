@@ -63,6 +63,22 @@ Katman mimarileri: `docs/architecture/{voice,memory,tools,security}.md`.
   rapor edilir) — ses dongusu bozuk bir UI yolu yuzunden olmez (PROJECT.md Bolum 30). Hicbir gecersiz
   gecis sessizce yutulmaz. Ayni-duruma gecis de gecersizdir (log'a sahte gecis dusmesin).
 
+### Phase 5 kararlari (2026-08-25)
+
+- **ADR-005 sapmasi — `tool_events` icin dar bir renderer append yolu** (ASU-050): ADR
+  "renderer'in tool_events'e yazma yolu yoktur" diyordu; tool runner renderer'da yasadigi
+  icin `record_tool_event` komutu acildi. Sinirlar: yalnizca append (guncelleme/silme komutu
+  YOK — ACL testiyle kilitli), `arguments_redacted` renderer'dan KABUL EDILMEZ
+  (`deny_unknown_fields`) — ozetleme + redaksiyon Rust'ta yapilir. Audit'in butunlugu
+  yine guvenilir tarafta.
+- **`outcome` kolonu migration 005'e** (orchestrator karari): PROJECT.md 12.2'de basari/hata
+  alani yok; `approval_state` "calisti mi"yi soyler, "basarili miydi"yi soylemez. ASU-051
+  kapsaminda `outcome TEXT CHECK IN ('succeeded','failed','not_run')` eklenecek.
+- **Hafiza kapaliyken audit de tutulmaz** (ASU-050): `ASUNA_MEMORY_ENABLED=false` iken DB hic
+  acilmiyor (mecburi); runtime anahtari icin de ayni davranis secildi — o durumda tool
+  gorunurlugu canli UI'a (ASU-054) kalir. Kalici audit istegi memory anahtarindan bagimsiz
+  olacaksa ayri karar gerekir (bilincli olarak baglandi: "hicbir sey yazma" sozu audit'i de kapsar).
+
 ### Phase 3 kararlari (Gate 3 review, 2026-08-25)
 
 - **Prompt `core.v1` → `core.v2`** (M3 canli test bulgusu, 2026-08-25): kullanici "bunu
