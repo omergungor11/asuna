@@ -7,15 +7,17 @@
  *    Kayit aninda sozlesme zorlanir: gecersiz bir tanim modele hic acilmaz
  *    (`conventions.md` — "Tool Tanimi").
  * 2. [`executeTool`] — bir tool'u calistirmanin **tek** mesru yolu. Sema
- *    dogrulamasi, timeout ve yapisal sonuc uretimi burada; tool'lar bunlari
- *    kendi iclerinde tekrarlamak zorunda kalmasin diye.
+ *    dogrulamasi, onay kapisi (ASU-048), timeout, yapisal sonuc ve audit
+ *    kaydi (ASU-050) burada; tool'lar bunlari kendi iclerinde tekrarlamak
+ *    zorunda kalmasin diye.
  *
  * # Neden calistirma tool'un kendisinde degil
  *
  * "Her tool kendi semasini dogrular, kendi timeout'unu kurar" demek, guvenlik
  * kurallarinin N kez kopyalanmasi ve ilk unutuldugunda sessizce delinmesi
- * demekti. Tek kapi olunca ASU-048 (onay) ve ASU-050 (audit) da tek yere
- * baglanir.
+ * demekti. Tek kapi olunca onay karari ve audit yazimi da tek yere baglanir:
+ * `executeTool`'dan gecmeyen bir tool cagrisi ne onaydan gecer ne deftere
+ * yazilir — ve bu yuzden gecmemesi mumkun degil.
  *
  * # SDK'dan bagimsiz
  *
@@ -24,7 +26,15 @@
  * ve `execute` govdesinde yine buradaki [`executeTool`]'u cagirir.
  */
 
+import {
+  APPROVAL_TIMEOUT_MS,
+  approvalStateFor,
+  resolveApproval,
+  type ApprovalOutcome,
+} from './approval-policy';
 import type { AsunaToolDefinition, ToolContext, ToolResult } from './types';
+import type { ToolApprovalMode } from '../config/frontend-config';
+import type { ToolApprovalState, ToolAuditInput, ToolRiskLevel } from '../../shared/tool-event';
 
 /**
  * `snake_case`, fiil_nesne (`conventions.md`). Model tool adini duyar gibi
@@ -57,6 +67,15 @@ export const TOOL_ERROR_KINDS = {
   timeout: 'timeout',
   /** Cagiran vazgecti (oturum kapandi, kullanici kesti). */
   aborted: 'aborted',
+  /**
+   * Onay alinamadi — tool **calistirilmadi** (ASU-048).
+   *
+   * Reddedilen, zaman asimina ugrayan ve hic sorulamayan onaylarin hepsi bu
+   * tek `errorKind` altinda: modelin acisindan uc durum da ayni sey demek
+   * ("yapmadim"). Ayrimi tasiyan yer audit defteri: `approval_state`
+   * `denied` / `timeout` / `not_requested` olarak ayri ayri yazilir.
+   */
+  denied: 'denied',
   /** Tool implementasyonu hata firlatti (kendi `ok: false`'unu uretemedi). */
   failed: 'tool_failed',
 } as const;
@@ -168,6 +187,23 @@ export class ToolRegistry {
   }
 }
 
+/**
+ * Onay kapisi (ASU-048).
+ *
+ * Politika "onay lazim" dediginde [`executeTool`] bunu cagirir ve cevabi
+ * bekler. Cagri **kanit** ister, izin degil: onay akisini kim yurutuyorsa
+ * (Realtime oturumunda SDK'nin `tool_approval_requested` -> `approve/reject`
+ * dongusu) sonucu buraya bildirir.
+ *
+ * Sozlesme: firlatirsa **reddedilmis** sayilir, cozulmezse
+ * [`APPROVAL_TIMEOUT_MS`] sonunda `timeout` (yine reddetme) kabul edilir.
+ * "Onay kapisi bozuldu" durumu hicbir kosulda "calistir" anlamina gelmez.
+ */
+export type ToolApprovalGate = (
+  definition: AsunaToolDefinition,
+  args: unknown,
+) => Promise<ApprovalOutcome>;
+
 /** [`executeTool`] ek ayarlari. */
 export interface ToolExecutionOptions {
   /**
@@ -175,6 +211,27 @@ export interface ToolExecutionOptions {
    * ile birlesir: hangisi once gelirse tool'a giden `context.signal` abort olur.
    */
   readonly signal?: AbortSignal;
+  /**
+   * `ASUNA_TOOL_APPROVAL_MODE`. Verilmezse **en siki** mod varsayilir
+   * (`always`): modu okuyamayan bir cagiran, en gevsek davranisi miras
+   * almamali (phase-5.md ASU-048 — "belirsizlik onay lehine").
+   */
+  readonly approvalMode?: ToolApprovalMode;
+  /**
+   * Onay kanali. **Verilmezse onay gerektiren tool calismaz**: gate'i unutmak
+   * sessizce "onaysiz calistir"a donusmez, `not_requested` ile reddedilir.
+   */
+  readonly approvalGate?: ToolApprovalGate;
+  /**
+   * Audit defteri kancasi (ASU-050). Cagri **hangi yoldan biterse bitsin**
+   * tam bir kez cagrilir: sema reddi, onay reddi, timeout, hata, basari.
+   *
+   * Duz bir callback (Promise degil): audit yazimi tool sonucunu bekletmemeli
+   * ve bir audit arizasi tool cagrisini dusurmemeli. Yazma hatalarinin gorunur
+   * kalmasi `audit.ts`'in isi (`recordToolEvent` asla firlatmaz, `failed`
+   * doner ve log'lar).
+   */
+  readonly onAudit?: (input: ToolAuditInput) => void;
 }
 
 /** Sema hatalarindan modele giden ozetin karakter tavani. */
@@ -210,11 +267,53 @@ function failure(summary: string, errorKind: string): ToolResult {
   return { ok: false, summary, errorKind };
 }
 
+/** Sinyalin **o andaki** durumu. Bkz. `runTool` — deger zamanla degisir. */
+function isAborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true;
+}
+
 function messageOf(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
   }
   return typeof error === 'string' ? error : 'bilinmeyen hata';
+}
+
+/**
+ * Onay cevabini bekler ve **her** belirsizligi reddetmeye cevirir (ASU-048).
+ *
+ * Uc kacis yolu da kapali:
+ * - kapi firlatirsa `denied`;
+ * - kapi hic cozulmezse [`APPROVAL_TIMEOUT_MS`] sonunda `timeout`;
+ * - kapi gecersiz bir deger dondurse bile tip sistemi disinda kalir, `approved`
+ *   olmayan her sey calistirmamaya gider.
+ */
+async function awaitApproval(
+  gate: ToolApprovalGate,
+  definition: AsunaToolDefinition,
+  args: unknown,
+): Promise<ApprovalOutcome> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expiry = new Promise<ApprovalOutcome>((resolve) => {
+    timer = setTimeout(() => {
+      resolve('timeout');
+    }, APPROVAL_TIMEOUT_MS);
+  });
+
+  try {
+    return await Promise.race([
+      gate(definition, args).catch((): ApprovalOutcome => 'denied'),
+      expiry,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** [`executeTool`]'un ic sonucu: modele giden cevap + audit'e giden etiket. */
+interface ToolRun {
+  readonly result: ToolResult;
+  readonly approvalState: ToolApprovalState;
 }
 
 /**
@@ -224,12 +323,20 @@ function messageOf(error: unknown): string {
  * 1. **Sema dogrulamasi.** Gecersiz argumanda `execute` **hic cagrilmaz** ve
  *    yapisal bir hata doner — "once dogrula, sonra calistir" (PROJECT.md
  *    Bolum 17/18).
- * 2. **Timeout.** [`AsunaToolDefinition.timeoutMs`] dolunca `context.signal`
+ * 2. **Onay kapisi (ASU-048).** [`resolveApproval`] "onay lazim" derse
+ *    `options.approvalGate` sorulur. Onaylanmayan cagrida `execute` **hic
+ *    cagrilmaz**; sonuc `denied` errorKind'i ile doner ve audit'e gercek
+ *    onay durumu (`denied` / `timeout` / `not_requested`) yazilir.
+ * 3. **Timeout.** [`AsunaToolDefinition.timeoutMs`] dolunca `context.signal`
  *    abort edilir ve cagri yapisal bir `timeout` sonucuyla **doner**. Asili
  *    kalan bir tool oturumu kilitlemez; arkadaki is kendiliginden durmaz, bu
- *    yuzden sonuc "bitmedi" der, "basarisiz oldu" demez.
- * 3. **Yapisal sonuc.** `execute` patlarsa bile serbest metin degil,
+ *    yuzden sonuc "bitmedi" der, "basarisiz oldu" demez. Sayac **onaydan
+ *    sonra** baslar: kullanicinin dusunme suresi tool'un calisma butcesini
+ *    yemez.
+ * 4. **Yapisal sonuc.** `execute` patlarsa bile serbest metin degil,
  *    [`ToolResult`] doner. Hata yutulmaz: `ok: false` + `errorKind`.
+ * 5. **Audit (ASU-050).** Hangi yoldan cikilirsa cikilsin `options.onAudit`
+ *    tam bir kez cagrilir — calisan da, reddedilen de deftere yazilir.
  *
  * Hicbir kosulda `throw` etmez — cagiran (SDK adaptoru) her zaman modele
  * cevrilebilir bir sonuc alir.
@@ -240,22 +347,93 @@ export async function executeTool(
   context: ToolContext,
   options: ToolExecutionOptions = {},
 ): Promise<ToolResult> {
+  const run = await runTool(definition, args, context, options);
+  reportAudit(definition, args, context, options, run);
+  return run.result;
+}
+
+/** Audit satirini uretir. Cagrilmasi zorunlu; kanca yoksa sessizce gecilir. */
+function reportAudit(
+  definition: AsunaToolDefinition,
+  args: unknown,
+  context: ToolContext,
+  options: ToolExecutionOptions,
+  run: ToolRun,
+): void {
+  const onAudit = options.onAudit;
+  if (onAudit === undefined) {
+    return;
+  }
+
+  // `arguments` **ham** gonderilir: ozetleme ve redaksiyon host tarafinda
+  // yapilir (`shared/tool-event.ts` — renderer hazir ozet gonderemez).
+  onAudit({
+    toolName: definition.name,
+    riskLevel: definition.risk satisfies ToolRiskLevel,
+    ...(context.sessionId === null ? {} : { sessionId: context.sessionId }),
+    ...(args === undefined ? {} : { arguments: args }),
+    approvalState: run.approvalState,
+    resultSummary: run.result.summary,
+  });
+}
+
+async function runTool(
+  definition: AsunaToolDefinition,
+  args: unknown,
+  context: ToolContext,
+  options: ToolExecutionOptions,
+): Promise<ToolRun> {
   const parsed = definition.parameters.safeParse(args);
   if (!parsed.success) {
-    return failure(
-      `\`${definition.name}\` cagrisi gecersiz argumanlar yuzunden calistirilmadi — ` +
-        `${describeIssues(parsed.error.issues)}. Dogru parametrelerle tekrar dene; ` +
-        'sonucu varmis gibi konusma.',
-      TOOL_ERROR_KINDS.invalidArguments,
-    );
+    return {
+      // Onay asamasina hic gelinmedi: cagri daha once dustu.
+      approvalState: 'not_requested',
+      result: failure(
+        `\`${definition.name}\` cagrisi gecersiz argumanlar yuzunden calistirilmadi — ` +
+          `${describeIssues(parsed.error.issues)}. Dogru parametrelerle tekrar dene; ` +
+          'sonucu varmis gibi konusma.',
+        TOOL_ERROR_KINDS.invalidArguments,
+      ),
+    };
   }
 
   const external = options.signal;
   if (external?.aborted === true) {
-    return failure(
-      `\`${definition.name}\` calistirilmadi: cagri baslamadan iptal edildi.`,
-      TOOL_ERROR_KINDS.aborted,
-    );
+    return {
+      approvalState: 'not_requested',
+      result: failure(
+        `\`${definition.name}\` calistirilmadi: cagri baslamadan iptal edildi.`,
+        TOOL_ERROR_KINDS.aborted,
+      ),
+    };
+  }
+
+  // Mod okunamadiginda **en siki** varsayilan: gevsek olan miras alinmaz.
+  const mode = options.approvalMode ?? 'always';
+  const decision = resolveApproval(definition.risk, definition.requiresApproval, mode);
+
+  let approvalState = approvalStateFor(definition.risk, decision, null);
+  if (decision === 'needs_approval') {
+    // Yalnizca onay gerektiginde `await` var: onaysiz calisan bir tool'un
+    // baslangici microtask'lara yayilmaz (iptal sinyali de gecikmez).
+    const approval = await gateApproval(definition, parsed.data, options, decision);
+    if (approval.result !== null) {
+      return { approvalState: approval.approvalState, result: approval.result };
+    }
+    approvalState = approval.approvalState;
+
+    // `isAborted` fonksiyon: sinyalin durumu onay beklenirken **degisebilir**,
+    // yukaridaki kontrolun daralttigi tip burada gecerli degil.
+    if (isAborted(external)) {
+      // Onay beklenirken oturum kapandi: onay alinmis olsa bile calistirmiyoruz.
+      return {
+        approvalState,
+        result: failure(
+          `\`${definition.name}\` onaylandi ama cagri bu arada iptal edildi; calistirmadim.`,
+          TOOL_ERROR_KINDS.aborted,
+        ),
+      };
+    }
   }
 
   const controller = new AbortController();
@@ -305,9 +483,55 @@ export async function executeTool(
   };
 
   try {
-    return await Promise.race([run(), interrupted]);
+    return { approvalState, result: await Promise.race([run(), interrupted]) };
   } finally {
     clearTimeout(timer);
     external?.removeEventListener('abort', onExternalAbort);
   }
+}
+
+/**
+ * Onay kapisi (ASU-048) — `execute` cagrisindan **once** ki tek karar noktasi.
+ *
+ * `result: null` = yol acik, tool calistirilabilir. Aksi halde donen sonuc
+ * dogrudan cagirana gider ve `execute` hic cagrilmaz.
+ */
+async function gateApproval(
+  definition: AsunaToolDefinition,
+  args: unknown,
+  options: ToolExecutionOptions,
+  decision: 'needs_approval',
+): Promise<{ readonly approvalState: ToolApprovalState; readonly result: ToolResult | null }> {
+  const gate = options.approvalGate;
+  if (gate === undefined) {
+    // Onay gerekiyor ama soracak kimse yok. Varsayilan calistirmamak: kapiyi
+    // baglamayi unutmak, sessizce "onaysiz calistir"a donusmemeli.
+    return {
+      approvalState: approvalStateFor(definition.risk, decision, null),
+      result: failure(
+        `\`${definition.name}\` onay gerektiriyor ama onay istegi iletilemedi; ` +
+          'calistirmadim. Kullaniciya yapilmis gibi anlatma.',
+        TOOL_ERROR_KINDS.denied,
+      ),
+    };
+  }
+
+  const outcome = await awaitApproval(gate, definition, args);
+  const approvalState = approvalStateFor(definition.risk, decision, outcome);
+
+  if (outcome === 'approved') {
+    return { approvalState, result: null };
+  }
+
+  return {
+    approvalState,
+    result: failure(
+      outcome === 'timeout'
+        ? `\`${definition.name}\` icin onay beklenirken sure doldu; calistirmadim. ` +
+            'Kullanici hala isterse tekrar sorabilirsin.'
+        : `\`${definition.name}\` kullanici tarafindan onaylanmadi; calistirmadim. ` +
+            'Bunu durustce soyle, yapilmis gibi anlatma.',
+      TOOL_ERROR_KINDS.denied,
+    ),
+  };
 }

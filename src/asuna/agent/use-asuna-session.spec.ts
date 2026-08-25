@@ -53,6 +53,11 @@ interface FakeService extends AsunaSessionPort {
   readonly connectCalls: () => number;
   readonly disconnectCalls: () => number;
   readonly emit: (event: AsunaRealtimeEvent) => void;
+  /** Hook'tan gelen onay/ret cagrilari (ASU-048). */
+  readonly approvals: string[];
+  readonly rejections: string[];
+  /** Oturum kaydini acan/kapatan kayitci — sessionId korelasyonu icin. */
+  readonly recorder: SessionRecorder;
 }
 
 interface HarnessOptions {
@@ -92,6 +97,8 @@ function createHarness(harnessOptions: HarnessOptions = {}): Harness {
       }),
     createService: (context): AsunaSessionPort => {
       const listeners = new Set<AsunaRealtimeEventListener>();
+      const approvals: string[] = [];
+      const rejections: string[] = [];
       let connects = 0;
       let disconnects = 0;
 
@@ -127,6 +134,12 @@ function createHarness(harnessOptions: HarnessOptions = {}): Harness {
         interrupt: (): void => {
           publish({ type: 'agent_interrupted' });
         },
+        approveToolCall: (requestId): void => {
+          approvals.push(requestId);
+        },
+        rejectToolCall: (requestId): void => {
+          rejections.push(requestId);
+        },
         subscribe: (listener): (() => void) => {
           listeners.add(listener);
           return (): void => {
@@ -138,6 +151,11 @@ function createHarness(harnessOptions: HarnessOptions = {}): Harness {
         connectCalls: (): number => connects,
         disconnectCalls: (): number => disconnects,
         emit: publish,
+        approvals,
+        rejections,
+        // ASU-048/050: servis oturum kimligini buradan okur; testler ayni
+        // nesneyi gorup korelasyonu olcebilsin diye disari veriliyor.
+        recorder: context.recorder,
       };
 
       services.push(service);
@@ -1021,6 +1039,25 @@ describe('useAsunaSession — oturum kaydi (ASU-032)', () => {
     expect(result.current.error).toBeNull();
   });
 
+  /**
+   * ASU-050 korelasyonu: servis oturum kimligini **kayitcidan** okur, hook'un
+   * ayri bir kopyasindan degil. Kayit acilana kadar `null` (uydurulmuyor).
+   */
+  it('servise verilen kayitci gercek oturum kimligini veriyor', async () => {
+    const { harness, options } = createRecordingHarness();
+    const { result } = renderHook(() => useAsunaSession(options));
+
+    await flush(() => {
+      result.current.start();
+    });
+
+    expect(harness.service().recorder.currentSessionId).toBe(12);
+
+    await flush(() => {
+      result.current.stop();
+    });
+  });
+
   /** Kayit hatasi sesli oturumu dusurmez (PROJECT.md Bolum 30). */
   it('kayit hatasi oturumu dusurmez', async () => {
     const { options } = createRecordingHarness({
@@ -1040,5 +1077,125 @@ describe('useAsunaSession — oturum kaydi (ASU-032)', () => {
     });
     expect(result.current.error).toBeNull();
     expect(result.current.sessionOutcome).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Onay akisi (ASU-048) — kart verisi ve karar yolu
+// ---------------------------------------------------------------------------
+
+describe('useAsunaSession — tool onayi', () => {
+  const REQUEST: Extract<AsunaRealtimeEvent, { type: 'tool_approval_requested' }> = {
+    type: 'tool_approval_requested',
+    requestId: 'call_1',
+    toolName: 'edit_project_file',
+    description: 'Kayitli proje kokundeki bir dosyayi duzenler.',
+    risk: 2,
+    argumentsPreview: 'path=README.md',
+    timeoutMs: 60_000,
+  };
+
+  async function connected(): Promise<{
+    readonly harness: Harness;
+    readonly result: { current: AsunaSession };
+  }> {
+    const harness = createHarness({ now: (): number => 5_000 });
+    const { result } = renderHook(() => useAsunaSession(harness.options));
+    await flush(() => {
+      result.current.start();
+    });
+    return { harness, result };
+  }
+
+  it('bekleyen onay karti icin gereken her seyi tasiyor', async () => {
+    const { harness, result } = await connected();
+
+    act(() => {
+      harness.service().emit(REQUEST);
+    });
+
+    // Kart "izin ver?" demiyor: ne yapilacagini gosteriyor (security.md Bolum 3).
+    expect(result.current.pendingApproval).toEqual({
+      requestId: 'call_1',
+      toolName: 'edit_project_file',
+      description: 'Kayitli proje kokundeki bir dosyayi duzenler.',
+      risk: 2,
+      argumentsPreview: 'path=README.md',
+      timeoutMs: 60_000,
+      requestedAtMs: 5_000,
+    });
+    expect(result.current.activeTool).toBe('edit_project_file');
+  });
+
+  it('onay/ret kararlari servise **kimlikle** iletiliyor', async () => {
+    const { harness, result } = await connected();
+
+    act(() => {
+      harness.service().emit(REQUEST);
+    });
+    act(() => {
+      result.current.approveTool('call_1');
+    });
+    act(() => {
+      harness.service().emit({ ...REQUEST, requestId: 'call_2' });
+    });
+    act(() => {
+      result.current.rejectTool('call_2');
+    });
+
+    expect(harness.service().approvals).toEqual(['call_1']);
+    expect(harness.service().rejections).toEqual(['call_2']);
+  });
+
+  it('karar sonuclaninca kart kalkiyor', async () => {
+    const { harness, result } = await connected();
+
+    act(() => {
+      harness.service().emit(REQUEST);
+    });
+    act(() => {
+      harness.service().emit({
+        type: 'tool_approval_resolved',
+        requestId: 'call_1',
+        toolName: 'edit_project_file',
+        outcome: 'denied',
+      });
+    });
+
+    expect(result.current.pendingApproval).toBeNull();
+    // Reddedilen tool calismiyor: "aktif arac" satiri da temizleniyor.
+    expect(result.current.activeTool).toBeNull();
+  });
+
+  /** Baska bir istegin sonucu ekrandaki karti dusurmuyor. */
+  it('baska bir kimligin sonucu bekleyen karti etkilemiyor', async () => {
+    const { harness, result } = await connected();
+
+    act(() => {
+      harness.service().emit(REQUEST);
+    });
+    act(() => {
+      harness.service().emit({
+        type: 'tool_approval_resolved',
+        requestId: 'baska',
+        toolName: 'edit_project_file',
+        outcome: 'denied',
+      });
+    });
+
+    expect(result.current.pendingApproval?.requestId).toBe('call_1');
+  });
+
+  it('oturum kapaninca bekleyen kart kalkiyor', async () => {
+    const { harness, result } = await connected();
+
+    act(() => {
+      harness.service().emit(REQUEST);
+    });
+    await flush(() => {
+      result.current.stop();
+    });
+
+    expect(result.current.pendingApproval).toBeNull();
   });
 });

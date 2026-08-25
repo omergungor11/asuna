@@ -60,43 +60,175 @@ PROJECT.md Bolum 17. ASU-044'te dogrudan tanimlanan tool bu registry'ye tasinir.
 
 ## ASU-048: Risk / Approval Policy Katmani
 
-**Scope**: backend | **Boyut**: M | **Durum**: PENDING | **Bagimlilik**: ASU-047
+**Scope**: backend | **Boyut**: M | **Durum**: DONE | **Bagimlilik**: ASU-047
 
 ### Aciklama
 PROJECT.md Bolum 5.4 risk seviyeleri + `ASUNA_TOOL_APPROVAL_MODE`.
 
 ### Acceptance Criteria
-- [ ] Risk 0: onaysiz calisiyor
-- [ ] Risk 1: `ASUNA_TOOL_APPROVAL_MODE` ile konfigurabilir (safe modda onay ister)
-- [ ] Risk 2 ve 3: **her zaman** acik onay istiyor; konfigurasyonla atlanamiyor
-- [ ] Onay bekleyen tool `AWAITING_APPROVAL` durumunu tetikliyor
-- [ ] Onay zaman asimina ugrarsa tool **calismiyor** (varsayilan reddet)
-- [ ] Onay karari tool cagrisi basina; "hepsine izin ver" MVP'de yok
-- [ ] Politika kararlari unit test edilmis (her risk seviyesi x her mod matrisi)
+- [x] Risk 0: onaysiz calisiyor (iki modda da; `requiresApproval: true` diyen bir tanim
+      yine de sorulur — tanim sikilastirabilir, gevsetemez)
+- [x] Risk 1: `ASUNA_TOOL_APPROVAL_MODE` ile konfigurabilir (safe modda onay ister)
+- [x] Risk 2 ve 3: **her zaman** acik onay istiyor; konfigurasyonla atlanamiyor
+- [x] Onay bekleyen tool `AWAITING_APPROVAL` durumunu tetikliyor
+- [x] Onay zaman asimina ugrarsa tool **calismiyor** (varsayilan reddet) — 60 sn,
+      hem serviste (otomatik `reject`) hem `executeTool` kapisinda
+- [x] Onay karari tool cagrisi basina; "hepsine izin ver" MVP'de yok
+      (`alwaysApprove`/`alwaysReject` SDK secenekleri **kullanilmiyor**)
+- [x] Politika kararlari unit test edilmis (her risk seviyesi x her mod matrisi)
 
-### Notlar
-Varsayilan davranis her zaman "calistirma". Belirsizlik onay lehine cozulur, calistirma lehine degil.
+### Notlar (2026-08-25)
+
+**Karar matrisi** — `src/asuna/tools/approval-policy.ts`, `resolveApproval(risk, requiresApproval, mode)`:
+
+| Risk | `requiresApproval` | `safe` | `always` |
+|------|--------------------|--------|----------|
+| 0 | `false` | onaysiz | onaysiz |
+| 0 | `true` | ONAY | ONAY |
+| 1 | herhangi | ONAY | ONAY |
+| 2 / 3 | herhangi | ONAY | ONAY |
+
+Uc karar ve gerekceleri:
+
+1. **Risk 2/3 mod tablosuna bakmadan** doner — `ASUNA_TOOL_APPROVAL_MODE` bu satirlari
+   gevsetemez (`security.md` Bolum 3).
+2. **`always` modunda risk 0 da onay istemez.** Kabul kriteri kosulsuz ("Risk 0: onaysiz
+   calisiyor") ve sesli bir oturumda `get_current_project` icin kart cikarmak onay
+   yorgunlugu uretir — asil onemli olan risk 2/3 karti da refleksle onaylanir.
+   `always`'in anlami "risk 0'i da sor" degil, **kilit**: ileride gevsetici bir mod
+   eklense bile hicbir riski otomatik gecirmez.
+3. **Mevcut iki mod risk 1'de ayni davranir** ve bu dokumante edilmis bir durum, kesfedilecek
+   bir surpriz degil (`approval-policy.spec.ts` bunu ayrica olcuyor). Fark, gevsetici bir mod
+   (`auto`/`trusted`) eklendiginde ortaya cikar; degisecek tek yer `RISK_1_NEEDS_APPROVAL`
+   tablosu ve tablo `Record<ToolApprovalMode, …>` oldugu icin yeni mod eklemek orada derleme
+   hatasi verir. Bu yuzden `auto_approved` audit durumu **su an uretilmiyor** — etiketleme
+   fonksiyonu (`approvalStateFor`) yine de dogru degeri veriyor ki o mod geldiginde defter
+   "gerekmiyordu" diye yalan soylemesin.
+
+**Iki katmanli uygulama.** (a) SDK katmani: `toSdkTool` icinde `needsApproval` artik statik
+boolean degil politika fonksiyonu; `true` donunce SDK `execute`'u **hic** cagirmaz, once
+`tool_approval_requested` cikar. (b) Calistirma kapisi: `executeTool` ayni karari bagimsiz
+olarak yeniden hesaplar ve `options.approvalGate` ile **kanit** sorar. Serviste kanit
+`approveToolCall` ile yazilir ve tek cagri icin gecerlidir; kanit yoksa kapi `denied` doner.
+Yani onay akisini atlayan bir cagri (SDK politikasi yanlis baglansa bile) calismaz.
+
+**Varsayilan = CALISTIRMA.** `approvalGate` verilmemisse onay gerektiren tool calismaz
+(`not_requested`), gate firlatirsa `denied`, gate 60 sn icinde cozulmezse `timeout`.
+`TOOL_ERROR_KINDS.denied` bu ucunu modele tek bicimde anlatir ("yapmadim"); ayrimi audit
+tasir. Tool'un kendi `timeoutMs` sayaci **onaydan sonra** baslar — kullanicinin dusunme
+suresi tool'un calisma butcesini yemez.
+
+**Audit (ASU-050 ile birlesim).** `executeTool` her cikis yolunda `onAudit`'i tam bir kez
+cagirir (sema reddi, onay reddi, timeout, hata, basari). Onay **hic calismadan** reddedildiginde
+satiri servis yazar (`denied`/`timeout`), onaylandiginda ikinci satir yazilmaz — cagri zaten
+calisip kendi `approved` satirini uretir. Oturum kapanirken cevaplanmamis kalan istekler de
+`denied` olarak deftere gecer, sessizce dusmez.
+
+**`sessionId` korelasyonu (ASU-050 notu #2 kapandi).** `ToolContext.sessionId` artik
+`number | null` ve gercek `sessions.id` degerini tasiyor: `SessionRecorder.currentSessionId`
+-> `useAsunaSession` -> `AsunaRealtimeService.resolveSessionId` -> `ToolContext` + audit satiri.
+Her cagrida yeniden okunur (`session_start` asenkron doner); bilinmiyorsa alan **gonderilmez**,
+uydurulmaz.
+
+**Durum makinesi.** `ASSISTANT_THINKING -> AWAITING_APPROVAL` ve
+`ASSISTANT_SPEAKING -> AWAITING_APPROVAL` kenarlari eklendi: onay bekleyen tool `TOOL_PENDING`'e
+ugramaz, cunku SDK onay verilene kadar `execute`'u cagirmaz — "calisiyor" durumundan gecmek
+olmayan bir isi olmus gibi gostermek olurdu.
+
+**Gate'ler:** `pnpm typecheck`, `pnpm lint`, `pnpm test` (46 dosya / 789 test), `pnpm format:check`
+yesil. Rust'a dokunulmadi (onay tamamen renderer/SDK katmaninda).
+
+### ASU-053 icin API sozlesmesi
+
+`useAsunaSession` dondurur:
+- `pendingApproval: PendingToolApproval | null` — `{ requestId, toolName, description, risk,
+  argumentsPreview, timeoutMs, requestedAtMs }`. Kart "izin ver?" demek yerine ne yapilacagini
+  gosterebilsin diye tool aciklamasi + risk + **redakte edilmis** arguman ozeti birlikte gelir;
+  geri sayim `requestedAtMs + timeoutMs`.
+- `approveTool(requestId)` / `rejectTool(requestId)` — karar **kimlikle** verilir; "sonuncuyu
+  onayla" yok.
+
+Servis event'leri: `tool_approval_requested` (yukaridaki alanlar) ve `tool_approval_resolved`
+(`{ requestId, toolName, outcome: 'approved' | 'denied' | 'timeout' }`). Zaman asimini UI
+tetiklemez, yalnizca gosterir: otomatik reddetme serviste.
 
 ---
 
 ## ASU-049: Path Sandbox + Hassas Dosya Blocklist
 
-**Scope**: backend | **Boyut**: M | **Durum**: PENDING | **Bagimlilik**: ASU-047, ASU-040
+**Scope**: backend | **Boyut**: M | **Durum**: DONE | **Bagimlilik**: ASU-047, ASU-040
 
 ### Aciklama
 PROJECT.md Bolum 19 "Filesystem sandbox". Bu, guvenlik modelinin en cok test edilmesi gereken parcasi.
 
 ### Acceptance Criteria
-- [ ] Tum dosya erisimleri kayitli proje root'una gore normalize edilip cozuluyor
-- [ ] Path traversal reddediliyor: `../../.ssh/id_ed25519`, mutlak yol, `~` genislemesi, sembolik link
-      ile disari cikma
-- [ ] Blocklist: `.env*`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `.ssh/`, keychain, credential
-      dosyalari, `.git/config` icindeki kimlik bilgileri
-- [ ] Maksimum dosya boyutu siniri; binary dosya reddi
-- [ ] Reddedilen erisim sessizce bos donmuyor — acik "reddedildi" sonucu donuyor ve audit'e yaziliyor
-- [ ] **Kapsamli unit test seti** — en az 15 kotu yol vakasi (CLAUDE.md: "Add tests for
-      security/permission/path logic")
-- [ ] `docs/architecture/security.md` sandbox kurallarini anlatiyor
+- [x] Tum dosya erisimleri kayitli proje root'una gore normalize edilip cozuluyor
+      (`security::sandbox::resolve_in_project`; kok listesi **yalnizca** registry'den, `active` kayitlar)
+- [x] Path traversal reddediliyor: `../../.ssh/id_ed25519`, mutlak yol, `~` genislemesi, sembolik link
+      ile disari cikma — her biri **ayri** `SandboxViolation` varyanti
+- [x] Blocklist: `.env*`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `.ssh/`, keychain, credential
+      dosyalari, `.git/config` (dosya **komple** bloklu)
+- [x] Maksimum dosya boyutu siniri (`MAX_READABLE_FILE_BYTES` 256 KiB, asan **reddedilir**);
+      binary dosya reddi (ilk 8 KiB'de NUL / %10 kontrol bayti / gecersiz UTF-8)
+- [x] Reddedilen erisim sessizce bos donmuyor — tipli `SandboxViolation` +
+      `audit_outcome()` → `(approval_state: not_requested, result_summary)`
+- [x] **Kapsamli unit test seti** — `case_01`..`case_31`, 31 kotu yol vakasi (min. 15) +
+      4 pozitif kontrol; gercek temp dizin ve gercek symlink
+- [x] `docs/architecture/security.md` sandbox kurallarini anlatiyor (Bolum 6 yeniden yazildi;
+      T3 kapandi, `tools.md` T4/T5/T6 kapandi)
+
+### Uygulama Notlari
+
+**Cozum sirasi.** `..` bilesenleri **leksik** olarak, dosya sistemine sorulmadan cozulur;
+`canonicalize` ondan **sonra** gelir. Iki kazanci var: (1) var olmayan bir yol icin de karar
+verilebilir — "dosya yok" ile "kacis denendi" ayni gorunmez; (2) `link/../x`, `link`in
+**hedefinin** ustune degil kok icindeki `x`e cozulur. Kabuk semantigi bilerek terk edildi,
+daha kisitlayici yorum secildi. `canonicalize` yine de sart: leksik cozum symlink gormez.
+
+**Yol yoksa.** Aday canonicalize edilemiyorsa **var olan en yakin ataya** kadar geri sarilir,
+canonicalize edilir ve kalan (leksik olarak temizlenmis, `..` icermeyen) bilesenler eklenir.
+
+**Percent-encoding decode EDILMEZ.** `%2F` cozmek "hangi katman kac kez cozer?" sorusunu acar.
+Ham metin tek bir dosya adi bileseni olur: kokten kacamaz, yalnizca anlamsizlasir ve okuma
+`not_found` ile duser (`case_26` bunu assert eder).
+
+**Kontrol sirasi: traversal > blocklist.** `../../.ssh/id_ed25519` → `Traversal`,
+`Blocklisted` degil. Kacis, adin ne oldugu sorulmadan **once** karara baglanir.
+
+**Blocklist cozulmus TAM yol uzerinde.** Kok'un kendi bilesenleri de taranir: `~/.ssh` ya da
+`~/secrets/x` proje olarak kaydedilse bile altindaki dosyalar `Blocklisted` doner (`case_19`).
+Bilincli yanlis pozitif.
+
+**Tip duzeyinde koruma.** `SandboxedPath` yalnizca `resolve_in_*` ile uretilebilir
+(`RegisteredRoot` ile ayni desen); bir fonksiyon `&Path` yerine bu tipi aliyorsa kontrolun
+yapildigi derleme zamaninda okunur.
+
+### ASU-041/042'de yapilan degisiklik (dikkat)
+
+`.git/config` blok listesine girdigi icin `projects::context` o dosyayi **artik acmiyor**:
+`CONTEXT_SOURCES`ten cikarildi, `SourceKind::GitConfig` ve `git_remote_from_config` silindi.
+Remote adinin **tek** kaynagi artik ASU-042'nin `git remote get-url origin` ciktisi;
+`projects::view::collect` onu `sanitise_remote_url`'den gecirip kayda isliyor,
+`context::current` yalnizca kayitli degeri yansitiyor. Iki ayri turetme yolu tutmak zaten
+ikisinin zamanla ayrisma riskiydi. Regresyon testi: `view::tests::
+the_git_remote_reaches_the_summary_through_the_git_cli_path` (gercek `git init` + token'li
+remote URL; token cikti JSON'unda yok).
+
+### ASU-051 icin entegrasyon sozlesmesi
+
+```rust
+let path = sandbox::resolve_in_project(db, &project_id, &args.path)?;   // Result<SandboxedPath, _>
+let file = sandbox::read_text(&path)?;                                   // Result<SandboxedFile, _>
+// hata yolunda:
+let SandboxAuditOutcome { approval_state, result_summary } = violation.audit_outcome();
+```
+
+- `SandboxedFile.text` **kirpilmamis**. Kirpma ASU-051'in isi ve butcesi
+  `MAX_READABLE_FILE_BYTES`in **altinda** olmali; kirpildigi ciktida soylenmeli.
+- Modele/UI'a giden yol metni `SandboxedPath::relative()` — mutlak yol **donulmez**.
+- `violation.is_escape_attempt()` "kacis denendi" ile "dosya yok"u ayirir; ikisi kullaniciya
+  ayni sekilde sunulmamali.
+- Sandbox komut **acmaz**; ACL yuzeyi ASU-051/052'nin isi.
 
 ---
 

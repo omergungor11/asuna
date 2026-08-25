@@ -11,8 +11,40 @@
 
 import type { AsunaRealtimeErrorInfo } from './realtime-errors';
 import type { RealtimeUsageSnapshot, TranscriptEntry } from './realtime-events';
-import type { VadEagerness } from '../config/frontend-config';
+import type { ToolApprovalMode, VadEagerness } from '../config/frontend-config';
+import type { ToolApprovalGate } from '../tools/registry';
 import type { AsunaToolDefinition } from '../tools/types';
+import type { ToolAuditInput } from '../../shared/tool-event';
+
+/**
+ * Tool cagrilarinin calisma zamani baglantilari (ASU-048 / ASU-050).
+ *
+ * Tool tanimi **ne yapacagini** bilir; bu nesne onu **kime karsi** yaptigini
+ * baglar: hangi onay modu gecerli, onay kimden istenecek, audit hangi oturuma
+ * yazilacak. Ikisini ayirmanin sebebi tanimlarin duz veri kalmasi — bir tool
+ * tanimi oturuma, IPC'ye ve SDK'ya bagimsiz olarak test edilebilmeli.
+ */
+export interface ToolRuntimeBindings {
+  /** `ASUNA_TOOL_APPROVAL_MODE`; risk 2/3 bu degerle gevsetilemez. */
+  readonly approvalMode: ToolApprovalMode;
+  /**
+   * Onay kanali. Verilmezse onay gerektiren tool **calismaz** — kapinin
+   * bagli olmamasi "onaysiz calistir" demek degildir.
+   */
+  readonly approvalGate?: ToolApprovalGate;
+  /**
+   * Audit defterine yazan kanca (ASU-050). Verilmezse cagri deftere islenmez;
+   * uretimde her zaman baglidir.
+   */
+  readonly onAudit?: (input: ToolAuditInput) => void;
+  /**
+   * Aktif oturum kaydinin kimligi (`sessions.id`). Her cagrida **yeniden**
+   * sorulur: `session_start` asenkron doner, yani oturumun ilk saniyelerinde
+   * kimlik henuz yoktur. `null` = bilinmiyor (hafiza kapali ya da kayit
+   * acilmadi) — uydurulmaz.
+   */
+  readonly resolveSessionId?: () => number | null;
+}
 
 /**
  * Tur tespiti ayari (ASU-064) — SDK tipi degil, duz veri.
@@ -52,6 +84,11 @@ export interface RealtimeSessionSpec {
    * dosyaya girmez.
    */
   readonly tools: readonly AsunaToolDefinition[];
+  /**
+   * Tool'larin onay/audit/oturum baglantilari (ASU-048). Adaptor bunu SDK
+   * `tool()` cevriminde kullanir; tanimlarin kendisi bu bilgiyi tasimaz.
+   */
+  readonly toolRuntime: ToolRuntimeBindings;
 }
 
 /**
@@ -76,8 +113,23 @@ export type RealtimeSessionSignal =
   | { readonly type: 'tool_start'; readonly toolName: string }
   /** SDK `agent_tool_end` — Phase 5. */
   | { readonly type: 'tool_end'; readonly toolName: string }
-  /** SDK `tool_approval_requested` — Phase 5. */
-  | { readonly type: 'tool_approval_requested'; readonly toolName: string }
+  /**
+   * SDK `tool_approval_requested` — onay bekleyen tool cagrisi (ASU-048).
+   *
+   * `requestId` SDK'nin onay item'ini **temsil eder**, kendisi degil: SDK tipi
+   * bu dosyaya girmez. Adaptor kimlik -> item eslemesini kendi icinde tutar ve
+   * [`RealtimeSessionPort.approve`] / `reject` bu kimligi kabul eder.
+   *
+   * `argumentsJson` modelin urettigi ham arguman metni (ya da `null`). Onay
+   * karti "ne yapilacagini" gostermek zorunda (`security.md` Bolum 3);
+   * gosterilecek metin redakte edilerek `realtime-service.ts` icinde uretilir.
+   */
+  | {
+      readonly type: 'tool_approval_requested';
+      readonly toolName: string;
+      readonly requestId: string;
+      readonly argumentsJson: string | null;
+    }
   /** SDK `error`. */
   | { readonly type: 'error'; readonly error: AsunaRealtimeErrorInfo };
 
@@ -97,6 +149,19 @@ export interface RealtimeSessionPort {
   close(): void;
   /** Manuel "sus": uretilen yaniti keser. */
   interrupt(): void;
+  /**
+   * Bekleyen bir tool onayini onaylar (ASU-048). Onaydan **sonra** tool
+   * calisir; yani bu cagri "izin verildi" demek, "yapildi" demek degil.
+   *
+   * Bilinmeyen/tuketilmis bir kimlik icin reddeder (`Promise.reject`): sessizce
+   * basarili donmek, onaylanmamis bir cagrinin onaylandigini sanmak olurdu.
+   */
+  approve(requestId: string): Promise<void>;
+  /**
+   * Bekleyen bir tool onayini reddeder. `reason` modele giden aciklamadir —
+   * model reddi ogrenmeli ki "yaptim" demesin (PROJECT.md Bolum 30).
+   */
+  reject(requestId: string, reason?: string): Promise<void>;
   /** Anlik token kullanimi. Kapanistan hemen once okunur. */
   usage(): RealtimeUsageSnapshot;
 }

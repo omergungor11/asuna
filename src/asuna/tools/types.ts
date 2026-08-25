@@ -46,14 +46,15 @@ export const NO_TOOL_ARGUMENTS: ToolInputSchema = z.strictObject({});
 export interface ToolContext {
   /**
    * Tool cagrisini ureten Realtime oturumunun kalici kaydindaki kimlik
-   * (audit korelasyonu icin).
+   * (`sessions.id`) — `tool_events.session_id` korelasyonu icin.
    *
    * `null` = kimlik bu cagri icin **bilinmiyor** (hafiza kapali ya da oturum
    * kaydi henuz acilmadi). Uydurulmus bir korelasyon kimligi, audit kaydini
-   * dogru gorunen ama yanlis bir zincire baglardi (ASU-044). Gercek baglama
-   * ASU-050'de `tool_events` yazimi ile yapilacak.
+   * dogru gorunen ama yanlis bir zincire baglardi (ASU-044). ASU-048'den beri
+   * gercek deger `SessionRecorder`'dan gelir; hafiza kapaliyken `null` kalir ve
+   * audit satiri "hangi konusmada oldugunu bilmiyoruz" der.
    */
-  readonly sessionId: string | null;
+  readonly sessionId: number | null;
   /** Aktif projenin sandbox koku; proje secili degilse `null`. */
   readonly projectRoot: string | null;
   /**

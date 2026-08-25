@@ -113,6 +113,10 @@ export const VOICE_STATE_TRANSITIONS: Readonly<Record<VoiceState, readonly Voice
     'LISTENING', // cevap uretilmedi / iptal
     'USER_SPEAKING', // barge-in
     'TOOL_PENDING', // Phase 5
+    // ASU-048: onay gerektiren tool `TOOL_PENDING`'e **ugramadan** onay bekler.
+    // SDK `execute`'u onay verilene kadar hic cagirmaz, yani "calisiyor"
+    // durumundan gecmek olmayan bir isi olmus gibi gostermek olurdu.
+    'AWAITING_APPROVAL',
     ...SESSION_EXIT_TARGETS,
     'ERROR',
   ],
@@ -121,6 +125,7 @@ export const VOICE_STATE_TRANSITIONS: Readonly<Record<VoiceState, readonly Voice
     'USER_SPEAKING', // barge-in: kullanici sozu kesti
     'ASSISTANT_THINKING', // ayni tur icinde yeni parca uretiliyor
     'TOOL_PENDING', // Phase 5
+    'AWAITING_APPROVAL', // ASU-048: konusurken de onay istegi cikabilir
     ...SESSION_EXIT_TARGETS,
     'ERROR',
   ],

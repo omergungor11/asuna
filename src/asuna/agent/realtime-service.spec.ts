@@ -18,17 +18,22 @@ import type {
 } from './realtime-session-port';
 import {
   AsunaRealtimeService,
+  TOOL_APPROVAL_TIMEOUT_MODEL_MESSAGE,
+  TOOL_DENIED_MODEL_MESSAGE,
   TOOL_FAILURE_PREFIX,
+  toApprovalArgumentsPreview,
   toModelOutput,
   toSdkTool,
   toTurnDetectionSpec,
   type AsunaRealtimeServiceOptions,
 } from './realtime-service';
 import type { EphemeralRealtimeToken } from './realtime-token';
-import type { FrontendConfig } from '../config/frontend-config';
+import { TOOL_APPROVAL_MODES, type FrontendConfig } from '../config/frontend-config';
 import { buildAsunaInstructions } from '../prompts';
 import { VoiceStateMachine, type VoiceState } from '../state/voice-state-machine';
+import { resolveApproval } from '../tools/approval-policy';
 import { NO_TOOL_ARGUMENTS, type AsunaToolDefinition, type ToolResult } from '../tools/types';
+import type { ToolAuditInput } from '../../shared/tool-event';
 
 const CONFIG: FrontendConfig = {
   realtimeModel: 'gpt-realtime-2.1-mini',
@@ -64,6 +69,10 @@ interface FakeSession {
   readonly spec: RealtimeSessionSpec;
   readonly emit: RealtimeSessionSignalListener;
   readonly port: RealtimeSessionPort;
+  /** SDK'ya iletilen onaylar (ASU-048). */
+  readonly approvals: string[];
+  /** SDK'ya iletilen retler; `reason` modele giden metin. */
+  readonly rejections: { readonly requestId: string; readonly reason?: string }[];
   apiKeyProvider: EphemeralApiKeyProvider | null;
   connectCalls: number;
   closeCalls: number;
@@ -79,6 +88,8 @@ interface HarnessOptions {
   readonly mintToken?: () => Promise<EphemeralRealtimeToken>;
   readonly usage?: RealtimeUsageSnapshot;
   readonly closeError?: Error;
+  /** SDK onay iletimi patlasin (ASU-048 kanit geri alma yolu). */
+  readonly approveError?: Error;
   readonly service?: Partial<AsunaRealtimeServiceOptions>;
 }
 
@@ -134,6 +145,8 @@ function createHarness(options: HarnessOptions = {}): Harness {
       const session: FakeSession = {
         spec,
         emit: onSignal,
+        approvals: [],
+        rejections: [],
         apiKeyProvider: null,
         connectCalls: 0,
         closeCalls: 0,
@@ -158,6 +171,16 @@ function createHarness(options: HarnessOptions = {}): Harness {
           },
           interrupt: (): void => {
             session.interruptCalls += 1;
+          },
+          approve: (requestId: string): Promise<void> => {
+            session.approvals.push(requestId);
+            return options.approveError === undefined
+              ? Promise.resolve()
+              : Promise.reject(options.approveError);
+          },
+          reject: (requestId: string, reason?: string): Promise<void> => {
+            session.rejections.push({ requestId, ...(reason === undefined ? {} : { reason }) });
+            return Promise.resolve();
           },
           usage: (): RealtimeUsageSnapshot => options.usage ?? USAGE,
         },
@@ -612,7 +635,12 @@ describe('AsunaRealtimeService — SDK sinyali -> durum eslemesi', () => {
     harness.emit({ type: 'tool_start', toolName: 'get_current_project' });
     expect(harness.service.getState()).toBe('TOOL_PENDING');
 
-    harness.emit({ type: 'tool_approval_requested', toolName: 'get_current_project' });
+    harness.emit({
+      type: 'tool_approval_requested',
+      toolName: 'get_current_project',
+      requestId: 'call_1',
+      argumentsJson: null,
+    });
     expect(harness.service.getState()).toBe('AWAITING_APPROVAL');
 
     harness.emit({ type: 'tool_end', toolName: 'get_current_project' });
@@ -876,6 +904,304 @@ describe('AsunaRealtimeService — abonelik', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Onay akisi (ASU-048)
+// ---------------------------------------------------------------------------
+
+/** Onay isteyen ornek tool: risk 2, yani mod ne olursa olsun onay ister. */
+const RISKY_TOOL: AsunaToolDefinition = {
+  name: 'edit_project_file',
+  description: 'Kayitli proje kokundeki bir dosyayi duzenler.',
+  risk: 2,
+  requiresApproval: true,
+  timeoutMs: 10_000,
+  parameters: NO_TOOL_ARGUMENTS,
+  execute: (): Promise<ToolResult> => Promise.resolve({ ok: true, summary: 'yazildi' }),
+};
+
+interface ApprovalHarness extends Harness {
+  readonly audits: ToolAuditInput[];
+}
+
+function createApprovalHarness(
+  overrides: Partial<AsunaRealtimeServiceOptions> = {},
+  harnessOptions: HarnessOptions = {},
+): ApprovalHarness {
+  const audits: ToolAuditInput[] = [];
+  const harness = createHarness({
+    ...harnessOptions,
+    service: {
+      tools: [RISKY_TOOL],
+      // Audit yazimi IPC'ye cikmaz: test aga/Tauri'ye dokunmaz.
+      recordToolEvent: (input): void => void audits.push(input),
+      approvalTimeoutMs: 1_000,
+      ...overrides,
+    },
+  });
+  return { ...harness, audits };
+}
+
+function requestApproval(
+  harness: Harness,
+  requestId = 'call_1',
+  argumentsJson = '{"path":"README.md"}',
+): void {
+  harness.emit({ type: 'agent_start' });
+  harness.emit({
+    type: 'tool_approval_requested',
+    toolName: RISKY_TOOL.name,
+    requestId,
+    argumentsJson,
+  });
+}
+
+describe('AsunaRealtimeService — onay akisi (ASU-048)', () => {
+  it('onay istegi AWAITING_APPROVAL durumunu ve karti besleyen event"i uretiyor', async () => {
+    const harness = createApprovalHarness();
+    await harness.service.connect();
+    harness.events.length = 0;
+
+    requestApproval(harness);
+
+    expect(harness.service.getState()).toBe('AWAITING_APPROVAL');
+    // Kart "izin ver?" demiyor: ne yapilacagini gosteriyor (security.md Bolum 3).
+    expect(harness.events.at(-1)).toEqual({
+      type: 'tool_approval_requested',
+      requestId: 'call_1',
+      toolName: 'edit_project_file',
+      description: RISKY_TOOL.description,
+      risk: 2,
+      argumentsPreview: 'path=README.md',
+      timeoutMs: 1_000,
+    });
+  });
+
+  it('onaylandiginda SDK"ya iletiliyor ve sonuc duyuruluyor', async () => {
+    const harness = createApprovalHarness();
+    await harness.service.connect();
+    requestApproval(harness);
+    harness.events.length = 0;
+
+    harness.service.approveToolCall('call_1');
+    await Promise.resolve();
+
+    expect(harness.sessions.at(-1)?.approvals).toEqual(['call_1']);
+    expect(harness.events).toEqual([
+      {
+        type: 'tool_approval_resolved',
+        requestId: 'call_1',
+        toolName: 'edit_project_file',
+        outcome: 'approved',
+      },
+    ]);
+    // Onaylanan cagri calisacak ve kendi audit satirini `executeTool` yazacak;
+    // burada ikinci bir satir yazilmiyor.
+    expect(harness.audits).toEqual([]);
+  });
+
+  it('reddedildiginde model reddi ogreniyor ve defter `denied` yaziyor', async () => {
+    const harness = createApprovalHarness();
+    await harness.service.connect();
+    requestApproval(harness);
+    harness.events.length = 0;
+
+    harness.service.rejectToolCall('call_1');
+
+    expect(harness.sessions.at(-1)?.rejections).toEqual([
+      { requestId: 'call_1', reason: TOOL_DENIED_MODEL_MESSAGE },
+    ]);
+    expect(harness.audits).toEqual([
+      {
+        toolName: 'edit_project_file',
+        riskLevel: 2,
+        arguments: { path: 'README.md' },
+        approvalState: 'denied',
+        resultSummary: TOOL_DENIED_MODEL_MESSAGE,
+      },
+    ]);
+    // Reddedilen tool calismaz; model cevabina doner.
+    expect(harness.service.getState()).toBe('ASSISTANT_THINKING');
+    expect(harness.events.at(-1)).toEqual({
+      type: 'tool_approval_resolved',
+      requestId: 'call_1',
+      toolName: 'edit_project_file',
+      outcome: 'denied',
+    });
+  });
+
+  /** phase-5.md ASU-048: "Onay zaman asimina ugrarsa tool calismiyor". */
+  it('sure dolunca otomatik reddediliyor (varsayilan reddet)', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createApprovalHarness();
+      await harness.service.connect();
+      requestApproval(harness);
+      harness.events.length = 0;
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(harness.sessions.at(-1)?.rejections).toEqual([
+        { requestId: 'call_1', reason: TOOL_APPROVAL_TIMEOUT_MODEL_MESSAGE },
+      ]);
+      expect(harness.audits.at(0)?.approvalState).toBe('timeout');
+      expect(harness.events.at(-1)).toMatchObject({
+        type: 'tool_approval_resolved',
+        outcome: 'timeout',
+      });
+      // Onay kaniti verilmedi: tool calistirilamaz (asagidaki kapi testi).
+      const gate = harness.sessions.at(-1)?.spec.toolRuntime.approvalGate;
+      expect(await gate?.(RISKY_TOOL, {})).toBe('denied');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
+   * Onay **kaniti** tek bir cagriyi gecirir: "hepsine izin ver" MVP'de yok.
+   * Ikinci cagri ayni onaydan faydalanamaz.
+   */
+  it('onay kaniti tek cagri icin gecerli, ikincisi reddediliyor', async () => {
+    const harness = createApprovalHarness();
+    await harness.service.connect();
+    requestApproval(harness);
+    const gate = harness.sessions.at(-1)?.spec.toolRuntime.approvalGate;
+
+    harness.service.approveToolCall('call_1');
+
+    expect(await gate?.(RISKY_TOOL, {})).toBe('approved');
+    expect(await gate?.(RISKY_TOOL, {})).toBe('denied');
+  });
+
+  /** Onay akisini atlayan bir cagri kapiyi gecemez — varsayilan reddet. */
+  it('onaysiz gelen cagriyi kapi reddediyor', async () => {
+    const harness = createApprovalHarness();
+    await harness.service.connect();
+
+    const gate = harness.sessions.at(-1)?.spec.toolRuntime.approvalGate;
+
+    expect(await gate?.(RISKY_TOOL, {})).toBe('denied');
+  });
+
+  it('SDK onayi patlarsa kanit geri aliniyor ve hata gorunur oluyor', async () => {
+    const harness = createApprovalHarness({}, { approveError: new Error('kanal koptu') });
+    await harness.service.connect();
+    requestApproval(harness);
+    const gate = harness.sessions.at(-1)?.spec.toolRuntime.approvalGate;
+
+    harness.service.approveToolCall('call_1');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(await gate?.(RISKY_TOOL, {})).toBe('denied');
+    expect(eventTypes(harness.events)).toContain('error');
+  });
+
+  it('bilinmeyen/cevaplanmis onay kimligi sessizce yutulmuyor', async () => {
+    const harness = createApprovalHarness();
+    await harness.service.connect();
+    requestApproval(harness);
+
+    harness.service.approveToolCall('call_1');
+    harness.events.length = 0;
+    // Ayni kimlik ikinci kez: istek zaten cevaplandi.
+    harness.service.approveToolCall('call_1');
+    harness.service.rejectToolCall('bilinmeyen');
+
+    expect(eventTypes(harness.events)).toEqual(['unexpected_signal', 'unexpected_signal']);
+    expect(harness.sessions.at(-1)?.approvals).toEqual(['call_1']);
+  });
+
+  it('oturum kapanirken bekleyen onay defterde `denied` olarak kaliyor', async () => {
+    const harness = createApprovalHarness();
+    await harness.service.connect();
+    requestApproval(harness);
+    harness.events.length = 0;
+
+    harness.service.disconnect();
+
+    expect(harness.audits.at(0)).toMatchObject({
+      toolName: 'edit_project_file',
+      approvalState: 'denied',
+    });
+    // Kart ekranda asili kalmiyor.
+    expect(eventTypes(harness.events)).toContain('tool_approval_resolved');
+  });
+
+  /** ASU-050 korelasyonu: audit satiri gercek oturum kaydina bagli. */
+  it('onay kararlari gercek oturum kimligiyle yaziliyor', async () => {
+    const harness = createApprovalHarness({ resolveSessionId: (): number => 42 });
+    await harness.service.connect();
+    requestApproval(harness);
+
+    harness.service.rejectToolCall('call_1');
+
+    expect(harness.audits.at(0)?.sessionId).toBe(42);
+  });
+
+  it('oturum kimligi bilinmiyorsa alan gonderilmiyor (uydurulmuyor)', async () => {
+    const harness = createApprovalHarness({ resolveSessionId: (): number | null => null });
+    await harness.service.connect();
+    requestApproval(harness);
+
+    harness.service.rejectToolCall('call_1');
+
+    expect(harness.audits.at(0)).not.toHaveProperty('sessionId');
+  });
+
+  it('tool"lara giden context gercek oturum kimligini tasiyor', async () => {
+    const harness = createApprovalHarness({ resolveSessionId: (): number => 7 });
+    await harness.service.connect();
+
+    expect(harness.sessions.at(-1)?.spec.toolRuntime.resolveSessionId?.()).toBe(7);
+  });
+
+  it('oturuma giden mod config"ten geliyor', async () => {
+    const harness = createApprovalHarness();
+    await harness.service.connect();
+
+    expect(harness.sessions.at(-1)?.spec.toolRuntime.approvalMode).toBe('safe');
+  });
+});
+
+describe('toApprovalArgumentsPreview (ASU-048)', () => {
+  it('argumansiz cagri icin `null` donuyor', () => {
+    expect(toApprovalArgumentsPreview(null)).toBeNull();
+    expect(toApprovalArgumentsPreview('{}')).toBeNull();
+  });
+
+  it('alfabetik tek satir uretiyor', () => {
+    expect(toApprovalArgumentsPreview('{"path":"README.md","maxBytes":4096}')).toBe(
+      'maxBytes=4096, path=README.md',
+    );
+  });
+
+  /** Dosya icerigi karta dokulmez: ic ice yapilar yalnizca **sekil**. */
+  it('ic ice yapilar yalnizca sekil olarak gorunuyor', () => {
+    expect(toApprovalArgumentsPreview('{"lines":[1,2,3],"meta":{"a":1,"b":2}}')).toBe(
+      'lines=[3 oge], meta={2 alan}',
+    );
+  });
+
+  it('uzun metin kirpiliyor', () => {
+    const preview = toApprovalArgumentsPreview(JSON.stringify({ text: 'x'.repeat(200) }));
+    expect(preview).not.toBeNull();
+    expect(preview?.length).toBeLessThan(80);
+    expect(preview?.endsWith('…')).toBe(true);
+  });
+
+  /** Secret desenleri karta da gitmez (`redactText`). */
+  it('secret gorunumlu degerler redakte ediliyor', () => {
+    const preview = toApprovalArgumentsPreview(
+      '{"token":"sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"}',
+    );
+    expect(preview).not.toContain('ABCDEFGHIJKLMNOPQRSTUVWXYZ');
+  });
+
+  it('bozuk JSON oldugu gibi degil, kirpilmis haliyle gosteriliyor', () => {
+    expect(toApprovalArgumentsPreview('{bozuk')).toBe('{bozuk');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // SDK `tool()` adaptoru (ASU-044)
 // ---------------------------------------------------------------------------
 
@@ -912,6 +1238,65 @@ describe('AsunaToolDefinition -> SDK tool adaptoru', () => {
   it('risk 2+ bir tool onaysiz kaydedilemiyor', () => {
     expect(() => toSdkTool({ ...readOnly, risk: 2 })).toThrow(AsunaRealtimeError);
     expect(() => toSdkTool({ ...readOnly, risk: 3, requiresApproval: true })).not.toThrow();
+  });
+
+  /**
+   * `needsApproval` artik statik boolean degil, politika fonksiyonu (ASU-048).
+   * SDK'ya giden karar `resolveApproval` matrisinin **ayni** karari olmali;
+   * burada iki mod x her risk seviyesi ucdan uca olculuyor.
+   */
+  it('needsApproval politikasi matrisle ayni karari veriyor', async () => {
+    for (const mode of TOOL_APPROVAL_MODES) {
+      for (const risk of [0, 1, 2, 3] as const) {
+        const definition: AsunaToolDefinition = {
+          ...readOnly,
+          risk,
+          requiresApproval: risk >= 2,
+        };
+        const policy: (...args: never[]) => Promise<boolean> = toSdkTool(definition, {
+          approvalMode: mode,
+        }).needsApproval;
+
+        expect(await policy()).toBe(
+          resolveApproval(risk, definition.requiresApproval, mode) === 'needs_approval',
+        );
+      }
+    }
+  });
+
+  /** Risk 2/3 iki modda da onay ister; konfigurasyon bunu gevsetemez. */
+  it('risk 2 ve 3 her iki modda da onay istiyor', async () => {
+    for (const mode of TOOL_APPROVAL_MODES) {
+      for (const risk of [2, 3] as const) {
+        const policy: (...args: never[]) => Promise<boolean> = toSdkTool(
+          { ...readOnly, risk, requiresApproval: true },
+          { approvalMode: mode },
+        ).needsApproval;
+
+        expect(await policy()).toBe(true);
+      }
+    }
+  });
+
+  /** Risk 0 salt-okuma tool iki modda da onaysiz — onay yorgunlugu uretmiyoruz. */
+  it('risk 0 tool hicbir modda onay istemiyor', async () => {
+    for (const mode of TOOL_APPROVAL_MODES) {
+      const policy: (...args: never[]) => Promise<boolean> = toSdkTool(readOnly, {
+        approvalMode: mode,
+      }).needsApproval;
+
+      expect(await policy()).toBe(false);
+    }
+  });
+
+  /** Runtime verilmezse en siki varsayilan: risk 1 bile onay ister. */
+  it('runtime verilmediginde en siki varsayilan uygulaniyor', async () => {
+    const policy: (...args: never[]) => Promise<boolean> = toSdkTool({
+      ...readOnly,
+      risk: 1,
+    }).needsApproval;
+
+    expect(await policy()).toBe(true);
   });
 
   it('modele giden metin ozet; basarisizlik acikca isaretleniyor', () => {

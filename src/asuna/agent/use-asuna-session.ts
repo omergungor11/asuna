@@ -65,6 +65,7 @@ import type {
   VoiceTransitionReason,
 } from '../state/voice-state-machine';
 import { asunaToolRegistry } from '../tools';
+import type { ToolRisk } from '../tools/types';
 import type { SessionUsageInput, TranscriptLineInput } from '../../shared/session';
 
 // ---------------------------------------------------------------------------
@@ -81,6 +82,10 @@ export interface AsunaSessionPort {
   connect(): Promise<void>;
   disconnect(): void;
   interrupt(): void;
+  /** Bekleyen tool onayini onaylar (ASU-048); karti ASU-053 kurar. */
+  approveToolCall(requestId: string): void;
+  /** Bekleyen tool onayini reddeder. */
+  rejectToolCall(requestId: string, reason?: string): void;
   subscribe(listener: AsunaRealtimeEventListener): () => void;
   getState(): VoiceState;
 }
@@ -88,6 +93,12 @@ export interface AsunaSessionPort {
 export interface AsunaSessionContext {
   readonly config: FrontendConfig;
   readonly stateMachine: VoiceStateMachine;
+  /**
+   * Acik oturum kaydi (ASU-032). Servis buradan **yalnizca** aktif oturumun
+   * kimligini okur (`tool_events.session_id` korelasyonu, ASU-048/050); kaydi
+   * acip kapatan taraf hook'un kendisidir.
+   */
+  readonly recorder: SessionRecorder;
 }
 
 export type AsunaSessionFactory = (context: AsunaSessionContext) => AsunaSessionPort;
@@ -338,6 +349,29 @@ export function toSessionUsageInput(usage: RealtimeUsageSnapshot): SessionUsageI
 // Event -> UI olgulari
 // ---------------------------------------------------------------------------
 
+/**
+ * Ekranda gosterilen onay istegi (ASU-048; kart ASU-053).
+ *
+ * Servisin `tool_approval_requested` event'inin duz kopyasi: hook UI'a yeni bir
+ * bilgi **eklemez**, ozellikle "ne kadar suresi kaldi"yi kendi saymaz —
+ * `requestedAtMs` + `timeoutMs` ile karti geri sayimi kendisi cizer, ama
+ * zaman asiminin kendisi servisin karari (otomatik reddetme orada).
+ */
+export interface PendingToolApproval {
+  readonly requestId: string;
+  readonly toolName: string;
+  /** Tool'un insan diliyle ne yaptigi; bos = tanim bulunamadi. */
+  readonly description: string;
+  /** `null` = risk seviyesi bilinmiyor (kayitli olmayan tool). */
+  readonly risk: ToolRisk | null;
+  /** Redakte edilmis, tek satirlik arguman ozeti; `null` = argumansiz. */
+  readonly argumentsPreview: string | null;
+  /** Onay penceresi (ms) — kart geri sayimi. */
+  readonly timeoutMs: number;
+  /** Istegin gelis ani (`now()`), geri sayimin baslangici. */
+  readonly requestedAtMs: number;
+}
+
 interface SessionFacts {
   /** Oturum acik mi — servisin `connected`/`disconnected` event'lerinden. */
   readonly connected: boolean;
@@ -351,6 +385,15 @@ interface SessionFacts {
    * arka planda ne yaptigini kullanicidan saklamak demekti (PROJECT.md Bolum 21).
    */
   readonly activeTool: string | null;
+  /**
+   * Kullanici onayi bekleyen tool cagrisi (ASU-048).
+   *
+   * Tek eleman: onay karari **cagri basinadir** ve ayni anda birden fazla kart
+   * gostermek "hepsini onayla" refleksine davetiye olurdu. Yeni bir istek
+   * gelirse en yenisi gorunur; eskisi zaman asimiyla servis tarafinda
+   * reddedilir.
+   */
+  readonly pendingApproval: PendingToolApproval | null;
   readonly error: UserFacingError | null;
   /**
    * Kullanici Asuna'nin sozunu kesti ve Asuna sustu (ASU-016 barge-in).
@@ -369,6 +412,7 @@ const INITIAL_FACTS: SessionFacts = {
   connected: false,
   model: null,
   activeTool: null,
+  pendingApproval: null,
   error: null,
   bargeIn: false,
   lastLatencyMs: null,
@@ -381,9 +425,18 @@ type SessionAction =
   | { readonly type: 'activation_failed'; readonly error: UserFacingError }
   | { readonly type: 'latency_measured'; readonly latencyMs: number }
   | { readonly type: 'session_recorded'; readonly outcome: SessionOutcome }
-  | { readonly type: 'realtime_event'; readonly event: AsunaRealtimeEvent };
+  | {
+      readonly type: 'realtime_event';
+      readonly event: AsunaRealtimeEvent;
+      /** Event'in gelis ani — onay kartinin geri sayimi buradan baslar. */
+      readonly atMs: number;
+    };
 
-function reduceRealtimeEvent(state: SessionFacts, event: AsunaRealtimeEvent): SessionFacts {
+function reduceRealtimeEvent(
+  state: SessionFacts,
+  event: AsunaRealtimeEvent,
+  atMs: number,
+): SessionFacts {
   switch (event.type) {
     case 'connecting':
       return { ...state, connected: false };
@@ -396,14 +449,47 @@ function reduceRealtimeEvent(state: SessionFacts, event: AsunaRealtimeEvent): Se
       return { ...state, error: describeRealtimeFailure(event.error) };
 
     case 'disconnected':
-      return { ...state, connected: false, activeTool: null, bargeIn: false };
+      // Kapanan oturumun onay karti ekranda kalmaz: servis bekleyen istekleri
+      // zaten reddetti (`abandonApprovals`).
+      return {
+        ...state,
+        connected: false,
+        activeTool: null,
+        pendingApproval: null,
+        bargeIn: false,
+      };
 
     case 'error':
       return { ...state, error: describeRealtimeFailure(event.error) };
 
     case 'tool_call_started':
-    case 'tool_approval_requested':
       return { ...state, activeTool: event.toolName };
+
+    case 'tool_approval_requested':
+      return {
+        ...state,
+        activeTool: event.toolName,
+        pendingApproval: {
+          requestId: event.requestId,
+          toolName: event.toolName,
+          description: event.description,
+          risk: event.risk,
+          argumentsPreview: event.argumentsPreview,
+          timeoutMs: event.timeoutMs,
+          requestedAtMs: atMs,
+        },
+      };
+
+    case 'tool_approval_resolved':
+      // Baska bir istegin karti ekrandaysa onu dusurmuyoruz.
+      return state.pendingApproval?.requestId === event.requestId
+        ? {
+            ...state,
+            pendingApproval: null,
+            // Onaylandiysa tool simdi calisacak; reddedildiyse calisan bir sey yok.
+            activeTool: event.outcome === 'approved' ? state.activeTool : null,
+          }
+        : state;
 
     case 'tool_call_completed':
       return { ...state, activeTool: null };
@@ -442,6 +528,7 @@ function reduceSession(state: SessionFacts, action: SessionAction): SessionFacts
         ...state,
         error: null,
         activeTool: null,
+        pendingApproval: null,
         bargeIn: false,
         transcript: [],
         sessionOutcome: null,
@@ -453,7 +540,7 @@ function reduceSession(state: SessionFacts, action: SessionAction): SessionFacts
     case 'session_recorded':
       return { ...state, sessionOutcome: action.outcome };
     case 'realtime_event':
-      return reduceRealtimeEvent(state, action.event);
+      return reduceRealtimeEvent(state, action.event, action.atMs);
   }
 }
 
@@ -496,6 +583,11 @@ export interface AsunaSession {
   readonly micActive: boolean;
   readonly model: string | null;
   readonly activeTool: string | null;
+  /**
+   * Kullanici onayi bekleyen tool cagrisi (ASU-048) — onay karti bunu gosterir.
+   * `null` = bekleyen istek yok.
+   */
+  readonly pendingApproval: PendingToolApproval | null;
   readonly error: UserFacingError | null;
   /** Kullanici Asuna'nin sozunu kesti — gorsel tepki icin (ASU-016). */
   readonly bargeIn: boolean;
@@ -515,6 +607,17 @@ export interface AsunaSession {
   readonly start: () => void;
   /** "Stop" — oturumu kapatir. */
   readonly stop: () => void;
+  /**
+   * Bekleyen tool onayini onaylar (ASU-048).
+   *
+   * `requestId` alir, "sonuncuyu onayla" demez: kartin gosterdigi istek ile
+   * onaylanan istegin ayni oldugu **kanitli** olmali. Bekleyen istek yoksa ya
+   * da kimlik eskimisse cagri sessizce gorunur bir "beklenmeyen sinyal"e duser,
+   * yanlis bir cagriyi onaylamaz.
+   */
+  readonly approveTool: (requestId: string) => void;
+  /** Bekleyen tool onayini reddeder; model reddi ogrenir. */
+  readonly rejectTool: (requestId: string) => void;
 }
 
 interface ResolvedDeps {
@@ -534,6 +637,11 @@ function defaultCreateService(context: AsunaSessionContext): AsunaSessionPort {
   return new AsunaRealtimeService({
     config: context.config,
     stateMachine: context.stateMachine,
+    // ASU-048/050: tool audit satirlari **gercek** oturum kaydina baglanir.
+    // Kimlik her cagrida yeniden sorulur: `session_start` asenkron doner ve
+    // oturumun ilk saniyelerinde henuz yoktur; o aralikta `null` yazilir —
+    // uydurulmus bir korelasyon kimligi yanlis zincir uretirdi.
+    resolveSessionId: (): number | null => context.recorder.currentSessionId,
     // ASU-047: liste registry'den gelir — "hangi yetenekler acik?" sorusunun
     // tek cevabi orasi. Hepsi risk 0 / onaysiz; MVP kurali "once salt okuma"
     // (PROJECT.md Bolum 17).
@@ -679,6 +787,7 @@ export function useAsunaSession(options: UseAsunaSessionOptions = {}): AsunaSess
         case 'tool_call_started':
         case 'tool_call_completed':
         case 'tool_approval_requested':
+        case 'tool_approval_resolved':
         case 'unexpected_signal':
           return;
       }
@@ -785,6 +894,7 @@ export function useAsunaSession(options: UseAsunaSessionOptions = {}): AsunaSess
         case 'tool_call_started':
         case 'tool_call_completed':
         case 'tool_approval_requested':
+        case 'tool_approval_resolved':
         case 'unexpected_signal':
           return;
       }
@@ -799,7 +909,7 @@ export function useAsunaSession(options: UseAsunaSessionOptions = {}): AsunaSess
       }
       trackLatency(event);
       recordSessionEvent(event);
-      dispatch({ type: 'realtime_event', event });
+      dispatch({ type: 'realtime_event', event, atMs: deps.now() });
 
       if (event.type === 'disconnected') {
         connectedRef.current = false;
@@ -810,7 +920,7 @@ export function useAsunaSession(options: UseAsunaSessionOptions = {}): AsunaSess
         handleSessionFailure();
       }
     },
-    [handleSessionFailure, recordSessionEvent, trackLatency],
+    [deps, handleSessionFailure, recordSessionEvent, trackLatency],
   );
 
   const ensureService = useCallback(
@@ -820,7 +930,11 @@ export function useAsunaSession(options: UseAsunaSessionOptions = {}): AsunaSess
         return existing;
       }
 
-      const service = deps.createService({ config, stateMachine: deps.machine });
+      const service = deps.createService({
+        config,
+        stateMachine: deps.machine,
+        recorder: deps.recorder,
+      });
       // Tek abonelik: servis hook'un omru boyunca yasar, her baglantida yeniden
       // abone olunmaz (ASU-018 listener leak kontrolu).
       unsubscribeRef.current = service.subscribe(handleEvent);
@@ -923,6 +1037,30 @@ export function useAsunaSession(options: UseAsunaSessionOptions = {}): AsunaSess
     closeSession('user_stop');
   }, [closeSession]);
 
+  const approveTool = useCallback(
+    (requestId: string): void => {
+      const service = serviceRef.current;
+      if (service === null) {
+        return;
+      }
+      deps.log.info('Tool cagrisi onaylandi.', { requestId });
+      service.approveToolCall(requestId);
+    },
+    [deps],
+  );
+
+  const rejectTool = useCallback(
+    (requestId: string): void => {
+      const service = serviceRef.current;
+      if (service === null) {
+        return;
+      }
+      deps.log.info('Tool cagrisi reddedildi.', { requestId });
+      service.rejectToolCall(requestId);
+    },
+    [deps],
+  );
+
   /**
    * Kapanis kancalari (ASU-018).
    *
@@ -953,6 +1091,7 @@ export function useAsunaSession(options: UseAsunaSessionOptions = {}): AsunaSess
     micActive: facts.connected,
     model: facts.model,
     activeTool: facts.activeTool,
+    pendingApproval: facts.pendingApproval,
     error: facts.error,
     bargeIn: facts.bargeIn,
     lastLatencyMs: facts.lastLatencyMs,
@@ -960,5 +1099,7 @@ export function useAsunaSession(options: UseAsunaSessionOptions = {}): AsunaSess
     sessionOutcome: facts.sessionOutcome,
     start,
     stop,
+    approveTool,
+    rejectTool,
   };
 }

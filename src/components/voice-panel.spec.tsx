@@ -90,6 +90,9 @@ function createOptions(probe?: () => Promise<MicrophoneProbe>): UseAsunaSessionO
           publish({ type: 'disconnected', reason: 'requested' });
         },
         interrupt: (): void => undefined,
+        // ASU-048: onay yolu bu panelde kullanilmiyor; port sozlesmesi geregi var.
+        approveToolCall: (): void => undefined,
+        rejectToolCall: (): void => undefined,
         subscribe: (listener): (() => void) => {
           listeners.add(listener);
           return (): void => {
@@ -220,6 +223,8 @@ describe('VoicePanel', () => {
           },
           disconnect: (): void => undefined,
           interrupt: (): void => undefined,
+          approveToolCall: (): void => undefined,
+          rejectToolCall: (): void => undefined,
           subscribe: (listener): (() => void) => {
             listeners.add(listener);
             return (): void => {

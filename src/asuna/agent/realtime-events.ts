@@ -12,6 +12,8 @@
 
 import type { AsunaRealtimeErrorInfo } from './realtime-errors';
 import type { VoiceState } from '../state/voice-state-machine';
+import type { ApprovalOutcome } from '../tools/approval-policy';
+import type { ToolRisk } from '../tools/types';
 
 /** Konusma dokumunun tek bir satiri. */
 export interface TranscriptEntry {
@@ -71,12 +73,43 @@ export type AsunaRealtimeEvent =
   /** Tur bitti (SDK `agent_end`). Metin ayrica `transcript` ile gelir. */
   | { readonly type: 'turn_ended' }
   | { readonly type: 'transcript'; readonly entry: TranscriptEntry }
-  /** Phase 5 (ASU-05x) placeholder: Phase 1'de tool yok, bu event yayinlanmaz. */
+  /** Bir tool calismaya basladi (ASU-044'ten beri gercek). */
   | { readonly type: 'tool_call_started'; readonly toolName: string }
-  /** Phase 5 (ASU-05x) placeholder. */
   | { readonly type: 'tool_call_completed'; readonly toolName: string }
-  /** Phase 5 (ASU-05x) placeholder. */
-  | { readonly type: 'tool_approval_requested'; readonly toolName: string }
+  /**
+   * Bir tool cagrisi **kullanici onayi bekliyor** (ASU-048).
+   *
+   * Onay karti (ASU-053) bu event'ten beslenir; alanlar `security.md` Bolum 3'un
+   * "onay istegi ne yapilacagini gosterir" kuralini karsilamak icin var —
+   * yalnizca "izin ver?" demeyen bir kart kurulabilsin diye tool adi, insan
+   * diliyle amac, risk seviyesi ve **redakte edilmis** argumanlar birlikte gelir.
+   *
+   * `requestId` cevabin adresidir: `approveToolCall` / `rejectToolCall` bu
+   * kimligi alir. Karar **cagri basinadir** — "hepsine izin ver" MVP'de yok.
+   */
+  | {
+      readonly type: 'tool_approval_requested';
+      readonly requestId: string;
+      readonly toolName: string;
+      /** Tool tanimindaki aciklama; kayitli olmayan bir tool icin bos olabilir. */
+      readonly description: string;
+      /** `null` = tool registry'de bulunamadi, risk seviyesi bilinmiyor. */
+      readonly risk: ToolRisk | null;
+      /** Tek satirlik, redakte edilmis arguman ozeti; `null` = argumansiz. */
+      readonly argumentsPreview: string | null;
+      /** Onay penceresi (ms). Kart geri sayimi bunu gosterir; dolunca reddedilir. */
+      readonly timeoutMs: number;
+    }
+  /**
+   * Bekleyen onay sonuclandi (ASU-048). `timeout` kullanicinin degil **surenin**
+   * karari: varsayilan reddetmektir.
+   */
+  | {
+      readonly type: 'tool_approval_resolved';
+      readonly requestId: string;
+      readonly toolName: string;
+      readonly outcome: ApprovalOutcome;
+    }
   /**
    * SDK, mevcut duruma uymayan bir sinyal yolladi. Sessizce yutulmuyor ama sesli
    * oturumu da dusurmuyor (`conventions.md` — "Bozulan alt sistem tum urunu dusurmez").

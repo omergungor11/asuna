@@ -3,8 +3,8 @@
  *
  * Bu dosya **kayit noktasidir**: "hangi yetenekler modele acik?" sorusunun tek
  * cevabi burada kurulan [`ToolRegistry`] ornegidir. Calistirma kurallari
- * (sema, timeout, yapisal sonuc) `registry.ts`'te; onay politikasi ASU-048,
- * `tool_events` audit yazimi ASU-050.
+ * (sema, onay kapisi, timeout, yapisal sonuc, audit) `registry.ts`'te; onay
+ * matrisi `approval-policy.ts`'te; `tool_events` yazimi `audit.ts`'te.
  *
  * MVP kurali (PROJECT.md Bolum 17): **once salt okuma**. Risk 2+ bir tool
  * eklemek orchestrator karari; bu listeye sessizce eklenmez — registry zaten
@@ -14,6 +14,13 @@
 import { getCurrentProjectTool } from './get-current-project';
 import { ToolRegistry } from './registry';
 
+export {
+  APPROVAL_TIMEOUT_MS,
+  approvalStateFor,
+  resolveApproval,
+  type ApprovalDecision,
+  type ApprovalOutcome,
+} from './approval-policy';
 export { createGetCurrentProjectTool, getCurrentProjectTool } from './get-current-project';
 export {
   executeTool,
@@ -21,6 +28,7 @@ export {
   TOOL_ERROR_KINDS,
   ToolRegistry,
   ToolRegistryError,
+  type ToolApprovalGate,
   type ToolExecutionOptions,
   type ToolRegistryErrorCode,
 } from './registry';

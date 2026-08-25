@@ -115,8 +115,8 @@
 | ASU-045 | Projects UI sekmesi | 4 | M | frontend | DONE |
 | ASU-046 | **Phase 4 kabul testi** | 4 | S | test | PENDING |
 | ASU-047 | `AsunaToolDefinition` + tool registry | 5 | L | backend | DONE |
-| ASU-048 | Risk / approval policy katmani | 5 | M | backend | PENDING |
-| ASU-049 | Path sandbox + hassas dosya blocklist | 5 | M | backend | PENDING |
+| ASU-048 | Risk / approval policy katmani | 5 | M | backend | DONE |
+| ASU-049 | Path sandbox + hassas dosya blocklist | 5 | M | backend | DONE |
 | ASU-050 | `tool_events` tablosu + audit logger | 5 | M | db | DONE |
 | ASU-051 | `read_project_file` tool (risk 0, sandbox'li) | 5 | M | backend | PENDING |
 | ASU-052 | `open_project` tool (risk 1) | 5 | M | backend | PENDING |

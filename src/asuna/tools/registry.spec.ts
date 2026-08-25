@@ -23,6 +23,7 @@ import {
   TOOL_ERROR_KINDS,
   ToolRegistry,
   ToolRegistryError,
+  type ToolApprovalGate,
 } from './registry';
 import {
   NO_TOOL_ARGUMENTS,
@@ -30,6 +31,7 @@ import {
   type ToolContext,
   type ToolResult,
 } from './types';
+import type { ToolAuditInput } from '../../shared/tool-event';
 
 const CONTEXT: ToolContext = { sessionId: null, projectRoot: null };
 
@@ -360,6 +362,228 @@ describe('executeTool — yapisal sonuc', () => {
     expect(
       await executeTool(defineTool({ execute: () => Promise.resolve(own) }), {}, CONTEXT),
     ).toEqual(own);
+  });
+});
+
+describe('executeTool — onay kapisi (ASU-048)', () => {
+  /** Risk 0 tool onay kapisina hic ugramiyor: gate cagrilmiyor. */
+  it('onay gerekmeyen cagri gate"e sorulmuyor', async () => {
+    const gate = vi.fn<ToolApprovalGate>();
+    const execute = vi.fn<Execute>(() => Promise.resolve(OK));
+
+    const result = await executeTool(defineTool({ execute }), {}, CONTEXT, {
+      approvalMode: 'safe',
+      approvalGate: gate,
+    });
+
+    expect(gate).not.toHaveBeenCalled();
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(result.ok).toBe(true);
+  });
+
+  /**
+   * Reddedilen cagri **calismiyor**. Kanit spy: `execute` hic cagrilmadi,
+   * yani "calisti ama sonucu atildi" degil, gercekten calismadi.
+   */
+  it('reddedilen onayda execute HIC cagrilmiyor', async () => {
+    const execute = vi.fn<Execute>(() => Promise.resolve(OK));
+    const tool = defineTool({ risk: 2, requiresApproval: true, execute });
+
+    const result = await executeTool(tool, {}, CONTEXT, {
+      approvalMode: 'safe',
+      approvalGate: () => Promise.resolve('denied'),
+    });
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errorKind).toBe(TOOL_ERROR_KINDS.denied);
+      // Model reddi acikca gormeli: "yaptim" diyemesin.
+      expect(result.summary).toContain('onaylanmadi');
+    }
+  });
+
+  it('onay zaman asiminda execute HIC cagrilmiyor', async () => {
+    const execute = vi.fn<Execute>(() => Promise.resolve(OK));
+    const tool = defineTool({ risk: 2, requiresApproval: true, execute });
+
+    const result = await executeTool(tool, {}, CONTEXT, {
+      approvalMode: 'safe',
+      approvalGate: () => Promise.resolve('timeout'),
+    });
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errorKind).toBe(TOOL_ERROR_KINDS.denied);
+      expect(result.summary).toContain('sure doldu');
+    }
+  });
+
+  /**
+   * Kapiyi baglamayi unutmak "onaysiz calistir"a donusmuyor. ASU-048'in
+   * varsayilani: belirsizlik onay lehine, yani CALISTIRMA.
+   */
+  it('onay kanali yoksa onay gerektiren tool calismiyor', async () => {
+    const execute = vi.fn<Execute>(() => Promise.resolve(OK));
+    const tool = defineTool({ risk: 3, requiresApproval: true, execute });
+
+    const audits: ToolAuditInput[] = [];
+    const result = await executeTool(tool, {}, CONTEXT, {
+      approvalMode: 'always',
+      onAudit: (input) => audits.push(input),
+    });
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(result.ok).toBe(false);
+    // Onay GEREKTI ama SORULAMADI: `not_required` ile karistirilmiyor.
+    expect(audits[0]?.approvalState).toBe('not_requested');
+  });
+
+  /** Gate patlarsa da varsayilan reddetmek — hata "herhalde tamamdir" demek degil. */
+  it('gate firlatirsa cagri reddediliyor', async () => {
+    const execute = vi.fn<Execute>(() => Promise.resolve(OK));
+    const tool = defineTool({ risk: 2, requiresApproval: true, execute });
+
+    const result = await executeTool(tool, {}, CONTEXT, {
+      approvalGate: () => Promise.reject(new Error('kanal koptu')),
+    });
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(result.ok).toBe(false);
+  });
+
+  it('onaylanan cagri calisiyor ve gate"e tanim + parse edilmis arguman gidiyor', async () => {
+    const gate = vi.fn<ToolApprovalGate>(() => Promise.resolve('approved'));
+    const execute = vi.fn<Execute>(() => Promise.resolve(OK));
+    const tool = defineTool({
+      risk: 1,
+      execute,
+      parameters: z.strictObject({ path: z.string() }),
+    });
+
+    const result = await executeTool(tool, { path: 'README.md' }, CONTEXT, {
+      approvalMode: 'safe',
+      approvalGate: gate,
+    });
+
+    expect(gate).toHaveBeenCalledWith(tool, { path: 'README.md' });
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(result.ok).toBe(true);
+  });
+
+  /**
+   * Onay bekleme suresi tool'un calisma butcesini yemiyor: sayac onaydan sonra
+   * basliyor. Aksi halde 60 sn dusunen bir kullanici, 5 sn timeout'lu bir
+   * tool'u kendiliginden zaman asimina ugratirdi.
+   */
+  it('tool timeout sayaci onaydan sonra basliyor', async () => {
+    const tool = defineTool({ risk: 2, requiresApproval: true, timeoutMs: 30 });
+
+    const result = await executeTool(tool, {}, CONTEXT, {
+      approvalGate: async (): Promise<'approved'> => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return 'approved';
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  /** Mod verilmezse en siki davranis: risk 1 onay ister. */
+  it('mod verilmediginde en siki varsayilan uygulaniyor', async () => {
+    const execute = vi.fn<Execute>(() => Promise.resolve(OK));
+
+    const result = await executeTool(defineTool({ risk: 1, execute }), {}, CONTEXT);
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(result.ok).toBe(false);
+  });
+});
+
+describe('executeTool — audit kaydi (ASU-048 x ASU-050)', () => {
+  function collect(): {
+    readonly audits: ToolAuditInput[];
+    readonly onAudit: (i: ToolAuditInput) => void;
+  } {
+    const audits: ToolAuditInput[] = [];
+    return { audits, onAudit: (input): void => void audits.push(input) };
+  }
+
+  it('calisan risk 0 cagri `not_required` ile yaziliyor', async () => {
+    const { audits, onAudit } = collect();
+
+    await executeTool(defineTool(), {}, { sessionId: 7, projectRoot: null }, { onAudit });
+
+    expect(audits).toHaveLength(1);
+    expect(audits[0]).toMatchObject({
+      toolName: 'read_project_file',
+      riskLevel: 0,
+      approvalState: 'not_required',
+      sessionId: 7,
+      resultSummary: 'oldu',
+    });
+  });
+
+  it('onaylanan cagri `approved`, reddedilen `denied`, zaman asimi `timeout` yaziyor', async () => {
+    const tool = defineTool({ risk: 2, requiresApproval: true });
+    const outcomes = ['approved', 'denied', 'timeout'] as const;
+    const states: string[] = [];
+
+    for (const outcome of outcomes) {
+      const { audits, onAudit } = collect();
+      await executeTool(tool, {}, CONTEXT, {
+        approvalGate: () => Promise.resolve(outcome),
+        onAudit,
+      });
+      expect(audits).toHaveLength(1);
+      states.push(audits[0]?.approvalState ?? 'yok');
+    }
+
+    expect(states).toEqual(['approved', 'denied', 'timeout']);
+  });
+
+  /** Sema reddi onay asamasina hic gelmiyor; defter bunu ayirt ediyor. */
+  it('sema reddi `not_requested` ile yaziliyor', async () => {
+    const { audits, onAudit } = collect();
+    const tool = defineTool({ parameters: z.strictObject({ path: z.string() }) });
+
+    await executeTool(tool, { path: 42 }, CONTEXT, { onAudit });
+
+    expect(audits[0]?.approvalState).toBe('not_requested');
+  });
+
+  /**
+   * Oturum kimligi bilinmiyorsa alan **yok** — sifir ya da uydurma bir deger
+   * yazilmiyor (audit satiri "hangi konusma" sorusuna yanlis cevap vermez).
+   */
+  it('oturum kimligi bilinmiyorsa alan gonderilmiyor', async () => {
+    const { audits, onAudit } = collect();
+
+    await executeTool(defineTool(), {}, CONTEXT, { onAudit });
+
+    expect(audits[0]).not.toHaveProperty('sessionId');
+  });
+
+  it('ham argumanlar oldugu gibi gonderiliyor (redaksiyon host tarafinda)', async () => {
+    const { audits, onAudit } = collect();
+    const tool = defineTool({ parameters: z.strictObject({ path: z.string() }) });
+
+    await executeTool(tool, { path: 'README.md' }, CONTEXT, { onAudit });
+
+    expect(audits[0]?.arguments).toEqual({ path: 'README.md' });
+  });
+
+  it('audit kancasi cagri basina tam bir kez cagriliyor', async () => {
+    const { audits, onAudit } = collect();
+    const tool = defineTool({
+      execute: (): Promise<ToolResult> => Promise.reject(new Error('patladi')),
+    });
+
+    await executeTool(tool, {}, CONTEXT, { onAudit });
+
+    expect(audits).toHaveLength(1);
+    expect(audits[0]?.resultSummary).toContain('patladi');
   });
 });
 

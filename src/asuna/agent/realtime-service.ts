@@ -30,6 +30,7 @@ import {
   RealtimeSession,
   tool,
   type RealtimeItem,
+  type RealtimeSessionEventTypes,
 } from '@openai/agents-realtime';
 
 import {
@@ -51,19 +52,27 @@ import type {
   RealtimeSessionSignal,
   RealtimeSessionSignalListener,
   RealtimeSessionSpec,
+  ToolRuntimeBindings,
   TurnDetectionSpec,
 } from './realtime-session-port';
 import { mintRealtimeToken, type EphemeralRealtimeToken } from './realtime-token';
 import type { FrontendConfig } from '../config/frontend-config';
-import { logger } from '../observability';
+import { logger, redactText } from '../observability';
 import { buildAsunaInstructions } from '../prompts';
 import {
   VoiceStateMachine,
   type VoiceState,
   type VoiceTransitionReason,
 } from '../state/voice-state-machine';
-import { executeTool } from '../tools/registry';
-import type { AsunaToolDefinition, ToolContext, ToolResult } from '../tools/types';
+import { recordToolEvent } from '../tools/audit';
+import {
+  APPROVAL_TIMEOUT_MS,
+  resolveApproval,
+  type ApprovalOutcome,
+} from '../tools/approval-policy';
+import { executeTool, type ToolApprovalGate } from '../tools/registry';
+import type { AsunaToolDefinition, ToolContext, ToolResult, ToolRisk } from '../tools/types';
+import type { ToolAuditInput } from '../../shared/tool-event';
 
 // ---------------------------------------------------------------------------
 // Sabitler
@@ -157,17 +166,47 @@ export function toTranscriptEntries(items: readonly RealtimeItem[]): TranscriptE
 export const TOOL_FAILURE_PREFIX = 'TOOL BASARISIZ.';
 
 /**
- * Tool'lara verilen calisma context'inin tabani.
+ * Reddedilen onayin modele giden aciklamasi.
  *
- * Su an iki alan da `null` ve bu **uydurma yerine bos birakma** karari:
- * `sessionId` kalici oturum kaydinin kimligidir ve bu katman onu gormuyor;
- * `projectRoot` ise ASU-049 sandbox'i ile gelecek. Yer tutucu bir deger
- * yazmak, audit kaydini dogru gorunen ama yanlis bir zincire baglardi.
+ * Model reddi **ogrenmeli**: "yapamadim" ile "yaptim" arasindaki fark burada
+ * kuruluyor (PROJECT.md Bolum 30).
+ */
+export const TOOL_DENIED_MODEL_MESSAGE =
+  'Kullanici bu tool cagrisini onaylamadi. Islemi yapmadin; yapilmis gibi anlatma.';
+
+/** Zaman asimina ugrayan onayin modele giden aciklamasi. */
+export const TOOL_APPROVAL_TIMEOUT_MODEL_MESSAGE =
+  'Onay beklenirken sure doldu, bu yuzden tool calistirilmadi. Yapilmis gibi anlatma; ' +
+  'kullanici hala isterse tekrar sorabilirsin.';
+
+/** Oturum kapanirken cevaplanmamis kalan onayin audit ozeti. */
+const TOOL_APPROVAL_ABANDONED_SUMMARY =
+  'Oturum kapandi; onay alinamadi ve tool calistirilmadi.';
+
+/**
+ * Onay/audit baglantisi kurulmadan cevrilen tool'larin varsayilani.
+ *
+ * `approvalMode: 'always'` bilincli: modu bilmeyen bir cagiran **en gevsek**
+ * davranisi miras almamali (ASU-048 — "belirsizlik onay lehine"). Onay kanali
+ * yok, yani onay gerektiren bir tool bu runtime ile calismaz; sessizce
+ * onaysiz calismaz.
+ */
+export const DEFAULT_TOOL_RUNTIME: ToolRuntimeBindings = { approvalMode: 'always' };
+
+/**
+ * Tool'a verilen calisma context'ini uretir.
+ *
+ * `sessionId` her cagrida **yeniden** sorulur: `session_start` asenkron doner
+ * ve oturumun ilk saniyelerinde kimlik henuz yoktur. Cozulemezse `null` kalir —
+ * uydurulmus bir korelasyon kimligi, audit kaydini dogru gorunen ama yanlis bir
+ * zincire baglardi. `projectRoot` ASU-049 sandbox'i ile dolacak.
  *
  * `signal` burada yok: iptal sinyalini `executeTool` her cagri icin kendisi
  * uretir (timeout + SDK'nin iptali birlesir).
  */
-const TOOL_CONTEXT: ToolContext = { sessionId: null, projectRoot: null };
+function toolContextFor(runtime: ToolRuntimeBindings): ToolContext {
+  return { sessionId: runtime.resolveSessionId?.() ?? null, projectRoot: null };
+}
 
 /** Tool adaptorunun log kanali. Tool ciktisi log'lanmaz, yalnizca hata bilgisi. */
 const toolLogger = logger.child('realtime-tool');
@@ -194,11 +233,23 @@ export function toModelOutput(result: ToolResult): string {
  * token israfi hem de "repoyu dumpleme" yasagina aykiri (PROJECT.md Bolum 15).
  *
  * Calistirma **registry'nin** sarmalayicisindan gecer (`executeTool`): sema
- * dogrulamasi, timeout ve yapisal hata uretimi SDK'ya degil Asuna'ya ait.
- * Buradaki `timeoutMs` ayni butcenin SDK tarafindaki yedegidir — sarmalayici
- * herhangi bir nedenle donmezse oturum yine de sessizlige gomulmez.
+ * dogrulamasi, onay kapisi, timeout ve yapisal hata uretimi SDK'ya degil
+ * Asuna'ya ait. Buradaki `timeoutMs` ayni butcenin SDK tarafindaki yedegidir —
+ * sarmalayici herhangi bir nedenle donmezse oturum yine de sessizlige gomulmez.
+ *
+ * # Onay (ASU-048)
+ *
+ * `needsApproval` statik bir boolean degil, **politika fonksiyonudur**:
+ * [`resolveApproval`] karari risk + tanimin talebi + `ASUNA_TOOL_APPROVAL_MODE`
+ * uclusunden uretir. `true` donunce SDK `execute`'u **hic** cagirmaz; once
+ * `tool_approval_requested` cikar ve karar `approve`/`reject` ile verilir.
+ * Ayni karar `executeTool` icinde bagimsiz olarak tekrar hesaplanir — SDK'ya
+ * guvenip kapiyi tek yere koymuyoruz.
  */
-export function toSdkTool(definition: AsunaToolDefinition): ReturnType<typeof tool> {
+export function toSdkTool(
+  definition: AsunaToolDefinition,
+  runtime: ToolRuntimeBindings = DEFAULT_TOOL_RUNTIME,
+): ReturnType<typeof tool> {
   if (definition.risk >= 2 && !definition.requiresApproval) {
     // Registry ayni kurali kayit aninda zorluyor; burada ikinci kez kontrol
     // edilmesinin sebebi registry'siz kurulan bir listenin de sizamamasi.
@@ -217,7 +268,13 @@ export function toSdkTool(definition: AsunaToolDefinition): ReturnType<typeof to
     description: definition.description,
     parameters: definition.parameters,
     strict: true,
-    needsApproval: definition.requiresApproval,
+    // Tek satirlik politika baglantisi: karar burada uretilmez, `resolveApproval`
+    // matrisinden okunur (ASU-048).
+    needsApproval: (): Promise<boolean> =>
+      Promise.resolve(
+        resolveApproval(definition.risk, definition.requiresApproval, runtime.approvalMode) ===
+          'needs_approval',
+      ),
     timeoutMs: definition.timeoutMs,
     execute: async (
       args: unknown,
@@ -228,12 +285,12 @@ export function toSdkTool(definition: AsunaToolDefinition): ReturnType<typeof to
       try {
         // SDK'nin iptal sinyali sarmalayiciya devredilir: oturum kapaninca
         // calisan tool da haberdar olur (`ToolContext.signal`).
-        result = await executeTool(
-          definition,
-          args,
-          TOOL_CONTEXT,
-          details?.signal === undefined ? {} : { signal: details.signal },
-        );
+        result = await executeTool(definition, args, toolContextFor(runtime), {
+          approvalMode: runtime.approvalMode,
+          ...(runtime.approvalGate === undefined ? {} : { approvalGate: runtime.approvalGate }),
+          ...(runtime.onAudit === undefined ? {} : { onAudit: runtime.onAudit }),
+          ...(details?.signal === undefined ? {} : { signal: details.signal }),
+        });
       } catch (error) {
         // `executeTool` sozlesmesi geregi firlatmaz; buraya dusmek beklenmez.
         // Yine de gizlenmez (ASU-019 log formati) ve oturum dusmez.
@@ -256,6 +313,54 @@ export function toSdkTool(definition: AsunaToolDefinition): ReturnType<typeof to
 }
 
 /**
+ * SDK onay istegi ve onay item'i tipleri.
+ *
+ * Event tablosundan **turetiliyor**: `@openai/agents-realtime` bu tipleri ismen
+ * disari acmiyor (yalnizca `RealtimeSessionEventTypes`), `@openai/agents-core`
+ * ise dogrudan bir bagimlilik degil. Turetme, SDK surumu bu event'in imzasini
+ * degistirdiginde burayi derleme hatasiyla uyandirir.
+ */
+type ToolApprovalRequestOf = RealtimeSessionEventTypes['tool_approval_requested'][2];
+
+type RunToolApprovalItemOf = ToolApprovalRequestOf['approvalItem'];
+
+/** Onay istegi kimligi cozulemedigi durumda uretilen benzersiz yedek sayaci. */
+let approvalRequestCounter = 0;
+
+/**
+ * SDK onay istegini kimlige ve duz veriye cevirir (ASU-048).
+ *
+ * Kimlik oncelikle `callId`: SDK'nin kendi cagri kimligi, tekrar kullanilmaz ve
+ * ayni tool'un iki farkli cagrisini birbirinden ayirir. Yoksa (MCP istegi ya da
+ * fonksiyon disi bir item) yerel bir sayac kullanilir — kimliksiz bir onay
+ * istegi cevaplanamaz hale gelirdi.
+ */
+function describeApprovalRequest(request: ToolApprovalRequestOf): {
+  readonly requestId: string;
+  readonly toolName: string;
+  readonly argumentsJson: string | null;
+} {
+  const rawItem: unknown = request.approvalItem.rawItem;
+  const isFunctionCall =
+    typeof rawItem === 'object' &&
+    rawItem !== null &&
+    (rawItem as { readonly type?: unknown }).type === 'function_call';
+  const call = isFunctionCall
+    ? (rawItem as { readonly callId?: string; readonly arguments?: string })
+    : null;
+
+  approvalRequestCounter += 1;
+  return {
+    requestId: call?.callId ?? `approval_${approvalRequestCounter.toString()}`,
+    toolName:
+      request.type === 'function_approval'
+        ? request.tool.name
+        : (request.approvalItem.name ?? 'mcp_tool'),
+    argumentsJson: call?.arguments ?? null,
+  };
+}
+
+/**
  * Gercek SDK oturumunu kurar.
  *
  * WebRTC olmayan bir ortamda `new RealtimeSession(...)` **kurucu asamasinda** hata
@@ -268,7 +373,7 @@ export const createOpenAiRealtimeSession: RealtimeSessionFactory = (
   const agent = new RealtimeAgent({
     name: ASUNA_AGENT_NAME,
     instructions: spec.instructions,
-    tools: spec.tools.map(toSdkTool),
+    tools: spec.tools.map((definition) => toSdkTool(definition, spec.toolRuntime)),
   });
 
   const session = new RealtimeSession(agent, {
@@ -300,6 +405,16 @@ export const createOpenAiRealtimeSession: RealtimeSessionFactory = (
     },
   });
 
+  /**
+   * Cevap bekleyen onay item'lari (ASU-048).
+   *
+   * Neden burada: `session.approve/reject` SDK'nin `RunToolApprovalItem`'ini
+   * ister, servis ise SDK tipi gormemeli. Esleme adaptorde kalir; disariya
+   * yalnizca `requestId` cikar. Cevaplanan istek **silinir** — ayni onayla iki
+   * kez calistirma yolu olmasin.
+   */
+  const pendingApprovalItems = new Map<string, RunToolApprovalItemOf>();
+
   session.on('agent_start', () => {
     onSignal({ type: 'agent_start' });
   });
@@ -328,23 +443,59 @@ export const createOpenAiRealtimeSession: RealtimeSessionFactory = (
     onSignal({ type: 'tool_end', toolName: tool.name });
   });
   session.on('tool_approval_requested', (_context, _agent, request) => {
-    onSignal({
-      type: 'tool_approval_requested',
-      toolName: request.type === 'function_approval' ? request.tool.name : 'mcp_tool',
-    });
+    const described = describeApprovalRequest(request);
+    // Item, cevap verilene kadar burada tutulur: SDK tipi disari cikmasin diye
+    // servis yalnizca kimligi gorur (`sdk-import-boundary.spec.ts`).
+    pendingApprovalItems.set(described.requestId, request.approvalItem);
+    onSignal({ type: 'tool_approval_requested', ...described });
   });
   session.on('error', (event) => {
     onSignal({ type: 'error', error: describeSessionError(event.error) });
   });
 
+  /**
+   * Kimligi item'a cevirir ve **tuketir**.
+   *
+   * Bilinmeyen kimlik hata: sessizce "tamam" donmek, onaylanmamis bir cagrinin
+   * onaylandigi izlenimini verirdi. Ayni kimlik ikinci kez de bulunamaz.
+   */
+  const takeApprovalItem = (requestId: string): RunToolApprovalItemOf => {
+    const item = pendingApprovalItems.get(requestId);
+    if (item === undefined) {
+      throw new AsunaRealtimeError({
+        kind: 'session',
+        cause: 'approval_request_unknown',
+        message: `Bekleyen onay bulunamadi (\`${requestId}\`); istek zaten cevaplanmis olabilir.`,
+        retryable: false,
+      });
+    }
+    pendingApprovalItems.delete(requestId);
+    return item;
+  };
+
   return {
     connect: (options) => session.connect({ apiKey: options.apiKey }),
     close: () => {
+      // Kapanan oturumun bekleyen onaylari cevaplanamaz; item'lari elde tutmak
+      // yalnizca olu referans birikmesi olurdu.
+      pendingApprovalItems.clear();
       // SDK'da `void` — `await` edilmez (voice.md Bolum 9 madde 4).
       session.close();
     },
     interrupt: () => {
       session.interrupt();
+    },
+    approve: async (requestId: string): Promise<void> => {
+      const item = takeApprovalItem(requestId);
+      // `alwaysApprove` bilerek verilmiyor: karar **cagri basinadir**,
+      // "hepsine izin ver" MVP'de yok (phase-5.md ASU-048).
+      await session.approve(item);
+    },
+    reject: async (requestId: string, reason?: string): Promise<void> => {
+      const item = takeApprovalItem(requestId);
+      // `alwaysReject` de yok: bir reddi kalici kurala cevirmek de cagri basi
+      // karar ilkesini bozardi.
+      await session.reject(item, reason === undefined ? {} : { message: reason });
     },
     usage: (): RealtimeUsageSnapshot => {
       const usage = session.usage;
@@ -416,6 +567,24 @@ export interface AsunaRealtimeServiceOptions {
   /** Testlerde zamani hizlandirmak icin. */
   readonly sleep?: (ms: number) => Promise<void>;
   /**
+   * Aktif oturum kaydinin kimligini (`sessions.id`) cozer (ASU-048/050).
+   *
+   * Her tool cagrisinda ve her onay kararinda **yeniden** cagrilir; `null`
+   * donerse audit satiri "hangi konusmada oldugunu bilmiyoruz" der. Uretimde
+   * `SessionRecorder` besler, testlerde sabit deger verilir.
+   */
+  readonly resolveSessionId?: () => number | null;
+  /**
+   * Audit defterine yazan kanca (ASU-050). Varsayilan `recordToolEvent`
+   * (`tools/audit.ts`) — asla firlatmaz, hatayi kendisi log'lar.
+   */
+  readonly recordToolEvent?: (input: ToolAuditInput) => void;
+  /**
+   * Onay penceresi (ms). Varsayilan [`APPROVAL_TIMEOUT_MS`]; testler kisaltir.
+   * Sure dolunca istek **reddedilir** — bu bir urun karari, kullanici tercihi degil.
+   */
+  readonly approvalTimeoutMs?: number;
+  /**
    * Oturum kapaninca donulecek durum.
    *
    * TEMPORARY: Phase 1'de wake word motoru yok, kanonik hedef `IDLE_WAKE_WORD` yerine
@@ -446,6 +615,96 @@ type ConnectAttemptResult =
   | { readonly ok: true; readonly session: RealtimeSessionPort }
   | { readonly ok: false; readonly error: AsunaRealtimeErrorInfo };
 
+/** Cevap bekleyen bir onay istegi (ASU-048). */
+interface PendingApproval {
+  readonly toolName: string;
+  /** `null` = tool registry'de yok; audit satiri risk uydurmadan atlanir. */
+  readonly risk: ToolRisk | null;
+  /** Modelin urettigi ham argumanlar; audit'e ozetlenmek uzere host'a gider. */
+  readonly rawArguments: unknown;
+  readonly timer: ReturnType<typeof setTimeout>;
+}
+
+/** Audit ozetlerinde ve onay kartinda kullanilan deger kirpma siniri. */
+const MAX_PREVIEW_VALUE_CHARS = 64;
+
+/** Onay kartina giden ozetin tavani. */
+const MAX_PREVIEW_CHARS = 240;
+
+/** Ic ice yapilar **sekil** olarak yazilir; icerik hicbir zaman serilestirilmez. */
+function describeValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.length.toString()} oge]`;
+  }
+  if (typeof value === 'object' && value !== null) {
+    return `{${Object.keys(value).length.toString()} alan}`;
+  }
+  if (typeof value === 'string') {
+    return value.length > MAX_PREVIEW_VALUE_CHARS
+      ? `${value.slice(0, MAX_PREVIEW_VALUE_CHARS - 1)}…`
+      : value;
+  }
+  return String(value);
+}
+
+/**
+ * Onay kartinda gosterilecek arguman ozeti (ASU-048 / ASU-053).
+ *
+ * `security.md` Bolum 3: onay istegi kullaniciya **ne yapilacagini** gosterir,
+ * yalnizca "izin ver?" demez. Ozet Rust'taki audit redaksiyonuyla ayni ilkeleri
+ * izler: tek satir, alfabetik `anahtar=deger`, uzun metin kirpilir, ic ice
+ * yapilar yalnizca sekil olarak gorunur (dosya icerigi karta dokulmez) ve
+ * sonuc `redactText` ile secret desenlerinden temizlenir.
+ *
+ * @returns `null` = gosterilecek arguman yok.
+ */
+export function toApprovalArgumentsPreview(argumentsJson: string | null): string | null {
+  if (argumentsJson === null || argumentsJson.trim().length === 0) {
+    return null;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(argumentsJson);
+  } catch {
+    // Model gecerli JSON uretmediyse metni **oldugu gibi** gostermiyoruz;
+    // kirpilmis ve redakte edilmis haliyle gosteriyoruz.
+    return truncatePreview(redactText(argumentsJson));
+  }
+
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return truncatePreview(redactText(describeValue(parsed)));
+  }
+
+  const entries = Object.entries(parsed);
+  if (entries.length === 0) {
+    return null;
+  }
+
+  const line = entries
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}=${describeValue(value)}`)
+    .join(', ');
+
+  return truncatePreview(redactText(line));
+}
+
+function truncatePreview(text: string): string {
+  return text.length <= MAX_PREVIEW_CHARS ? text : `${text.slice(0, MAX_PREVIEW_CHARS - 1)}…`;
+}
+
+/** Ham arguman metnini audit'e giden degere cevirir (host redakte eder). */
+function parseRawArguments(argumentsJson: string | null): unknown {
+  if (argumentsJson === null || argumentsJson.trim().length === 0) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(argumentsJson);
+  } catch {
+    return argumentsJson;
+  }
+}
+
 export class AsunaRealtimeService {
   private readonly config: FrontendConfig;
 
@@ -468,6 +727,26 @@ export class AsunaRealtimeService {
   private readonly reconnectDelayMs: number;
 
   private readonly sleep: (ms: number) => Promise<void>;
+
+  private readonly resolveSessionId: () => number | null;
+
+  private readonly recordToolEvent: (input: ToolAuditInput) => void;
+
+  private readonly approvalTimeoutMs: number;
+
+  /** Cevap bekleyen onay istekleri: `requestId` -> istek. */
+  private readonly pendingApprovals = new Map<string, PendingApproval>();
+
+  /**
+   * Verilmis ama henuz kullanilmamis onaylar: tool adi -> adet.
+   *
+   * `executeTool` kapisi (ASU-048) onay **kanitini** burada arar. SDK akisinda
+   * sira sudur: kullanici onaylar -> kanit yazilir -> `session.approve` tool
+   * cagrisini tetikler -> `execute` -> kapi kaniti tuketir. Kanit yoksa kapi
+   * reddeder; yani onay akisini atlayan bir cagri (SDK'nin politikasi yanlis
+   * baglanmis olsa bile) calismaz.
+   */
+  private readonly approvalGrants = new Map<string, number>();
 
   private readonly idleState: Extract<VoiceState, 'BOOTING' | 'IDLE_WAKE_WORD'>;
 
@@ -509,6 +788,15 @@ export class AsunaRealtimeService {
     );
     this.reconnectDelayMs = options.reconnectDelayMs ?? DEFAULT_RECONNECT_DELAY_MS;
     this.sleep = options.sleep ?? defaultSleep;
+    this.resolveSessionId = options.resolveSessionId ?? ((): number | null => null);
+    this.recordToolEvent =
+      options.recordToolEvent ??
+      ((input): void => {
+        // `recordToolEvent` firlatmaz; hatayi kendisi log'lar ve `failed` doner.
+        // Burada `void`: audit yazimi tool sonucunu ya da onay akisini bekletmez.
+        void recordToolEvent(input);
+      });
+    this.approvalTimeoutMs = options.approvalTimeoutMs ?? APPROVAL_TIMEOUT_MS;
     this.idleState = options.idleState ?? 'BOOTING';
     this.onListenerError = options.onListenerError ?? defaultListenerErrorHandler;
   }
@@ -632,9 +920,12 @@ export class AsunaRealtimeService {
     this.status = 'idle';
 
     const session = this.session;
-    this.session = null;
     this.tokenError = null;
     this.publishedTranscripts.clear();
+    // Bekleyen onaylar oturum **kapanmadan once** sonuclandirilir: reddi SDK'ya
+    // iletmek icin oturuma hala ihtiyac var.
+    this.abandonApprovals();
+    this.session = null;
 
     if (session !== null) {
       this.reportUsage(session);
@@ -643,6 +934,77 @@ export class AsunaRealtimeService {
 
     this.applyTransition(this.idleState, 'SESSION_CLOSED_BY_USER', 'disconnect');
     this.publish({ type: 'disconnected', reason: 'requested' });
+  }
+
+  /**
+   * Bekleyen bir tool onayini **onaylar** (ASU-048; UI'i ASU-053 kurar).
+   *
+   * Sirasi onemli: once onay kaniti yazilir, sonra SDK'ya haber verilir —
+   * `session.approve()` tool cagrisini tetikleyebilir ve `executeTool` kapisi
+   * kaniti hazir bulmali. SDK cagrisi patlarsa kanit **geri alinir**: yarim
+   * kalmis bir onayin ilerideki bir cagriyi sessizce gecirmesi kabul edilemez.
+   *
+   * Bilinmeyen kimlik yok sayilmaz: `unexpected_signal` ile gorunur olur
+   * (istek zaten zaman asimina ugramis ya da cevaplanmis olabilir).
+   */
+  public approveToolCall(requestId: string): void {
+    const pending = this.takePendingApproval(requestId);
+    if (pending === null) {
+      this.publish({
+        type: 'unexpected_signal',
+        signal: `approve_tool_call:${requestId}`,
+        state: this.stateMachine.getState(),
+      });
+      return;
+    }
+
+    this.grantApproval(pending.toolName);
+
+    const session = this.session;
+    if (session === null) {
+      this.revokeApproval(pending.toolName);
+      this.finishApproval(requestId, pending, 'denied', 'Oturum kapali; onay iletilemedi.');
+      return;
+    }
+
+    void session.approve(requestId).catch((error: unknown) => {
+      // Onay iletilemedi: kanit geri alinir, kullanici da durumu gorur.
+      this.revokeApproval(pending.toolName);
+      this.publish({ type: 'error', error: describeSessionError(error) });
+    });
+
+    // Audit satirini burada **yazmiyoruz**: onaylanan cagri calisacak ve
+    // `executeTool` kendi satirini `approved` ile yazacak. Iki satir yazmak
+    // deftere ayni olayi iki kez islemek olurdu.
+    this.publish({
+      type: 'tool_approval_resolved',
+      requestId,
+      toolName: pending.toolName,
+      outcome: 'approved',
+    });
+  }
+
+  /**
+   * Bekleyen bir tool onayini **reddeder**.
+   *
+   * Red modele bildirilir (`reason`) ki Asuna "yaptim" demesin, ve audit'e
+   * `denied` olarak yazilir — reddedilen cagri sessizce kaybolmaz
+   * (`security.md` Bolum 3).
+   */
+  public rejectToolCall(requestId: string, reason?: string): void {
+    const pending = this.takePendingApproval(requestId);
+    if (pending === null) {
+      this.publish({
+        type: 'unexpected_signal',
+        signal: `reject_tool_call:${requestId}`,
+        state: this.stateMachine.getState(),
+      });
+      return;
+    }
+
+    const message = reason ?? TOOL_DENIED_MODEL_MESSAGE;
+    this.sendRejection(requestId, message);
+    this.finishApproval(requestId, pending, 'denied', message);
   }
 
   /** Manuel "sus": uretilmekte olan yaniti keser. Durum degisimi SDK sinyalinden gelir. */
@@ -657,6 +1019,197 @@ export class AsunaRealtimeService {
       return;
     }
     session.interrupt();
+  }
+
+  // --- Onay akisi (ASU-048) --------------------------------------------
+
+  /**
+   * Tool'lara verilen calisma zamani baglantilari.
+   *
+   * Onay kapisi bir **kanit dogrulayicisidir**, onay isteyen taraf degil: istek
+   * SDK akisindan cikar (`tool_approval_requested`), kanit `approveToolCall`
+   * ile yazilir. Kanit yoksa cevap `denied` — varsayilan calistirmamaktir.
+   */
+  private get toolRuntime(): ToolRuntimeBindings {
+    return {
+      approvalMode: this.config.toolApprovalMode,
+      approvalGate: this.approvalGate,
+      onAudit: this.recordToolEvent,
+      resolveSessionId: this.resolveSessionId,
+    };
+  }
+
+  private readonly approvalGate: ToolApprovalGate = (definition): Promise<ApprovalOutcome> =>
+    Promise.resolve(this.consumeApproval(definition.name) ? 'approved' : 'denied');
+
+  /** Onay istegini kaydeder, geri sayimi baslatir ve UI'a duyurur. */
+  private registerApproval(signal: {
+    readonly requestId: string;
+    readonly toolName: string;
+    readonly argumentsJson: string | null;
+  }): void {
+    const { requestId, toolName, argumentsJson } = signal;
+
+    // Ayni kimlik ikinci kez gelirse eski geri sayim birakilmaz.
+    this.clearApprovalTimer(requestId);
+
+    const definition = this.tools.find((candidate) => candidate.name === toolName) ?? null;
+    const timer = setTimeout(() => {
+      this.expireApproval(requestId);
+    }, this.approvalTimeoutMs);
+
+    this.pendingApprovals.set(requestId, {
+      toolName,
+      risk: definition?.risk ?? null,
+      rawArguments: parseRawArguments(argumentsJson),
+      timer,
+    });
+
+    this.publish({
+      type: 'tool_approval_requested',
+      requestId,
+      toolName,
+      description: definition?.description ?? '',
+      risk: definition?.risk ?? null,
+      argumentsPreview: toApprovalArgumentsPreview(argumentsJson),
+      timeoutMs: this.approvalTimeoutMs,
+    });
+  }
+
+  /** Sure doldu: **varsayilan reddet** (phase-5.md ASU-048). */
+  private expireApproval(requestId: string): void {
+    const pending = this.takePendingApproval(requestId);
+    if (pending === null) {
+      return;
+    }
+    this.sendRejection(requestId, TOOL_APPROVAL_TIMEOUT_MODEL_MESSAGE);
+    this.finishApproval(requestId, pending, 'timeout', TOOL_APPROVAL_TIMEOUT_MODEL_MESSAGE);
+  }
+
+  /**
+   * Calistirilmayan bir onayin defter kaydini yazar, durumu geri alir ve
+   * sonucu duyurur.
+   *
+   * Audit yalnizca **calismayan** yollar icin burada yazilir; onaylanan cagri
+   * kendi satirini `executeTool` icinde uretir.
+   */
+  private finishApproval(
+    requestId: string,
+    pending: PendingApproval,
+    outcome: Exclude<ApprovalOutcome, 'approved'>,
+    summary: string,
+  ): void {
+    this.writeApprovalAudit(pending, outcome, summary);
+    // Reddedilen tool calismaz: model cevabina doner (durum tablosunda
+    // `AWAITING_APPROVAL -> ASSISTANT_THINKING` "reddedildi" kenari).
+    this.applyTransition('ASSISTANT_THINKING', 'TOOL_CALL_COMPLETED', 'tool_approval_resolved');
+    this.publish({
+      type: 'tool_approval_resolved',
+      requestId,
+      toolName: pending.toolName,
+      outcome,
+    });
+  }
+
+  private writeApprovalAudit(
+    pending: PendingApproval,
+    approvalState: Exclude<ApprovalOutcome, 'approved'>,
+    summary: string,
+  ): void {
+    const risk = pending.risk;
+    if (risk === null) {
+      // Risk seviyesi bilinmeyen bir cagri icin sayi uydurmuyoruz; olay
+      // sessiz de kalmiyor.
+      toolLogger.warn(
+        `\`${pending.toolName}\` icin onay reddedildi ama tool kayitli degil; audit satiri yazilmadi.`,
+        { tool: pending.toolName, approvalState },
+      );
+      return;
+    }
+
+    const sessionId = this.resolveSessionId();
+    this.recordToolEvent({
+      toolName: pending.toolName,
+      riskLevel: risk,
+      ...(sessionId === null ? {} : { sessionId }),
+      ...(pending.rawArguments === undefined ? {} : { arguments: pending.rawArguments }),
+      approvalState,
+      resultSummary: summary,
+    });
+  }
+
+  /** SDK'ya reddi bildirir; model reddi ogrenmeli ki "yaptim" demesin. */
+  private sendRejection(requestId: string, message: string): void {
+    const session = this.session;
+    if (session === null) {
+      return;
+    }
+    void session.reject(requestId, message).catch((error: unknown) => {
+      this.publish({ type: 'error', error: describeSessionError(error) });
+    });
+  }
+
+  private takePendingApproval(requestId: string): PendingApproval | null {
+    const pending = this.pendingApprovals.get(requestId);
+    if (pending === undefined) {
+      return null;
+    }
+    clearTimeout(pending.timer);
+    this.pendingApprovals.delete(requestId);
+    return pending;
+  }
+
+  private clearApprovalTimer(requestId: string): void {
+    const pending = this.pendingApprovals.get(requestId);
+    if (pending !== undefined) {
+      clearTimeout(pending.timer);
+      this.pendingApprovals.delete(requestId);
+    }
+  }
+
+  /**
+   * Oturum kapaniyor: bekleyen istekler cevaplanamaz.
+   *
+   * Sessizce dusurulmuyor — her biri deftere `denied` olarak yazilir ve UI'a
+   * sonuc duyurulur ki onay karti ekranda asili kalmasin. Verilmis ama
+   * kullanilmamis kanitlar da silinir: bir sonraki oturuma tasinan onay olmaz.
+   */
+  private abandonApprovals(): void {
+    for (const [requestId, pending] of [...this.pendingApprovals]) {
+      clearTimeout(pending.timer);
+      this.pendingApprovals.delete(requestId);
+      this.writeApprovalAudit(pending, 'denied', TOOL_APPROVAL_ABANDONED_SUMMARY);
+      this.publish({
+        type: 'tool_approval_resolved',
+        requestId,
+        toolName: pending.toolName,
+        outcome: 'denied',
+      });
+    }
+    this.approvalGrants.clear();
+  }
+
+  private grantApproval(toolName: string): void {
+    this.approvalGrants.set(toolName, (this.approvalGrants.get(toolName) ?? 0) + 1);
+  }
+
+  private revokeApproval(toolName: string): void {
+    const count = this.approvalGrants.get(toolName) ?? 0;
+    if (count <= 1) {
+      this.approvalGrants.delete(toolName);
+      return;
+    }
+    this.approvalGrants.set(toolName, count - 1);
+  }
+
+  /** Kaniti **tuketir**: bir onay tek bir cagriyi gecirir. */
+  private consumeApproval(toolName: string): boolean {
+    const count = this.approvalGrants.get(toolName) ?? 0;
+    if (count <= 0) {
+      return false;
+    }
+    this.revokeApproval(toolName);
+    return true;
   }
 
   // --- Baglanti ic akisi ------------------------------------------------
@@ -711,6 +1264,7 @@ export class AsunaRealtimeService {
       transcription,
       turnDetection: toTurnDetectionSpec(this.config),
       tools: this.tools,
+      toolRuntime: this.toolRuntime,
     };
 
     let session: RealtimeSessionPort;
@@ -851,8 +1405,10 @@ export class AsunaRealtimeService {
         return;
 
       case 'tool_approval_requested':
+        // Onay bekleyen tool oturumu **gorunur** sekilde bekletir: kullanici
+        // karar verene kadar Asuna "yaptim" diyemez (ASU-048).
         this.applyTransition('AWAITING_APPROVAL', 'TOOL_APPROVAL_REQUESTED', signal.type);
-        this.publish({ type: 'tool_approval_requested', toolName: signal.toolName });
+        this.registerApproval(signal);
         return;
 
       case 'error':

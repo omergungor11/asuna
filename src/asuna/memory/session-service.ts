@@ -223,6 +223,19 @@ export class SessionRecorder {
     };
   }
 
+  /**
+   * Acik oturum kaydinin kimligi (`sessions.id`) — audit korelasyonu icin
+   * (ASU-048/050).
+   *
+   * `null` = kimlik **bilinmiyor**: kayit henuz olusmadi (`session_start`
+   * ucusta), hafiza kapali ya da yazma basarisiz oldu. Uc durum da uydurma bir
+   * kimlikle degil, "bilmiyoruz" ile temsil edilir — yanlis bir oturuma
+   * baglanmis tool kaydi, hic baglanmamis olandan daha kotudur.
+   */
+  public get currentSessionId(): number | null {
+    return this.sessionId;
+  }
+
   /** Oturum acildi. Kayit arka planda olusur; ses akisini bekletmez. */
   public begin(startedAtMs: number, projectId?: string): void {
     if (this.pending !== null) {
@@ -230,6 +243,9 @@ export class SessionRecorder {
     }
     this.startedAtMs = startedAtMs;
     this.closing = null;
+    // Onceki oturumun kimligi yeni oturuma tasinmaz: kayit acilana kadar
+    // "bilinmiyor" dogru cevaptir (`currentSessionId`).
+    this.sessionId = null;
 
     this.pending = this.deps
       .start(projectId)
