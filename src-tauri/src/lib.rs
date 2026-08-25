@@ -19,6 +19,7 @@ pub mod extraction;
 pub mod pricing;
 pub mod privacy;
 pub mod realtime_token;
+pub mod redaction;
 pub mod summary;
 
 /// Uygulama context'i — **crate basina tek `generate_context!` cagrisi**.

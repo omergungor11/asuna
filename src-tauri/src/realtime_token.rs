@@ -17,7 +17,8 @@
 //! - Hicbir hata varyanti API yanit govdesini ya da istek header'ini tasimaz.
 //!   `reqwest::Error` bilerek saklanmaz (Display'i URL sizdirabilir); yerine
 //!   kaba bir [`NetworkCause`] siniflandirmasi tutulur.
-//! - IPC'ye giden hata mesaji son bir kez [`redact_secrets`] suzgecinden gecer.
+//! - IPC'ye giden hata mesaji son bir kez [`crate::redaction::redact_secrets`]
+//!   suzgecinden gecer (suzgec ortak: ozet/cikarim boru hatlari da kullanir).
 //!
 //! Referans: `docs/architecture/voice.md` Bolum 5 (endpoint, payload, yanit
 //! semasi ve hata beklentileri 2026-08-24'te dogrulandi).
@@ -31,6 +32,7 @@ use tauri::State;
 use thiserror::Error;
 
 use crate::config::{AsunaConfig, SecretString};
+use crate::redaction::redact_secrets;
 
 /// OpenAI ephemeral client secret endpoint'i (voice.md Bolum 5).
 pub const CLIENT_SECRETS_URL: &str = "https://api.openai.com/v1/realtime/client_secrets";
@@ -54,54 +56,9 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 /// TCP + TLS el sikismasi icin ayri, daha kisa sinir.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 
-/// Ephemeral token prefix'i (voice.md Bolum 5: basari kriteri).
-const EPHEMERAL_PREFIX: &str = "ek_";
-
 /// Kalici API key prefix'i. Bir yanit bu prefix'le gelirse renderer'a
 /// gecirmek yerine hata uretilir.
 const PERMANENT_KEY_PREFIX: &str = "sk-";
-
-// ---------------------------------------------------------------------------
-// Redaksiyon
-// ---------------------------------------------------------------------------
-
-/// Metindeki `sk-...` / `ek_...` gorunumlu her parcayi maskeler.
-///
-/// Bu bir *son savunma hatti*: modulun hicbir hata varyanti zaten secret
-/// tasimiyor, ama IPC sinirindan gecen mesaj bu suzgecten gecirilir ki
-/// ilerideki bir degisiklik sessizce sizinti uretmesin.
-pub fn redact_secrets(input: &str) -> String {
-    // Ayirici olarak whitespace ve JSON/tirnak gurultusu kullaniliyor; token
-    // karakter kumesi (harf, rakam, `-`, `_`) disindaki her sey sinir sayilir.
-    let is_token_char = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
-
-    let mut output = String::with_capacity(input.len());
-    let mut rest = input;
-
-    while !rest.is_empty() {
-        // Sonraki aday baslangici: token karakteri olan bir konum.
-        let Some(start) = rest.find(is_token_char) else {
-            output.push_str(rest);
-            break;
-        };
-        output.push_str(&rest[..start]);
-        let tail = &rest[start..];
-        let end = tail.find(|c: char| !is_token_char(c)).unwrap_or(tail.len());
-        let word = &tail[..end];
-
-        if word.starts_with(PERMANENT_KEY_PREFIX) {
-            output.push_str("sk-<redacted>");
-        } else if word.starts_with(EPHEMERAL_PREFIX) {
-            output.push_str("ek_<redacted>");
-        } else {
-            output.push_str(word);
-        }
-
-        rest = &tail[end..];
-    }
-
-    output
-}
 
 // ---------------------------------------------------------------------------
 // Donus tipi

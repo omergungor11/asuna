@@ -8,9 +8,12 @@
 //! yuzden karar [`persist_if_enabled`] icinde, **yazma yolunun onunde** durur ve
 //! davranissal olarak test edilir (dizin sonrasinda gercekten bos mu).
 //!
-//! Ikinci kat koruma renderer tarafinda: `transcriptStorage` kapaliyken Realtime
-//! oturumunda `audio.input.transcription` hic acilmaz (voice.md Bolum 2) — yani
-//! yazilacak metin uretilmez bile.
+//! Renderer tarafinda **destekleyici** bir onlem daha var: Realtime oturumu
+//! acilirken `audio.input.transcription` yalnizca transcript saklama aciksa
+//! kurulur (voice.md Bolum 2, `src/asuna/agent/realtime-service.ts`). Bu bir
+//! "ikinci kat garanti" degil: renderer'a guvenilmez ve asil garanti burada,
+//! yazma yolunun onundeki kapidir. Renderer tarafi yalnizca gereksiz yere
+//! transkripsiyon uretilmesini (ve maliyetini) onler.
 //!
 //! ASU-037 ile karar **iki** kaynaktan gelir ve ikisi de `&&` ile baglanir:
 //! acilis degeri (cagiranin gecirdigi `enabled`) ve calisma zamani anahtari
@@ -110,12 +113,10 @@ fn persist_with_runtime_switch(
         return Ok(None);
     }
 
-    fs::create_dir_all(base_dir)?;
-    restrict_permissions(base_dir, 0o700)?;
+    create_private_dir(base_dir)?;
 
     let path = base_dir.join(transcript_file_name(session_id));
-    let mut file = File::create(&path)?;
-    restrict_permissions(&path, 0o600)?;
+    let mut file = create_private_file(&path)?;
 
     for line in lines {
         let encoded = serde_json::to_string(line).map_err(io::Error::other)?;
@@ -126,17 +127,66 @@ fn persist_with_runtime_switch(
     Ok(Some(path))
 }
 
-/// Sahibinden baskasi okuyamasin. Unix disinda sessizce atlanir (Asuna macOS
-/// hedefli; yine de derleme kirilmasin).
+/// Dizini **yaratilis aninda** `0700` ile acar (Gate 3 / LOW-7).
+///
+/// Once yaratip sonra `chmod` etmek, iki islem arasinda dunyaya okunabilir bir
+/// pencere birakiyordu. `DirBuilder::mode` bu pencereyi kapatir. Dizin zaten
+/// varsa mode uygulanmaz — o durumda [`tighten_permissions`] devreye girer.
 #[cfg(unix)]
-fn restrict_permissions(path: &Path, mode: u32) -> io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(path, fs::Permissions::from_mode(mode))
+fn create_private_dir(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(path)?;
+    tighten_permissions(path, 0o700)
 }
 
 #[cfg(not(unix))]
-fn restrict_permissions(_path: &Path, _mode: u32) -> io::Result<()> {
-    Ok(())
+fn create_private_dir(path: &Path) -> io::Result<()> {
+    fs::create_dir_all(path)
+}
+
+/// Dosyayi **yaratilis aninda** `0600` ile acar (Gate 3 / LOW-8).
+///
+/// `File::create` + `chmod` yerine `OpenOptions::mode`: transcript kullanicinin
+/// en mahrem verisi ve ilk `write`'tan onceki bir saniyelik gevsek izin bile
+/// gereksiz bir risk. `truncate(true)`: ayni oturum yeniden yazilirsa dosya
+/// buyumez, degisir.
+#[cfg(unix)]
+fn create_private_file(path: &Path) -> io::Result<File> {
+    use std::fs::OpenOptions;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    // `mode` yalnizca **yeni** dosyaya uygulanir; onceki bir calismadan kalmis
+    // gevsek izinli bir dosya yine sikilastirilir.
+    tighten_permissions(path, 0o600)?;
+    Ok(file)
+}
+
+#[cfg(not(unix))]
+fn create_private_file(path: &Path) -> io::Result<File> {
+    File::create(path)
+}
+
+/// Izinler beklenenden gevsekse sikilastirir. Zaten dogruysa dosya sistemine
+/// dokunmaz (gereksiz `chmod` yok).
+#[cfg(unix)]
+fn tighten_permissions(path: &Path, mode: u32) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let current = fs::metadata(path)?.permissions().mode() & 0o777;
+    if current == mode {
+        return Ok(());
+    }
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))
 }
 
 #[cfg(test)]
@@ -308,6 +358,22 @@ mod tests {
 
         assert_eq!(file_mode, 0o600, "dosya izinleri: {file_mode:o}");
         assert_eq!(dir_mode, 0o700, "dizin izinleri: {dir_mode:o}");
+
+        // Gate 3 / LOW-7,8: onceki bir calismadan kalmis gevsek izinler bir
+        // sonraki yazimda sikilastirilir (izin **yaratilis aninda** verilir,
+        // ama var olan dosya da duzeltilir).
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("chmod");
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).expect("chmod");
+        persist_if_enabled(true, &dir, 7, &lines()).expect("ikinci yazim");
+
+        assert_eq!(
+            fs::metadata(&path).expect("metadata").permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            fs::metadata(&dir).expect("metadata").permissions().mode() & 0o777,
+            0o700
+        );
     }
 
     /// Ayni oturum tekrar yazilirsa dosya buyumez, degisir (yeniden kapanma).

@@ -11,6 +11,14 @@
 
 ## Candidates (MVP'den hemen sonra degerlendirilecek)
 
+- [ ] **ASU-065 — oturum/dokum temizligi** (Gate 3 / MEDIUM-6, 2026-08-25) — `memory_delete_all`
+      yalnizca `memories` tablosunu siliyor; oturum kayitlari/ozetleri (`sessions.summary`) ve
+      diskteki transcript dosyalari duruyor. Kapsami sessizce genisletmek yerine **ayri ve gorunur**
+      bir aksiyon gerekiyor: ne silinecegi tek tek yazili, onayli, geri alinamaz oldugu belirtilmis.
+      Karar gerekcesi `asuna-docs/DECISIONS.md` → "Phase 3 kararlari".
+- [ ] **Hafiza listesinde sunucu tarafi sayfalama** (Gate 3 / MEDIUM-5) — `memory_list` en fazla 200
+      kayit donuyor; UI su an tavana carptigini yalnizca metinle soyluyor. `hasMore`/`total`
+      alanlari ve offset destegi backend isi.
 - [ ] **Stage B — semantic retrieval / embeddings** — Yeterli hafiza birikince Stage A deterministik
       retrieval yetmez (PROJECT.md Bolum 13). SQLite vektor eklentisi vs kucuk yerel vektor DB karari
       ADR gerektirir. Tetikleyici: ~200+ hafiza kaydi veya "hatirlamiyor" sikayeti.

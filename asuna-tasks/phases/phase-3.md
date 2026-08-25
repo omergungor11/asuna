@@ -488,8 +488,14 @@ checklist maddesi — opsiyonel degil.
         `role="switch"`; durum `get_privacy_settings`'ten okunur, onbelleklenmez
 - [x] Anahtarlar `ASUNA_MEMORY_ENABLED` / `ASUNA_TRANSCRIPT_STORAGE` ile ayni davranisi paylasiyor
       — `src-tauri/src/privacy.rs`: `PrivacyState::from_boot(...)` acilista env'den baslar.
-        Hafiza yazma yolu (`memory_create`/`memory_update`) ve transcript yazma yolu artik
-        config'in ham alanina degil bu duruma bakiyor
+        **Yazan her yol** artik config'in ham alanina degil bu duruma bakiyor:
+        `memory_create` / `memory_update`, `session_start` / `session_finalize`
+        (Gate 3 / CRITICAL-1 ile eklendi), transcript persist ve ozet+cikarim boru hatti
+        (`summary::spawn_for_session` → `extraction::extract_after_summary`).
+        Transkript anahtari renderer tarafinda da **canli** okunuyor: Realtime oturumu
+        acilirken `audio.input.transcription` boot config'ine gore degil, o anki
+        `get_privacy_settings` sonucuna gore kuruluyor (`realtime-service.ts`,
+        Gate 3 / MEDIUM-3)
 - [x] Kapatildiginda geriye donuk veriye ne oldugu kullaniciya net anlatiliyor (silinmiyor, sadece yazilmiyor)
       — her anahtarin altinda durum-bagimli cumle ("Daha once kaydedilenler SILINMEZ...").
         Testler metni birebir olcuyor (`settings-view.spec.tsx`)
@@ -515,7 +521,9 @@ checklist maddesi — opsiyonel degil.
   engelleyen bir tuzaga donusurdu (PROJECT.md Bolum 20).
 - **Toplu silmenin kapsami dar ve acikca yazili**: yalnizca `memories`. Oturum
   kayitlari/ozetleri ve diskteki transcript dosyalari silinmez — "hepsini sildim" deyip bir
-  seyi birakmak en kotu sonuc. Silme sonrasi `VACUUM` denenir (serbest sayfalar dosyada
+  seyi birakmak en kotu sonuc. Bu kapsam Gate 3'te (MEDIUM-6) yeniden degerlendirildi ve
+  **bilincli olarak dar birakildi**; oturum ozetleri + dokum dosyalarinin temizligi ayri bir
+  task: **ASU-065** (backlog). Silme sonrasi `VACUUM` denenir (serbest sayfalar dosyada
   kalmasin); `VACUUM` basarisiz olursa islem yine basarili sayilir, hata log'lanir.
 - **Onay bekleyenler UI'i** (`src/components/pending-approvals.tsx`): ASU-034'un
   `metadata_json.pendingApproval` bayragini gorunur kilar. Onayla = bayragi `false` yapan

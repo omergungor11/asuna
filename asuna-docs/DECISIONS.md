@@ -63,6 +63,33 @@ Katman mimarileri: `docs/architecture/{voice,memory,tools,security}.md`.
   rapor edilir) — ses dongusu bozuk bir UI yolu yuzunden olmez (PROJECT.md Bolum 30). Hicbir gecersiz
   gecis sessizce yutulmaz. Ayni-duruma gecis de gecersizdir (log'a sahte gecis dusmesin).
 
+### Phase 3 kararlari (Gate 3 review, 2026-08-25)
+
+- **Saklanan metinde redaksiyon zorunlu** (HIGH-2, `asuna-config/security.md` Bolum 5):
+  `redact_secrets` ASU-011'den beri yalnizca log/IPC mesajlarini suzuyordu; **kalici** metin
+  (oturum ozeti, hafiza adaylari) suzgecsizdi. Suzgec ortak bir module tasindi
+  (`src-tauri/src/redaction.rs`) ve ikiye ayrildi: `redact_secrets` (log — prefix'i korur,
+  `sk-<redacted>`) ve `redact_sensitive_text` (saklanan metin — ayrica `Bearer <deger>` ve
+  `parola:`/`api_key=` gibi anahtar-deger desenleri). Uygulandigi iki nokta: ozet metni
+  (`summary::clean_summary`, hem `attach_summary`'ye hem cikarima ayni metin gider) ve aday
+  `title` + `content` (`extraction::persist_candidates`, dedup taramasindan **once**).
+  Bilincli sinir: anahtar-deger maskesi yalnizca `:`/`=` ile ayrilmis degerleri hedefler —
+  "parolami degistirdim" gibi bir cumleyi maskelemek kullanicinin gercek hafizasini bozardi.
+- **`memory_delete_all` kapsami dar kaliyor** (MEDIUM-6): komut yalnizca `memories` tablosunu
+  siler; oturum kayitlari/ozetleri ve diskteki transcript dosyalari **kapsam disi** ve UI bunu
+  acikca yaziyor. Kapsami sessizce genisletmek ("hepsini sildim" deyip bir seyi birakmak ya da
+  kullanicinin beklemedigi bir seyi silmek) daha kotu; temizlik ayri, gorunur bir aksiyon
+  olarak tasarlanacak — **ASU-065** (Phase 3+, backlog).
+- **`ASUNA_SUMMARY_MODEL` zorunlu env anahtari** (LOW-11): ASU-033 ile eklendi ve
+  `config::load()` eksik anahtarda **acilisi durduruyor**. Phase 2 oncesinde olusturulmus
+  `.env` dosyalari bu satiri eklemeden Asuna'yi acamaz (`.env.example` guncel). Karar
+  bilincli: sessiz bir varsayilan model, kullanicinin faturasina bilmedigi bir cagri yazardi.
+- **Dedup esigi 12 → 40 karakter + %80 uzunluk orani** (MEDIUM-4): eski esik "kahve sevmiyor"
+  kaydiyla "esi kahve sevmiyor" adayini ayni hafiza sayiyordu. Birlesme **geri alinamaz**
+  (yeni icerik hic yazilmaz, yalnizca `importance` guncellenir), bu yuzden takas yanlis
+  pozitiften yana degil: supheli durumda iki kayit saklanir, kullanici birlestirmeye/silmeye
+  kendi karar verir. Semantik dedup hala backlog (PROJECT.md Bolum 13 Stage C).
+
 ---
 
 ## ADR-007: Claude Code gelistirme modeli = Fable orchestrator + opus subagent'lar — 2026-08-24

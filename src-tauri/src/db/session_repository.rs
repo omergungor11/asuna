@@ -9,9 +9,13 @@
 //! - Kapanis yolu **hicbir zaman** oturumu ayakta birakmaz: transcript yazimi,
 //!   usage okumasi ya da ozet uretimi basarisiz olsa bile `ended_at` yazilir.
 //!   Ozet (ASU-033) kapanistan **sonra**, ayri bir `UPDATE` ile eklenir.
-//! - Hafiza kapaliyken (`ASUNA_MEMORY_ENABLED=false`) hicbir oturum kaydi
-//!   olusmaz; komut `skipped` doner ve renderer oturum kimligi almaz — sonraki
-//!   `session_finalize` cagrisi da yapilmaz.
+//! - Hafiza kapaliyken hicbir oturum kaydi olusmaz; komut `skipped` doner ve
+//!   renderer oturum kimligi almaz — sonraki `session_finalize` cagrisi da
+//!   yapilmaz. "Kapali" iki kaynaktan gelebilir ve **ikisi de** kontrol edilir:
+//!   acilis degeri (`ASUNA_MEMORY_ENABLED=false` → DB hic acilmaz) ve calisma
+//!   zamani anahtari ([`crate::privacy::PrivacyState`], ASU-037). Ikincisi
+//!   olmadan kullanici Ayarlar'dan hafizayi kapatsa bile oturum satiri, dokum
+//!   dosyasi ve ozet yazilmaya devam ederdi.
 //!
 //! # Yarim kalan oturum
 //!
@@ -27,6 +31,8 @@
 //! migration 002 ile acilan `end_reason` kolonunda tutuluyor
 //! ([`SessionEndReason`]), eski kayitlar da o migration'da tasindi.
 
+use std::sync::Arc;
+
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -37,6 +43,7 @@ use super::store_error::{database, StoreError, StoreSkipReason};
 use super::transcript::{self, TranscriptLine};
 use super::{AsunaDb, DbState};
 use crate::config::AsunaConfig;
+use crate::privacy::PrivacyState;
 use crate::summary;
 
 /// Yarim kalan oturumun **eski** isaretlenme bicimi (ASU-032).
@@ -495,12 +502,22 @@ fn clamp_transcript(lines: &[TranscriptLine]) -> &[TranscriptLine] {
 // ---------------------------------------------------------------------------
 
 /// Oturum kaydi acar. `model` config'ten gelir; renderer secemez.
+///
+/// Calisma zamani hafiza anahtari kapaliysa (ASU-037) DB'ye **hic dokunulmaz**
+/// ve `skipped` doner: renderer oturum kimligi almaz, dolayisiyla kapanista
+/// yazilacak bir kayit da olusmaz.
 #[tauri::command]
 pub fn session_start(
     state: State<'_, DbState>,
     config: State<'_, AsunaConfig>,
+    privacy: State<'_, Arc<PrivacyState>>,
     project_id: Option<String>,
 ) -> Result<SessionWriteResult, StoreError> {
+    if !privacy.memory_enabled() {
+        return Ok(SessionWriteResult::Skipped {
+            reason: StoreSkipReason::MemoryDisabled,
+        });
+    }
     let Some(db) = database(&state)? else {
         return Ok(SessionWriteResult::Skipped {
             reason: StoreSkipReason::MemoryDisabled,
@@ -537,14 +554,25 @@ pub fn session_start(
 ///    kaydi zaten kapali ve tutarli (`summary` NULL, `end_reason` dogru).
 /// 3. Kuyruk/retry tablosu gerekmiyor: yarim kalmis bir "ozet bekliyor" durumu
 ///    hic olusmuyor.
+/// # Gizlilik (ASU-037)
+///
+/// Calisma zamani hafiza anahtari kapaliysa hicbir sey yazilmaz: ne oturum
+/// satiri, ne dokum dosyasi, ne de ozet gorevi. Komut `skipped` doner — bu bir
+/// hata degil, kullanicinin karari (`memory_create` ile ayni sozlesme).
 #[tauri::command]
 pub fn session_finalize<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     state: State<'_, DbState>,
     config: State<'_, AsunaConfig>,
+    privacy: State<'_, Arc<PrivacyState>>,
     session_id: i64,
     input: Option<SessionFinalizeInput>,
 ) -> Result<SessionWriteResult, StoreError> {
+    if !privacy.memory_enabled() {
+        return Ok(SessionWriteResult::Skipped {
+            reason: StoreSkipReason::MemoryDisabled,
+        });
+    }
     let Some(db) = database(&state)? else {
         return Ok(SessionWriteResult::Skipped {
             reason: StoreSkipReason::MemoryDisabled,
@@ -552,7 +580,11 @@ pub fn session_finalize<R: tauri::Runtime>(
     };
 
     let input = input.unwrap_or_default();
-    let transcript_path = persist_transcript(&app, &config, session_id, &input);
+    // Dokum **bir kez** kirpilir: diske yazilan dilim ile ozete giden dilim
+    // ayni olmali (aksi halde dosya son 2.000 repligi, ozet ise sinirsiz bir
+    // diziyi gorurdu).
+    let transcript = clamp_transcript(&input.transcript).to_vec();
+    let transcript_path = persist_transcript(&app, &config, session_id, &transcript);
 
     let session = finalize(
         db,
@@ -564,7 +596,7 @@ pub fn session_finalize<R: tauri::Runtime>(
 
     // Kapanis yazildi. Ozet bundan **sonra**, arka planda; buradan itibaren
     // hicbir hata oturum kaydini etkilemez.
-    summary::spawn_for_session(&app, session.id, input.transcript);
+    summary::spawn_for_session(&app, session.id, transcript);
 
     Ok(SessionWriteResult::Recorded {
         session: Box::new(session),
@@ -576,7 +608,7 @@ fn persist_transcript<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     config: &AsunaConfig,
     session_id: i64,
-    input: &SessionFinalizeInput,
+    lines: &[TranscriptLine],
 ) -> Option<String> {
     if !config.transcript_storage {
         // GIZLILIK: kapaliyken dizin yolu bile cozulmez.
@@ -594,12 +626,7 @@ fn persist_transcript<R: tauri::Runtime>(
         }
     };
 
-    match transcript::persist_if_enabled(
-        true,
-        &directory,
-        session_id,
-        clamp_transcript(&input.transcript),
-    ) {
+    match transcript::persist_if_enabled(true, &directory, session_id, lines) {
         Ok(path) => path.map(|path| path.to_string_lossy().into_owned()),
         Err(error) => {
             // Yol log'a girmiyor: kullanicinin dizin yapisi hata metnine dusmesin.

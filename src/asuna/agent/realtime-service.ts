@@ -67,7 +67,10 @@ const ASUNA_AGENT_NAME = 'Asuna';
 
 /**
  * Kullanici sesinin transkripsiyon modeli (voice.md Bolum 2 — SDK varsayilani ile ayni).
- * `transcriptStorage` kapaliysa transkripsiyon tamamen kapatilir.
+ *
+ * `transcriptStorage` kapaliysa transkripsiyon tamamen kapatilir. Karar **her
+ * `connect()` icin yeniden** okunur (`resolveTranscription`): anahtar calisma
+ * zamaninda kapatilabilir ve yeniden baslatma beklememeli (ASU-037).
  */
 const TRANSCRIPTION_MODEL = 'gpt-4o-mini-transcribe';
 
@@ -284,6 +287,21 @@ export interface AsunaRealtimeServiceOptions {
    * olay `error` event'i ile gorunur kalir (sessiz yutma yok).
    */
   readonly prepareInstructions?: () => Promise<string>;
+  /**
+   * Her `connect()` cagrisindan **once** transkripsiyonun acik olup olmayacagini
+   * belirler (ASU-037 / Gate 3 MEDIUM-3).
+   *
+   * Neden boot config'i yetmiyor: `transcriptStorage` bir **calisma zamani**
+   * anahtaridir; kullanici Ayarlar'dan kapattiginda yeniden baslatmadan etkili
+   * olmali. `config.transcriptStorage` acilis degeridir ve yalnizca **tavandir**
+   * — servis her oturumda guncel degeri sorar ve ikisini `&&` ile birlestirir.
+   *
+   * Verilmezse acilis degeri kullanilir (testler, ASU-013 oncesi cagiranlar).
+   * Hata firlatirsa transkripsiyon **kapali** kurulur: gizlilik kararini
+   * okuyamadigimizda acik varsaymak, kullanicinin kapatmis olabilecegi bir
+   * ayari sessizce gecersiz kilardi. Hata yutulmaz, `error` event'i ile gorunur.
+   */
+  readonly resolveTranscription?: () => Promise<boolean>;
   /** SDK yerine sahte oturum enjekte etmek icin (testler). */
   readonly createSession?: RealtimeSessionFactory;
   /** Token kaynagi. Varsayilan: `mint_realtime_token` IPC komutu. */
@@ -335,6 +353,8 @@ export class AsunaRealtimeService {
 
   private readonly prepareInstructions: (() => Promise<string>) | null;
 
+  private readonly resolveTranscription: (() => Promise<boolean>) | null;
+
   private readonly createSession: RealtimeSessionFactory;
 
   private readonly mintToken: () => Promise<EphemeralRealtimeToken>;
@@ -376,6 +396,7 @@ export class AsunaRealtimeService {
     this.stateMachine = options.stateMachine ?? new VoiceStateMachine();
     this.instructions = options.instructions ?? buildAsunaInstructions();
     this.prepareInstructions = options.prepareInstructions ?? null;
+    this.resolveTranscription = options.resolveTranscription ?? null;
     this.createSession = options.createSession ?? createOpenAiRealtimeSession;
     this.mintToken = options.mintToken ?? mintRealtimeToken;
     this.maxConnectAttempts = Math.max(
@@ -436,10 +457,23 @@ export class AsunaRealtimeService {
       return;
     }
 
+    // Gizlilik anahtari da oturum basina bir kez okunur (ASU-037): oturum
+    // ortasinda degistirilemeyen bir SDK ayari zaten oturum basinda sabitlenir.
+    // Acilista kapaliysa (tavan) ya da saglayici yoksa `await` edilmez —
+    // gereksiz bir microtask oturum acilisini bir tur geciktirirdi.
+    const needsPrivacyRead =
+      this.config.transcriptStorage && this.resolveTranscription !== null;
+    const transcription = needsPrivacyRead
+      ? await this.resolveTranscriptionEnabled()
+      : this.config.transcriptStorage;
+    if (generation !== this.generation) {
+      return;
+    }
+
     for (let attempt = 1; attempt <= this.maxConnectAttempts; attempt += 1) {
       this.publish({ type: 'connecting', attempt, maxAttempts: this.maxConnectAttempts });
 
-      const result = await this.attemptConnect(instructions);
+      const result = await this.attemptConnect(instructions, transcription);
 
       if (generation !== this.generation) {
         // Bu akis terk edildi (disconnect ya da yeni bir connect). Acilmis bir oturum
@@ -542,12 +576,35 @@ export class AsunaRealtimeService {
     }
   }
 
-  private async attemptConnect(instructions: string): Promise<ConnectAttemptResult> {
+  /**
+   * Bu oturumda kullanici sesi yaziya cevrilecek mi? (ASU-037)
+   *
+   * Iki kaynak `&&` ile baglanir: acilis degeri (`config.transcriptStorage`,
+   * tavan) ve calisma zamani anahtari. Calisma zamani yalnizca **sikilastirir**
+   * — Rust tarafi zaten gevsetmeyi reddediyor, burada da varsayilmiyor.
+   */
+  private async resolveTranscriptionEnabled(): Promise<boolean> {
+    if (!this.config.transcriptStorage || this.resolveTranscription === null) {
+      return this.config.transcriptStorage;
+    }
+    try {
+      return await this.resolveTranscription();
+    } catch (error) {
+      // Gizlilik durumu okunamadi: **kapali** varsayilir, ama yutulmaz.
+      this.publish({ type: 'error', error: describeSessionError(error) });
+      return false;
+    }
+  }
+
+  private async attemptConnect(
+    instructions: string,
+    transcription: boolean,
+  ): Promise<ConnectAttemptResult> {
     const spec: RealtimeSessionSpec = {
       instructions,
       model: this.config.realtimeModel,
       voice: this.config.realtimeVoice,
-      transcription: this.config.transcriptStorage,
+      transcription,
       turnDetection: toTurnDetectionSpec(this.config),
       tools: this.tools,
     };

@@ -161,6 +161,38 @@ describe('SessionRecorder', () => {
     expect(finalize).not.toHaveBeenCalled();
   });
 
+  /**
+   * ASU-037 / Gate 3: kullanici hafizayi **oturum sirasinda** kapatirsa kapanis
+   * da `skipped` doner. Bu bir hata degil (`onError` cagrilmaz) ama sessiz de
+   * degil — nedeni log'a tasiyan `onSkipped` cagrilir.
+   */
+  it('atlanan kaydi hata saymaz, ama log icin raporlar', async () => {
+    const onError = vi.fn();
+    const onSkipped = vi.fn();
+    const start = vi.fn().mockResolvedValue({ status: 'recorded', session: OPEN_SESSION });
+    const finalize = vi
+      .fn()
+      .mockResolvedValue({ status: 'skipped', reason: 'memory-disabled' });
+    const recorder = new SessionRecorder({ start, finalize, onError, onSkipped });
+
+    recorder.begin(0);
+    await expect(recorder.end(1_000, {})).resolves.toBeNull();
+
+    expect(onError).not.toHaveBeenCalled();
+    expect(onSkipped).toHaveBeenCalledExactlyOnceWith('finalize', 'memory-disabled');
+  });
+
+  it('acilis atlandiginda da raporlar', async () => {
+    const onSkipped = vi.fn();
+    const start = vi.fn().mockResolvedValue({ status: 'skipped', reason: 'memory-disabled' });
+    const recorder = new SessionRecorder({ start, finalize: vi.fn(), onSkipped });
+
+    recorder.begin(0);
+    await recorder.end(1_000, {});
+
+    expect(onSkipped).toHaveBeenCalledExactlyOnceWith('start', 'memory-disabled');
+  });
+
   /** Kayit hatasi sesli oturumu dusurmez ama sessizce yutulmaz. */
   it('acilis hatasini raporlar ve kapanisi patlatmaz', async () => {
     const onError = vi.fn();

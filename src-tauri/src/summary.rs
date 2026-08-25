@@ -40,7 +40,8 @@ use crate::config::{AsunaConfig, SecretString};
 use crate::db::session_repository;
 use crate::db::transcript::{TranscriptLine, TranscriptRole};
 use crate::db::{AsunaDb, DbState};
-use crate::realtime_token::{redact_secrets, NetworkCause};
+use crate::realtime_token::NetworkCause;
+use crate::redaction::{redact_secrets, redact_sensitive_text};
 
 /// OpenAI Chat Completions endpoint'i.
 pub const CHAT_COMPLETIONS_URL: &str = "https://api.openai.com/v1/chat/completions";
@@ -141,6 +142,10 @@ pub enum SkipReason {
     TooShort,
     /// Dokum bos ya da yalnizca bosluk — ozetlenecek metin yok.
     NoContent,
+    /// Kalici hafiza calisma zamaninda kapali (ASU-037). Ozet `sessions.summary`
+    /// icine yazilan kalici bir kayittir; anahtar kapaliyken uretilmez ve
+    /// **ag'a hic cikilmaz**.
+    MemoryDisabled,
 }
 
 // ---------------------------------------------------------------------------
@@ -307,6 +312,19 @@ fn render_transcript(lines: &[TranscriptLine]) -> String {
         rendered.push(entry);
     }
 
+    // Tek bir replik butcenin tamamindan buyukse yukaridaki dongu hicbir sey
+    // toplayamaz ve modele **bos** bir dokum giderdi (bos dokum = bos ozet).
+    // Boyle bir durumda en yeni replik karakter bazinda kirpilip dahil edilir:
+    // kirpilmis bir baglam, hic baglamdan iyidir ve kirpma zaten isaretleniyor.
+    if rendered.is_empty() {
+        if let Some(entry) = lines.iter().rev().find_map(|line| {
+            let text = line.text.trim();
+            (!text.is_empty()).then(|| format!("{}: {text}", speaker(line.role)))
+        }) {
+            rendered.push(entry.chars().take(MAX_PROMPT_CHARS).collect());
+        }
+    }
+
     rendered.reverse();
     if truncated {
         rendered.insert(0, TRUNCATION_MARKER.to_owned());
@@ -315,8 +333,14 @@ fn render_transcript(lines: &[TranscriptLine]) -> String {
 }
 
 /// Modelin dondurdugu metni saklanabilir hale getirir.
+///
+/// **Redaksiyon burada** (Gate 3 / HIGH-2): ozet `sessions.summary` icine
+/// kalici olarak yazilir *ve* ASU-034 cikariminin girdisi olur. Kullanici
+/// oturumda bir anahtar okuduysa model onu ozete tasiyabilir; suzgec iki yolun
+/// da onunde, tek noktada duruyor (`asuna-config/security.md` Bolum 5).
 fn clean_summary(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
+    let redacted = redact_sensitive_text(raw);
+    let trimmed = redacted.trim();
     if trimmed.is_empty() {
         return None;
     }
@@ -455,7 +479,26 @@ impl fmt::Debug for SummaryService {
 // ---------------------------------------------------------------------------
 
 /// Dokum ozetlenmeye deger mi?
+///
+/// Calisma zamani hafiza anahtari burada, **ag cagrisindan once** okunur
+/// (`extraction::extract_after_summary` ile ayni desen).
 pub fn skip_reason(lines: &[TranscriptLine]) -> Option<SkipReason> {
+    skip_reason_with_memory(crate::privacy::process_memory_enabled(), lines)
+}
+
+/// [`skip_reason`]'in test edilebilir govdesi.
+///
+/// Anahtar parametre olarak aliniyor cunku process genelindeki gizlilik durumu
+/// ([`crate::privacy::install_process_state`]) geri alinamaz; onu bir testte
+/// kapatmak ayni process'teki diger testleri etkilerdi (`db::transcript` ile
+/// ayni gerekce).
+pub fn skip_reason_with_memory(
+    memory_enabled: bool,
+    lines: &[TranscriptLine],
+) -> Option<SkipReason> {
+    if !memory_enabled {
+        return Some(SkipReason::MemoryDisabled);
+    }
     if lines.len() < MIN_TRANSCRIPT_LINES {
         return Some(SkipReason::TooShort);
     }
@@ -477,7 +520,30 @@ pub async fn summarize_session(
     session_id: i64,
     lines: &[TranscriptLine],
 ) -> SummaryOutcome {
-    if let Some(reason) = skip_reason(lines) {
+    summarize_session_with_memory(
+        crate::privacy::process_memory_enabled(),
+        service,
+        db,
+        api_key,
+        model,
+        session_id,
+        lines,
+    )
+    .await
+}
+
+/// [`summarize_session`]'in test edilebilir govdesi (bkz. [`skip_reason_with_memory`]).
+#[allow(clippy::too_many_arguments)]
+pub async fn summarize_session_with_memory(
+    memory_enabled: bool,
+    service: &SummaryService,
+    db: &AsunaDb,
+    api_key: &SecretString,
+    model: &str,
+    session_id: i64,
+    lines: &[TranscriptLine],
+) -> SummaryOutcome {
+    if let Some(reason) = skip_reason_with_memory(memory_enabled, lines) {
         return SummaryOutcome::Skipped(reason);
     }
 
@@ -527,12 +593,19 @@ pub fn spawn_for_session<R: tauri::Runtime>(
     session_id: i64,
     lines: Vec<TranscriptLine>,
 ) {
+    // GIZLILIK (ASU-037): calisma zamani hafiza anahtari **ag cagrisindan
+    // once** okunur. Kapaliyken ne model cagrilir, ne maliyet olusur, ne de
+    // `sessions.summary` yazilir.
     if let Some(reason) = skip_reason(&lines) {
-        if reason == SkipReason::TooShort {
-            eprintln!(
+        match reason {
+            SkipReason::TooShort => eprintln!(
                 "[asuna] Oturum {session_id} icin ozet uretilmedi: {} replikten az.",
                 MIN_TRANSCRIPT_LINES
-            );
+            ),
+            SkipReason::MemoryDisabled => {
+                eprintln!("[asuna] Oturum {session_id} icin ozet uretilmedi: kalici hafiza kapali.")
+            }
+            SkipReason::NoContent => {}
         }
         return;
     }
@@ -953,6 +1026,46 @@ mod tests {
         );
     }
 
+    /// **Gate 3 / CRITICAL-1**: kullanici kalici hafizayi calisma zamaninda
+    /// kapattiysa ozet **uretilmez** — ag'a cikilmaz, `sessions.summary` bos
+    /// kalir. Oturum kaydinin kendisi bozulmaz.
+    #[tokio::test]
+    async fn a_disabled_runtime_memory_switch_skips_the_summary_without_calling_the_model() {
+        let server = MockServer::start("200 OK", SUMMARY_BODY);
+        let (db, session_id) = db_with_closed_session();
+
+        let outcome = summarize_session_with_memory(
+            false,
+            &server.service(),
+            &db,
+            &secret(TEST_API_KEY),
+            TEST_MODEL,
+            session_id,
+            &conversation(),
+        )
+        .await;
+
+        assert_eq!(outcome, SummaryOutcome::Skipped(SkipReason::MemoryDisabled));
+        server.assert_no_request();
+
+        let record = session_repository::get_by_id(&db, session_id)
+            .expect("okuma")
+            .expect("kayit");
+        assert_eq!(record.summary, None, "kapali anahtarla ozet yazilmis");
+        assert_eq!(record.ended_at.as_deref(), Some(END), "oturum bozulmamali");
+    }
+
+    /// Kapali anahtar tum diger kosullardan **once** degerlendirilir: dokum
+    /// yeterince uzun olsa bile ozet uretilmez.
+    #[test]
+    fn the_runtime_memory_switch_is_the_first_skip_rule() {
+        assert_eq!(
+            skip_reason_with_memory(false, &conversation()),
+            Some(SkipReason::MemoryDisabled)
+        );
+        assert_eq!(skip_reason_with_memory(true, &conversation()), None);
+    }
+
     #[test]
     fn skip_rules_are_explicit() {
         assert_eq!(skip_reason(&[]), Some(SkipReason::TooShort));
@@ -1218,5 +1331,66 @@ mod tests {
     fn blank_summaries_are_rejected() {
         assert_eq!(clean_summary("   \n "), None);
         assert_eq!(clean_summary(" ozet "), Some("ozet".to_owned()));
+    }
+
+    /// **Gate 3 / LOW-9**: tek bir replik butcenin tamamindan buyukse dokum
+    /// **bos gitmez** — en yeni replik kirpilarak dahil edilir. Aksi halde
+    /// model bos bir prompt alir ve ozet degersiz olurdu.
+    #[test]
+    fn a_single_oversized_turn_is_clipped_instead_of_dropped() {
+        let rendered = render_transcript(&[
+            line(TranscriptRole::User, &"a".repeat(MAX_PROMPT_CHARS * 2)),
+            line(TranscriptRole::Assistant, &"b".repeat(MAX_PROMPT_CHARS * 2)),
+        ]);
+
+        assert!(rendered.starts_with(TRUNCATION_MARKER), "{rendered:.60}");
+        assert!(
+            rendered.contains("Asuna: bbb"),
+            "en yeni replik dahil edilmeli: {rendered:.120}"
+        );
+        assert!(
+            !rendered.contains("Kullanici:"),
+            "butceyi asan eski replik yine de girmemeli"
+        );
+        assert!(rendered.chars().count() <= MAX_PROMPT_CHARS + TRUNCATION_MARKER.len() + 1);
+    }
+
+    /// **Gate 3 / HIGH-2**: ozet metnine sizmis bir anahtar `sessions.summary`
+    /// icine **maskeli** yazilir (`asuna-config/security.md` Bolum 5).
+    #[tokio::test]
+    async fn a_secret_in_the_model_output_is_masked_before_the_summary_is_stored() {
+        let server = MockServer::start(
+            "200 OK",
+            r#"{"choices":[{"message":{"content":
+                "Konusulanlar: Kullanici anahtarini okudu: sk-proj-COK-GIZLI-DEGER.\nKararlar: parola: hunter2 degistirilecek.\nYarim kalanlar: yok"}}]}"#,
+        );
+        let (db, session_id) = db_with_closed_session();
+
+        assert_eq!(
+            summarize_session(
+                &server.service(),
+                &db,
+                &secret(TEST_API_KEY),
+                TEST_MODEL,
+                session_id,
+                &conversation(),
+            )
+            .await,
+            SummaryOutcome::Stored
+        );
+
+        let summary = session_repository::get_by_id(&db, session_id)
+            .expect("okuma")
+            .expect("kayit")
+            .summary
+            .expect("ozet");
+
+        assert!(!summary.contains("COK-GIZLI-DEGER"), "sizinti: {summary}");
+        assert!(!summary.contains("hunter2"), "sizinti: {summary}");
+        assert!(summary.contains("sk-<redacted>"), "{summary}");
+        assert!(summary.contains("parola: <redacted>"), "{summary}");
+        // Ozetin yapisi korunur: suzgec metni bozmaz, yalnizca maskeler.
+        assert!(summary.starts_with("Konusulanlar:"), "{summary}");
+        assert!(summary.contains("Yarim kalanlar: yok"), "{summary}");
     }
 }

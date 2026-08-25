@@ -8,7 +8,9 @@
  *   yalnizca "oturum basladi" / "oturum bitti + su kadar token + su dokum" der.
  * - Hafiza kapaliyken `session_start` `skipped` doner; o zaman elimizde oturum
  *   kimligi olmaz ve `session_finalize` **cagrilmaz**. Sessizce sahte bir
- *   kimlik uydurulmaz.
+ *   kimlik uydurulmaz. "Kapali" acilis degeri de olabilir, kullanicinin oturum
+ *   sirasinda cevirdigi bir anahtar da (ASU-037) — ikisi de hata degildir,
+ *   `onSkipped` ile log'lanir.
  * - Kayit basarisiz olursa sesli oturum **devam eder**. Kapanis akisini
  *   dusurmemek icin [`SessionRecorder`] hatalari yakalar ve log'lar; yutmaz.
  */
@@ -112,6 +114,9 @@ function formatDuration(durationMs: number): string {
     : `${minutes.toString()} dk ${seconds.toString()} sn`;
 }
 
+/** Yazmanin atlandigi asama — log mesajini ayirt edebilmek icin. */
+export type SessionRecordStage = 'start' | 'finalize';
+
 export interface SessionRecorderDeps {
   readonly start?: (projectId?: string) => Promise<SessionWriteResult>;
   readonly finalize?: (
@@ -120,6 +125,14 @@ export interface SessionRecorderDeps {
   ) => Promise<SessionWriteResult>;
   /** Kayit hatasi sesli oturumu dusurmez ama gorunur olur. */
   readonly onError?: (error: unknown) => void;
+  /**
+   * Kayit **bilincli olarak** atlandi (`skipped`).
+   *
+   * Hata degil: kullanici kalici hafizayi kapatmis olabilir (ASU-037) ve bu
+   * onun karari. Yine de sessiz kalmaz — "oturum neden kaydedilmedi?" sorusunun
+   * cevabi log'da durur (`conventions.md`: sessiz yutma yok).
+   */
+  readonly onSkipped?: (stage: SessionRecordStage, reason: string) => void;
 }
 
 /**
@@ -146,6 +159,7 @@ export class SessionRecorder {
       start: deps.start ?? startSessionRecord,
       finalize: deps.finalize ?? finalizeSessionRecord,
       onError: deps.onError ?? ((): void => undefined),
+      onSkipped: deps.onSkipped ?? ((): void => undefined),
     };
   }
 
@@ -160,8 +174,14 @@ export class SessionRecorder {
     this.pending = this.deps
       .start(projectId)
       .then((result) => {
-        // Hafiza kapali: kimlik yok, kapanista da yazma denenmez.
-        this.sessionId = result.status === 'recorded' ? result.session.id : null;
+        // Hafiza kapali: kimlik yok, kapanista da yazma denenmez. Bu bir hata
+        // degil (kullanicinin karari) ama gorunur kalir.
+        if (result.status !== 'recorded') {
+          this.deps.onSkipped('start', result.reason);
+          this.sessionId = null;
+          return null;
+        }
+        this.sessionId = result.session.id;
         return this.sessionId;
       })
       .catch((error: unknown) => {
@@ -195,6 +215,9 @@ export class SessionRecorder {
         }
         const result = await this.deps.finalize(sessionId, input);
         if (result.status !== 'recorded') {
+          // Oturum acildiktan **sonra** hafiza kapatilmis olabilir (ASU-037):
+          // kapanis yazilmaz, UI'da oturum ozeti gorunmez. Hata degil.
+          this.deps.onSkipped('finalize', result.reason);
           return null;
         }
         return {

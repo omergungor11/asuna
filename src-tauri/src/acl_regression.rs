@@ -900,6 +900,103 @@ fn the_renderer_cannot_choose_the_session_model_or_transcript_path() {
     assert!(!is_acl_denial(&error), "hata: {error}");
 }
 
+/// **Gate 3 / CRITICAL-1**: kalici hafiza **calisma zamaninda** kapatilinca
+/// oturum kaydi da durur — `memory_create` ile ayni davranis.
+///
+/// Uc sey birlikte olculuyor:
+///
+/// 1. `session_start` `skipped` doner (renderer kimlik almaz → kapanista yazma
+///    denenmez).
+/// 2. `session_finalize` **var olmayan** bir kimlikle bile `skipped` doner:
+///    kapili anahtarda DB'ye hic dokunulmuyor. Kapi olmasaydi ayni cagri
+///    `not-found` hatasi verirdi — yani sorgu kosardi.
+/// 3. Anahtar geri acilinca yeni oturumun kimligi **2** olur: kapaliyken
+///    tabloya satir eklenmedigi buradan gorunur (rowid ilerlememis).
+#[test]
+fn turning_memory_off_at_runtime_stops_session_writes_without_a_restart() {
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+
+    let started = invoke_with(&webview, "session_start", serde_json::json!({}))
+        .expect("acikken kayit calismali");
+    let first_id = serde_json::from_str::<serde_json::Value>(&started).expect("JSON")["session"]
+        ["id"]
+        .as_i64()
+        .expect("oturum kimligi");
+    assert_eq!(first_id, 1);
+
+    invoke_with(
+        &webview,
+        "set_privacy_settings",
+        serde_json::json!({ "patch": { "memoryEnabled": false } }),
+    )
+    .expect("kapatma kabul edilmeli");
+
+    let skipped = invoke_with(&webview, "session_start", serde_json::json!({}))
+        .expect("kapali hafiza hata degil");
+    assert!(
+        skipped.contains("\"status\":\"skipped\"")
+            && skipped.contains("\"reason\":\"memory-disabled\""),
+        "yanit: {skipped}"
+    );
+
+    let unknown = invoke_with(
+        &webview,
+        "session_finalize",
+        serde_json::json!({ "sessionId": 4_242 }),
+    )
+    .expect("kapali hafizada finalize hata degil");
+    assert!(
+        unknown.contains("\"status\":\"skipped\""),
+        "DB'ye dokunulmus olmali (not-found beklenmiyordu): {unknown}"
+    );
+
+    let finalized = invoke_with(
+        &webview,
+        "session_finalize",
+        serde_json::json!({
+            "sessionId": first_id,
+            "input": { "transcript": [{ "role": "user", "text": "gizli konusma" }] }
+        }),
+    )
+    .expect("kapali hafizada finalize hata degil");
+    assert!(
+        finalized.contains("\"status\":\"skipped\""),
+        "yanit: {finalized}"
+    );
+
+    // Anahtar geri acilir: yeni kimlik 2 ise kapaliyken satir eklenmemistir.
+    invoke_with(
+        &webview,
+        "set_privacy_settings",
+        serde_json::json!({ "patch": { "memoryEnabled": true } }),
+    )
+    .expect("acilista acik oldugu icin geri acilabilir");
+
+    let started = invoke_with(&webview, "session_start", serde_json::json!({}))
+        .expect("session_start calismali");
+    let second_id = serde_json::from_str::<serde_json::Value>(&started).expect("JSON")["session"]
+        ["id"]
+        .as_i64()
+        .expect("oturum kimligi");
+    assert_eq!(
+        second_id, 2,
+        "kapaliyken oturum satiri acilmis (rowid ilerledi)"
+    );
+
+    // Ilk oturum hala **acik**: kapaliyken gelen kapanis yazilmadi.
+    let finalized = invoke_with(
+        &webview,
+        "session_finalize",
+        serde_json::json!({ "sessionId": first_id }),
+    )
+    .expect("acikken kapanis calismali");
+    assert!(
+        finalized.contains("\"status\":\"recorded\"") && finalized.contains("\"summary\":null"),
+        "yanit: {finalized}"
+    );
+}
+
 /// **ASU-032 kabul kriteri**: hafiza kapaliyken oturum kaydi olusmaz ve
 /// uygulama calismaya devam eder.
 #[test]

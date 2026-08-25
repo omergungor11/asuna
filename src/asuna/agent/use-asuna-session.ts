@@ -47,6 +47,7 @@ import { probeMicrophoneAccess, type MicrophoneProbe } from '../audio/microphone
 import { loadFrontendConfig } from '../config/config.service';
 import { describeTurnDetection, type FrontendConfig } from '../config/frontend-config';
 import { buildSessionInstructions } from '../memory/bootstrap-context';
+import { fetchPrivacySettings } from '../memory/privacy-service';
 import { SessionRecorder, type SessionOutcome } from '../memory/session-service';
 import {
   createLoggedVoiceStateMachine,
@@ -530,6 +531,11 @@ function defaultCreateService(context: AsunaSessionContext): AsunaSessionPort {
     // enjekte edilir. Hafiza kapali/bozuksa `buildSessionInstructions` durust
     // bir "hatirlamiyorum" satiriyla doner — konusma bloklanmaz.
     prepareInstructions: (): Promise<string> => buildSessionInstructions(),
+    // ASU-037: transkript saklama anahtari **canli** okunur. Boot config'i
+    // yalnizca tavan; kullanici Ayarlar'dan kapattiysa bu oturumda kullanici
+    // sesi hic yaziya cevrilmez (yeniden baslatma gerekmez).
+    resolveTranscription: async (): Promise<boolean> =>
+      (await fetchPrivacySettings()).transcriptStorage,
   });
 }
 
@@ -545,6 +551,11 @@ function resolveDeps(options: UseAsunaSessionOptions): ResolvedDeps {
           recorderLog.warn('Oturum kaydi yazilamadi; konusma etkilenmedi.', {
             detail: error instanceof Error ? error.message : String(error),
           });
+        },
+        // ASU-037: kalici hafiza kapaliyken kayit **atlanir**. Hata degil —
+        // kullanicinin karari; yine de sessiz kalmaz.
+        onSkipped: (stage, reason): void => {
+          recorderLog.info('Oturum kaydi atlandi.', { stage, reason });
         },
       }),
     transcriptCollector: new TranscriptCollector(),

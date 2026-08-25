@@ -56,7 +56,8 @@ use crate::db::memory_repository::{
 };
 use crate::db::transcript::{TranscriptLine, TranscriptRole};
 use crate::db::{AsunaDb, DbState, MemoryKind, MemoryRecord, StoreError};
-use crate::realtime_token::{redact_secrets, NetworkCause};
+use crate::realtime_token::NetworkCause;
+use crate::redaction::{redact_secrets, redact_sensitive_text};
 use crate::summary::CHAT_COMPLETIONS_URL;
 
 // ---------------------------------------------------------------------------
@@ -103,7 +104,20 @@ const DEDUP_SCAN_LIMIT: u32 = 200;
 ///
 /// Bu esik olmasa "yok" gibi bir icerik her uzun kaydin icinde gecer ve
 /// birbiriyle ilgisiz hafizalar "ayni" sayilirdi.
-const MIN_SUBSET_CHARS: usize = 12;
+///
+/// **Gate 3 / MEDIUM-4**: esik 12'den 40'a cikarildi. 12 karakter bir Turkce
+/// cumlenin yarisi bile degil; "kahve sevmiyor" gibi bir kayit "esi kahve
+/// sevmiyor" adayini yutuyordu — iki farkli kisi hakkindaki iki farkli hafiza
+/// tek satira iniyor ve **geri alinamiyordu** (yeni icerik yazilmaz, yalnizca
+/// onem guncellenir).
+const MIN_SUBSET_CHARS: usize = 40;
+
+/// Alt dize eslesmesinde kisa/uzun uzunluk oraninin alt siniri.
+///
+/// Uzunluk esigi tek basina yetmiyor: 40 karakterlik bir kayit 300 karakterlik
+/// bir adayin icinde gecebilir ve ikisi ayni hafiza olmayabilir. Iki metin
+/// "ayni sey" sayilacaksa boylari da birbirine yakin olmali.
+const MIN_SUBSET_LENGTH_RATIO: f64 = 0.8;
 
 /// Otomatik olarak kalici hafizaya **terfi etmeyen** turler (PROJECT.md Bolum 14).
 pub const NON_DURABLE_KINDS: [MemoryKind; 2] = [MemoryKind::WorkingContext, MemoryKind::ToolState];
@@ -615,9 +629,15 @@ pub fn normalize_for_dedup(text: &str) -> String {
 
 /// Iki normalize metin "ayni hafiza" mi?
 ///
-/// Kural bilerek dar: birebir esitlik ya da anlamli uzunluktaki tam alt dize
-/// iliskisi. Bulanik benzerlik (Levenshtein, embedding) **yok** — yanlis
-/// pozitif, kullanicinin farkli iki hafizasini birlestirir ve geri alinamaz.
+/// Kural bilerek dar: birebir esitlik ya da **hem yeterince uzun hem de
+/// boyca yakin** bir tam alt dize iliskisi. Bulanik benzerlik (Levenshtein,
+/// embedding) **yok** — yanlis pozitif, kullanicinin farkli iki hafizasini
+/// birlestirir ve geri alinamaz.
+///
+/// Alt dize kolu iki kosulu birden ister ([`MIN_SUBSET_CHARS`],
+/// [`MIN_SUBSET_LENGTH_RATIO`]): kisa metin anlamli uzunlukta olmali **ve**
+/// uzun metnin cogunu kaplamali. "esi kahve sevmiyor" adayi "kahve sevmiyor"
+/// kaydinin kopyasi degildir; ikisi de saklanir.
 pub fn is_duplicate(left: &str, right: &str) -> bool {
     if left.is_empty() || right.is_empty() {
         return false;
@@ -630,7 +650,17 @@ pub fn is_duplicate(left: &str, right: &str) -> bool {
     } else {
         (right, left)
     };
-    short.chars().count() >= MIN_SUBSET_CHARS && long.contains(short)
+
+    let short_len = short.chars().count();
+    let long_len = long.chars().count();
+    if short_len < MIN_SUBSET_CHARS {
+        return false;
+    }
+    // `long_len` burada en az `short_len` (>0), yani bolme guvenli.
+    if (short_len as f64) / (long_len as f64) < MIN_SUBSET_LENGTH_RATIO {
+        return false;
+    }
+    long.contains(short)
 }
 
 /// Adayin karsiligi olan mevcut kaydi arar.
@@ -666,6 +696,18 @@ fn find_duplicate(
 // Depolama
 // ---------------------------------------------------------------------------
 
+/// Adayin saklanacak metinlerini redakte eder (Gate 3 / HIGH-2).
+///
+/// `project_id` **dokunulmadan** gecer: proje kimligi bir tanimlayicidir,
+/// serbest metin degil; zaten `validate_candidate` tarafindan sinirlaniyor.
+fn redact_candidate(candidate: &MemoryCandidate) -> MemoryCandidate {
+    MemoryCandidate {
+        title: redact_sensitive_text(&candidate.title),
+        content: redact_sensitive_text(&candidate.content),
+        ..candidate.clone()
+    }
+}
+
 /// Yeni kaydin `metadata_json`'i.
 ///
 /// `pendingApproval` her zaman **acikca** yazilir (`false` da): retrieval
@@ -682,6 +724,14 @@ fn metadata_for(kind: MemoryKind) -> String {
 ///
 /// Tek bir adayin DB hatasi digerlerini dusurmez; hata log'lanir ve
 /// [`ExtractionStats::failed`] artar.
+///
+/// # Redaksiyon (Gate 3 / HIGH-2)
+///
+/// Her adayin `title` + `content` alani yazmadan **once**
+/// [`redact_sensitive_text`] suzgecinden gecer. Suzgec dedup taramasindan da
+/// once uygulanir: karsilastirilan metin ile saklanan metin ayni olmali, aksi
+/// halde ayni bilgi bir kez maskeli bir kez maskesiz saklanabilirdi
+/// (`asuna-config/security.md` Bolum 5).
 pub fn persist_candidates(
     db: &AsunaDb,
     session_id: i64,
@@ -691,6 +741,7 @@ pub fn persist_candidates(
     let mut stats = ExtractionStats::default();
 
     for candidate in candidates {
+        let candidate = &redact_candidate(candidate);
         let existing = match find_duplicate(db, candidate, now) {
             Ok(existing) => existing,
             Err(error) => {
@@ -1534,6 +1585,105 @@ mod tests {
         );
     }
 
+    /// **Gate 3 / MEDIUM-4 regresyonu**: kisa bir kayit, onu iceren **farkli**
+    /// bir adayi yutmamali.
+    ///
+    /// Eski esik (12 karakter) ile "kahve sevmiyor" kaydi "esi kahve sevmiyor"
+    /// adayini "ayni hafiza" sayiyordu: iki farkli kisi hakkindaki iki bilgi
+    /// tek satira iniyor, yeni icerik **hic yazilmadigi** icin de geri
+    /// getirilemiyordu.
+    #[tokio::test]
+    async fn a_candidate_that_merely_contains_an_existing_memory_is_not_a_duplicate() {
+        let (db, session_id) = db_with_summarized_session();
+        memory_repository::create(
+            &db,
+            &MemoryDraft {
+                kind: MemoryKind::Preference,
+                title: "Kahve".to_owned(),
+                content: "kahve sevmiyor".to_owned(),
+                summary: None,
+                project_id: None,
+                importance: 0.7,
+                confidence: 1.0,
+                source_session_id: None,
+                expires_at: None,
+                metadata_json: None,
+            },
+            NOW,
+        )
+        .expect("mevcut kayit");
+
+        let server = MockServer::ok(body_with(
+            r#"[{"kind":"preference","content":"esi kahve sevmiyor",
+                 "importance":0.8,"confidence":1.0}]"#,
+        ));
+        let outcome = run(&db, session_id, &server).await;
+
+        assert_eq!(
+            outcome,
+            ExtractionOutcome::Completed(ExtractionStats {
+                created: 1,
+                ..ExtractionStats::default()
+            }),
+            "farkli bir bilgi yeni kayit olmali"
+        );
+
+        let stored = memories(&db);
+        assert_eq!(stored.len(), 2, "iki ayri hafiza saklanmali");
+        let contents: Vec<&str> = stored
+            .iter()
+            .map(|record| record.content.as_str())
+            .collect();
+        assert!(contents.contains(&"kahve sevmiyor"), "{contents:?}");
+        assert!(contents.contains(&"esi kahve sevmiyor"), "{contents:?}");
+    }
+
+    /// **Gate 3 / HIGH-2**: aday icerigine gomulmus bir API anahtari kalici
+    /// kayda **maskeli** girer (`asuna-config/security.md` Bolum 5).
+    #[tokio::test]
+    async fn a_secret_inside_a_candidate_is_masked_before_it_is_stored() {
+        let (db, session_id) = db_with_summarized_session();
+
+        let server = MockServer::ok(body_with(
+            r#"[{"kind":"decision",
+                 "title":"Anahtar sk-proj-BASLIKTA-SIZAN",
+                 "content":"Kullanici anahtarini okudu: sk-proj-COK-GIZLI-DEGER, parola: hunter2.",
+                 "importance":0.9,"confidence":1.0}]"#,
+        ));
+        run(&db, session_id, &server).await;
+
+        let stored = memories(&db);
+        assert_eq!(stored.len(), 1);
+        let record = &stored[0];
+
+        assert!(
+            !record.content.contains("COK-GIZLI-DEGER") && !record.content.contains("hunter2"),
+            "secret kalici kayda girdi: {}",
+            record.content
+        );
+        assert!(
+            record.content.contains("sk-<redacted>"),
+            "{}",
+            record.content
+        );
+        assert!(
+            record.content.contains("parola: <redacted>"),
+            "{}",
+            record.content
+        );
+        // Metnin geri kalani korunur: suzgec hafizayi bozmaz, yalnizca maskeler.
+        assert!(
+            record.content.starts_with("Kullanici anahtarini okudu:"),
+            "{}",
+            record.content
+        );
+        assert!(
+            !record.title.contains("BASLIKTA-SIZAN"),
+            "baslik maskelenmedi: {}",
+            record.title
+        );
+    }
+
     /// Daha dusuk onemli bir tekrar mevcut degeri **dusurmez**.
     #[tokio::test]
     async fn deduplication_never_lowers_the_stored_importance() {
@@ -2006,13 +2156,19 @@ mod tests {
     #[test]
     fn duplicate_detection_requires_a_meaningful_overlap() {
         let long = normalize_for_dedup("Kod yazarken kisa cevap ister.");
+
+        // Yalnizca noktalama/buyuk harf farki: ayni hafiza.
         assert!(is_duplicate(
             &long,
             &normalize_for_dedup("KOD YAZARKEN KISA CEVAP ISTER")
         ));
+
+        // Yeterince uzun **ve** boyca yakin alt dize: ayni hafiza.
+        let decision = normalize_for_dedup("Wake word tespiti tamamen cihazda kalacak");
+        assert!(decision.chars().count() >= MIN_SUBSET_CHARS);
         assert!(is_duplicate(
-            &long,
-            &normalize_for_dedup("Kullanici kod yazarken kisa cevap ister, uzun anlatim istemez.")
+            &decision,
+            &normalize_for_dedup("Wake word tespiti tamamen cihazda kalacak. Evet.")
         ));
 
         // Kisa ortak parca "ayni hafiza" demek degil.
@@ -2025,6 +2181,23 @@ mod tests {
             &normalize_for_dedup("Testler her push'ta calisir.")
         ));
         assert!(!is_duplicate("", "bos"));
+
+        // **Gate 3 / MEDIUM-4**: esik altindaki alt dize artik yutmuyor. Iki
+        // cumle de saklanir; hangisinin kalacagina kullanici karar verir.
+        assert!(!is_duplicate(
+            &long,
+            &normalize_for_dedup("Kullanici kod yazarken kisa cevap ister, uzun anlatim istemez.")
+        ));
+
+        // Esigi gecen ama boyca uzak alt dize de yutmuyor: uzun metnin icinde
+        // gecmek "ayni hafiza" demek degil.
+        assert!(!is_duplicate(
+            &decision,
+            &normalize_for_dedup(
+                "Wake word tespiti tamamen cihazda kalacak; ayrica idle mikrofon verisi \
+                 diske yazilmayacak ve oturum acilmadan buluta ses gitmeyecek."
+            )
+        ));
     }
 
     // --- Prompt sozlesmesi -------------------------------------------------

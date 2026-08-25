@@ -345,6 +345,54 @@ describe('AsunaRealtimeService — yasam dongusu', () => {
     expect(harness.sessions[0]?.spec.transcription).toBe(false);
   });
 
+  /**
+   * ASU-037 / Gate 3 MEDIUM-3: transkript anahtari **calisma zamaninda**
+   * kapatilabilir. Boot config'i acik olsa bile bir sonraki oturumda
+   * transkripsiyon kurulmamali — yeniden baslatma beklenmiyor.
+   */
+  it('calisma zamani transkript anahtari kapaliysa transkripsiyon kurulmaz', async () => {
+    let enabled = true;
+    const harness = createHarness({
+      service: { resolveTranscription: (): Promise<boolean> => Promise.resolve(enabled) },
+    });
+
+    await harness.service.connect();
+    expect(harness.sessions[0]?.spec.transcription).toBe(true);
+
+    harness.service.disconnect();
+    enabled = false;
+    await harness.service.connect();
+
+    expect(harness.sessions[1]?.spec.transcription).toBe(false);
+  });
+
+  /** Anahtar okunamazsa transkripsiyon **kapali** kurulur; hata yutulmaz. */
+  it('gizlilik durumu okunamazsa transkripsiyon kapali kalir ve hata gorunur', async () => {
+    const harness = createHarness({
+      service: {
+        resolveTranscription: (): Promise<boolean> =>
+          Promise.reject(new Error('gizlilik durumu okunamadi')),
+      },
+    });
+
+    await harness.service.connect();
+
+    expect(harness.sessions[0]?.spec.transcription).toBe(false);
+    expect(eventTypes(harness.events)).toContain('error');
+  });
+
+  /** Acilista kapali olan anahtar calisma zamaninda **acilamaz** (tavan kurali). */
+  it('acilista kapali transkript anahtari calisma zamaninda acilamaz', async () => {
+    const harness = createHarness({
+      config: { ...CONFIG, transcriptStorage: false },
+      service: { resolveTranscription: (): Promise<boolean> => Promise.resolve(true) },
+    });
+
+    await harness.service.connect();
+
+    expect(harness.sessions[0]?.spec.transcription).toBe(false);
+  });
+
   it('token lazy uretiliyor: oturum kurulurken degil, SDK isteyince', async () => {
     const behaviour = vi.fn<() => Promise<void>>(() => Promise.resolve());
     const harness = createHarness({ connectBehaviours: [behaviour] });

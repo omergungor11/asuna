@@ -175,7 +175,11 @@ impl AsunaDb {
             std::fs::create_dir_all(parent).map_err(DbError::CreateDirectory)?;
         }
         let connection = Connection::open(path).map_err(DbError::Open)?;
-        Self::bootstrap(connection, DbLocation::File(path.to_path_buf()))
+        let db = Self::bootstrap(connection, DbLocation::File(path.to_path_buf()))?;
+        // Migration'lardan **sonra**: WAL kardes dosyalari (`-wal`, `-shm`) ilk
+        // yazmayla olusur, once cagirmak onlari kacirirdi.
+        restrict_db_permissions(path);
+        Ok(db)
     }
 
     /// Bellek ici DB — birim testleri icin. Diske hicbir sey yazmaz.
@@ -217,6 +221,48 @@ impl AsunaDb {
             .with_connection(|conn| conn.query_row("PRAGMA user_version", [], |row| row.get(0)))?;
         Ok(u32::try_from(raw).unwrap_or(0))
     }
+}
+
+/// DB dosyasini ve WAL kardeslerini `0600`'e ceker (Gate 3 / LOW-8).
+///
+/// # Neden gerekli
+///
+/// SQLite dosyayi `0666 & ~umask` ile acar; tipik `umask 022` ile sonuc `0644`
+/// — yani ayni makinedeki **baska bir kullanici** hafizayi okuyabilir. Uygulama
+/// veri dizini macOS'ta genelde daralticidir ama buna guvenmek bir varsayimdir;
+/// hafiza kullanicinin en mahrem verisi (`asuna-config/security.md` Bolum 5).
+///
+/// # Neden hata dondurmuyor
+///
+/// Izin sikilastirilamamasi hafizayi **acilmaz** kilmaz. Acilisi dusurmek
+/// (PROJECT.md Bolum 30: "bozulan alt sistem tum urunu dusurmez") yanlis
+/// takas olurdu; sessizce de gecistirilmez — durum yerel log'a yazilir.
+fn restrict_db_permissions(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        for suffix in ["", "-wal", "-shm"] {
+            let mut sibling = path.as_os_str().to_owned();
+            sibling.push(suffix);
+            let sibling = PathBuf::from(sibling);
+
+            let Ok(metadata) = std::fs::metadata(&sibling) else {
+                continue; // Dosya yok (WAL kardesleri her zaman olusmaz).
+            };
+            if metadata.permissions().mode() & 0o777 == 0o600 {
+                continue;
+            }
+            if let Err(error) =
+                std::fs::set_permissions(&sibling, std::fs::Permissions::from_mode(0o600))
+            {
+                // Yol log'a girmiyor: kullanicinin dizin yapisi sizmasin.
+                eprintln!("[asuna] Veritabani dosya izinleri sikilastirilamadi: {error}");
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
 }
 
 /// Acilis PRAGMA'lari — sira ADR-005'te sabit.
@@ -340,6 +386,31 @@ mod tests {
 
         assert!(path.exists(), "DB dosyasi olusturulmali");
         assert_eq!(db.location(), &DbLocation::File(path));
+    }
+
+    /// **Gate 3 / LOW-8**: DB dosyasi ve WAL kardesleri yalnizca sahibi
+    /// tarafindan okunabilir. SQLite varsayilani `0644`'tur (umask'a bagli) —
+    /// ayni makinedeki baska bir kullanici hafizayi okuyamamali.
+    #[cfg(unix)]
+    #[test]
+    fn the_database_file_is_only_readable_by_the_owner() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempDir::new("perms");
+        let path = temp.join(DB_FILE_NAME);
+        // Migration'lar zaten yazma yapti: `-wal`/`-shm` kardesleri olusmus olmali.
+        let _db = AsunaDb::open_at(&path).expect("DB acilmali");
+
+        for suffix in ["", "-wal", "-shm"] {
+            let mut sibling = path.clone().into_os_string();
+            sibling.push(suffix);
+            let sibling = PathBuf::from(sibling);
+            let Ok(metadata) = std::fs::metadata(&sibling) else {
+                continue;
+            };
+            let mode = metadata.permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "{}: {mode:o}", sibling.display());
+        }
     }
 
     /// Dosya tabanli DB WAL modunda acilir — kardes `-wal` dosyasi bunun kaniti.
