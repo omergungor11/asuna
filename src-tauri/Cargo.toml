@@ -77,6 +77,7 @@ rusqlite = { version = "=0.40.2", features = ["bundled"] }
 # ile izlenir, acilista `to_latest()` ile idempotent uygulanir (ADR-005 OQ-2).
 # Ek sema tablosu yok; `down` gercekten calisir.
 rusqlite_migration = "=2.6.0"
+tauri-plugin-dialog = "2.7.2"
 
 [dev-dependencies]
 # ASU-029: ACL regresyon testi. `tauri::test::mock_builder` + `get_ipc_response`
