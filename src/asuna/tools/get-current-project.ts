@@ -1,11 +1,10 @@
 /**
  * `get_current_project` — Asuna'nin **ilk gercek tool'u** (ASU-044, risk 0).
  *
- * NOT: Phase 5'te registry'ye (ASU-047) tasinacak. Burada tool dogrudan
- * Realtime oturumuna veriliyor (`use-asuna-session` varsayilan listesi); registry,
- * permission gate ve `tool_events` audit yazimi ASU-047/048'in isi. Bu dosyanin
- * o tasinmada degismesi gereken tek yeri kayit noktasidir — sozlesme
- * (`AsunaToolDefinition`) ve ozet uretimi oldugu gibi kalir.
+ * ASU-047 ile registry'ye tasindi: tool artik dogrudan Realtime oturumuna
+ * verilmiyor, `index.ts`'teki varsayilan [`ToolRegistry`]'ye kaydediliyor ve
+ * `executeTool` uzerinden calisiyor (sema dogrulamasi + timeout orada). Sozlesme
+ * ve ozet uretimi tasinmada degismedi; `tool_events` audit yazimi ASU-050'nin isi.
  *
  * # Ince backchannel
  *
@@ -34,7 +33,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 
-import type { AsunaToolDefinition, ToolResult } from './types';
+import { NO_TOOL_ARGUMENTS, type AsunaToolDefinition, type ToolResult } from './types';
 import {
   parseProjectContextView,
   toRegistryError,
@@ -281,6 +280,10 @@ export function createGetCurrentProjectTool(
     risk: 0,
     requiresApproval: false,
     timeoutMs: GET_CURRENT_PROJECT_TIMEOUT_MS,
+    // Parametresiz: modelin "hangi projeyi okuyayim?" diye secim yapabilmesi,
+    // kayitli kok disina cikma yuzeyi acardi. Uydurulmus bir parametre sessizce
+    // atilmaz, `executeTool` tarafindan reddedilir (`NO_TOOL_ARGUMENTS` strict).
+    parameters: NO_TOOL_ARGUMENTS,
     async execute(): Promise<ToolResult> {
       try {
         return toToolResult(parseProjectContextView(await fetchContext()));
@@ -299,5 +302,5 @@ export function createGetCurrentProjectTool(
   };
 }
 
-/** Varsayilan ornek — `use-asuna-session` bunu Realtime oturumuna verir. */
+/** Varsayilan ornek — `index.ts` bunu varsayilan registry'ye kaydeder. */
 export const getCurrentProjectTool: AsunaToolDefinition = createGetCurrentProjectTool();

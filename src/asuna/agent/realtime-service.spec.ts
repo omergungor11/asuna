@@ -28,7 +28,7 @@ import type { EphemeralRealtimeToken } from './realtime-token';
 import type { FrontendConfig } from '../config/frontend-config';
 import { buildAsunaInstructions } from '../prompts';
 import { VoiceStateMachine, type VoiceState } from '../state/voice-state-machine';
-import type { AsunaToolDefinition, ToolResult } from '../tools/types';
+import { NO_TOOL_ARGUMENTS, type AsunaToolDefinition, type ToolResult } from '../tools/types';
 
 const CONFIG: FrontendConfig = {
   realtimeModel: 'gpt-realtime-2.1-mini',
@@ -886,6 +886,8 @@ describe('AsunaToolDefinition -> SDK tool adaptoru', () => {
     risk: 0,
     requiresApproval: false,
     timeoutMs: 25_000,
+    // ASU-047: sema tanimin parcasi; SDK'ya giden JSON Schema da bundan uretilir.
+    parameters: NO_TOOL_ARGUMENTS,
     execute: (): Promise<ToolResult> => Promise.resolve({ ok: true, summary: 'Proje: Asuna' }),
   };
 

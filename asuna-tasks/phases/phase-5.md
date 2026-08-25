@@ -14,21 +14,47 @@
 
 ## ASU-047: `AsunaToolDefinition` + Tool Registry
 
-**Scope**: backend | **Boyut**: L | **Durum**: PENDING | **Bagimlilik**: ASU-044
+**Scope**: backend | **Boyut**: L | **Durum**: DONE | **Bagimlilik**: ASU-044
 
 ### Aciklama
 PROJECT.md Bolum 17. ASU-044'te dogrudan tanimlanan tool bu registry'ye tasinir.
 
 ### Acceptance Criteria
-- [ ] `AsunaToolDefinition`: name, description, risk (0|1|2|3), requiresApproval,
+- [x] `AsunaToolDefinition`: name, description, risk (0|1|2|3), requiresApproval,
       input schema, `execute(args, ctx): Promise<ToolResult>`
-- [ ] Registry: kayit, listeleme, isimle cozme; ayni isim iki kez kayit olamiyor
-- [ ] Her tool cagrisinda argumanlar semaya gore dogrulaniyor; gecersizse calistirilmiyor
-- [ ] Her tool'un timeout'u var; asili kalan tool oturumu kilitlemiyor
-- [ ] `ToolResult` yapili: basari/hata, ozet, opsiyonel veri — serbest metin degil
-- [ ] `AsunaRealtimeService` tool listesini registry'den aliyor (ASU-013'te birakilan API kullanildi)
-- [ ] ASU-044 `get_current_project` registry'ye tasinmis, davranisi bozulmamis
-- [ ] Unit testler: sema reddi, timeout, cift kayit
+- [x] Registry: kayit, listeleme, isimle cozme; ayni isim iki kez kayit olamiyor
+- [x] Her tool cagrisinda argumanlar semaya gore dogrulaniyor; gecersizse calistirilmiyor
+- [x] Her tool'un timeout'u var; asili kalan tool oturumu kilitlemiyor
+- [x] `ToolResult` yapili: basari/hata, ozet, opsiyonel veri — serbest metin degil
+- [x] `AsunaRealtimeService` tool listesini registry'den aliyor (ASU-013'te birakilan API kullanildi)
+- [x] ASU-044 `get_current_project` registry'ye tasinmis, davranisi bozulmamis
+- [x] Unit testler: sema reddi, timeout, cift kayit
+
+### Notlar (2026-08-25)
+- `src/asuna/tools/registry.ts`: `ToolRegistry` (`register` / `list` / `resolve` / `has` / `size`)
+  + `executeTool(definition, args, context, options?)`. Sozlesme **kayit aninda** zorlanir:
+  snake_case ad, min aciklama uzunlugu, 1..120 000 ms timeout, risk 2/3 icin
+  `requiresApproval: true`. Gecersiz tanim modele hic acilmaz.
+- Sema `AsunaToolDefinition.parameters` alaninda ve **tek kaynak**: hem `executeTool`
+  dogrulamasi hem SDK'ya giden JSON Schema ayni zod object'inden uretilir. Parametresiz
+  tool'lar `NO_TOOL_ARGUMENTS` (`z.strictObject({})`) kullanir — uydurma parametre
+  sessizce atilmaz, reddedilir.
+- `executeTool` hicbir kosulda `throw` etmez; her yol yapisal `ToolResult` doner.
+  `errorKind` sabitleri `TOOL_ERROR_KINDS`: `invalid_arguments` (execute **cagrilmadan**),
+  `timeout`, `aborted`, `tool_failed`. Sema hatasi ozetine reddedilen **deger** yazilmaz.
+- Timeout `Promise.race` + `AbortController`: sure dolunca `ToolContext.signal` abort edilir
+  ve cagri yapisal `timeout` sonucuyla doner ("bitmedi", "basarisiz oldu" degil — arkadaki is
+  kendiliginden durmaz). `realtime-service.ts` adaptoru SDK'nin iptal sinyalini
+  `options.signal` ile sarmalayiciya devreder.
+- Registry SDK'dan bagimsiz kaldi: `src/asuna/tools/` altinda `@openai/*` import'u yok
+  (`sdk-import-boundary.spec.ts` degismeden gecti). `toSdkTool` artik `definition.parameters`
+  kullaniyor ve `execute` govdesinde `executeTool`'u cagiriyor; `use-asuna-session`
+  `DEFAULT_ASUNA_TOOLS` yerine `asunaToolRegistry.list()` geciyor.
+- Gate'ler: `pnpm typecheck`, `pnpm lint`, `pnpm test` (43 dosya / 681 test), `pnpm format:check`
+  yesil. Rust'a dokunulmadi.
+- ASU-048 kancasi: `executeTool` icinde sema dogrulamasindan **sonra**, `run()` cagrisindan
+  **once** tek bir onay kapisi yeri var (risk + `requiresApproval` + mod → onayla/reddet).
+  ASU-050 audit yazimi da ayni sarmalayicidan beslenir (giris/cikis tek noktada).
 
 ---
 

@@ -64,7 +64,7 @@ import type {
   VoiceStateMachine,
   VoiceTransitionReason,
 } from '../state/voice-state-machine';
-import { DEFAULT_ASUNA_TOOLS } from '../tools';
+import { asunaToolRegistry } from '../tools';
 import type { SessionUsageInput, TranscriptLineInput } from '../../shared/session';
 
 // ---------------------------------------------------------------------------
@@ -534,10 +534,10 @@ function defaultCreateService(context: AsunaSessionContext): AsunaSessionPort {
   return new AsunaRealtimeService({
     config: context.config,
     stateMachine: context.stateMachine,
-    // ASU-044: Phase 1'den beri bos duran `tools` parametresi ilk kez doluyor.
-    // Hepsi risk 0 / onaysiz; MVP kurali "once salt okuma" (PROJECT.md Bolum 17).
-    // Phase 5'te (ASU-047) bu liste registry'den gelecek.
-    tools: DEFAULT_ASUNA_TOOLS,
+    // ASU-047: liste registry'den gelir — "hangi yetenekler acik?" sorusunun
+    // tek cevabi orasi. Hepsi risk 0 / onaysiz; MVP kurali "once salt okuma"
+    // (PROJECT.md Bolum 17).
+    tools: asunaToolRegistry.list(),
     // ASU-035: oturum acilmadan once Stage A baglami cekilir ve talimata
     // enjekte edilir. Hafiza kapali/bozuksa `buildSessionInstructions` durust
     // bir "hatirlamiyorum" satiriyla doner — konusma bloklanmaz.

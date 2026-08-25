@@ -31,7 +31,6 @@ import {
   tool,
   type RealtimeItem,
 } from '@openai/agents-realtime';
-import { z } from 'zod';
 
 import {
   AsunaRealtimeError,
@@ -63,6 +62,7 @@ import {
   type VoiceState,
   type VoiceTransitionReason,
 } from '../state/voice-state-machine';
+import { executeTool } from '../tools/registry';
 import type { AsunaToolDefinition, ToolContext, ToolResult } from '../tools/types';
 
 // ---------------------------------------------------------------------------
@@ -149,16 +149,6 @@ export function toTranscriptEntries(items: readonly RealtimeItem[]): TranscriptE
 }
 
 /**
- * Parametresiz tool semasi.
- *
- * ASU-044'un tek tool'u (`get_current_project`) argument almiyor ve bu bilincli:
- * modelin "hangi projeyi okuyayim?" diye bir secim yapabilmesi, kayitli kok
- * disina cikma yuzeyi acardi. Tool'a ozel semalar Phase 5'te (ASU-047) registry
- * ile birlikte gelecek; erken bir sema soyutlamasi simdi olu kod olurdu.
- */
-const NO_TOOL_PARAMETERS = z.object({});
-
-/**
  * Tool basarisiz oldugunda modele giden metnin basi.
  *
  * Hata sessizce bos bir sonuca donusmez: model reddi acikca gorur ve
@@ -167,13 +157,15 @@ const NO_TOOL_PARAMETERS = z.object({});
 export const TOOL_FAILURE_PREFIX = 'TOOL BASARISIZ.';
 
 /**
- * Tool'lara verilen calisma context'i.
+ * Tool'lara verilen calisma context'inin tabani.
  *
  * Su an iki alan da `null` ve bu **uydurma yerine bos birakma** karari:
  * `sessionId` kalici oturum kaydinin kimligidir ve bu katman onu gormuyor;
  * `projectRoot` ise ASU-049 sandbox'i ile gelecek. Yer tutucu bir deger
  * yazmak, audit kaydini dogru gorunen ama yanlis bir zincire baglardi.
- * ASU-047 registry'si ikisini de gercek degerlerle dolduracak.
+ *
+ * `signal` burada yok: iptal sinyalini `executeTool` her cagri icin kendisi
+ * uretir (timeout + SDK'nin iptali birlesir).
  */
 const TOOL_CONTEXT: ToolContext = { sessionId: null, projectRoot: null };
 
@@ -200,11 +192,18 @@ export function toModelOutput(result: ToolResult): string {
  * Modele donen sey [`ToolResult.summary`] — yani kisa, konusulabilir metin.
  * `data` alani bilerek gonderilmez: yapisal veriyi ses oturumuna dokmek hem
  * token israfi hem de "repoyu dumpleme" yasagina aykiri (PROJECT.md Bolum 15).
+ *
+ * Calistirma **registry'nin** sarmalayicisindan gecer (`executeTool`): sema
+ * dogrulamasi, timeout ve yapisal hata uretimi SDK'ya degil Asuna'ya ait.
+ * Buradaki `timeoutMs` ayni butcenin SDK tarafindaki yedegidir — sarmalayici
+ * herhangi bir nedenle donmezse oturum yine de sessizlige gomulmez.
  */
 export function toSdkTool(definition: AsunaToolDefinition): ReturnType<typeof tool> {
   if (definition.risk >= 2 && !definition.requiresApproval) {
-    // Sessizce onaysiz calistirmak yerine acilista patla: risk 2/3 bir tool'un
-    // onay istememesi `conventions.md`'nin pazarliksiz kurallarindan biri.
+    // Registry ayni kurali kayit aninda zorluyor; burada ikinci kez kontrol
+    // edilmesinin sebebi registry'siz kurulan bir listenin de sizamamasi.
+    // Risk 2/3 bir tool'un onay istememesi `conventions.md`'nin pazarliksiz
+    // kurallarindan biri: sessizce onaysiz calistirmak yerine acilista patla.
     throw new AsunaRealtimeError({
       kind: 'internal',
       cause: 'tool_approval_missing',
@@ -216,23 +215,40 @@ export function toSdkTool(definition: AsunaToolDefinition): ReturnType<typeof to
   return tool({
     name: definition.name,
     description: definition.description,
-    parameters: NO_TOOL_PARAMETERS,
+    parameters: definition.parameters,
     strict: true,
     needsApproval: definition.requiresApproval,
     timeoutMs: definition.timeoutMs,
-    execute: async (args: unknown): Promise<string> => {
+    execute: async (
+      args: unknown,
+      _runContext?: unknown,
+      details?: { readonly signal?: AbortSignal | undefined },
+    ): Promise<string> => {
       let result: ToolResult;
       try {
-        result = await definition.execute(args, TOOL_CONTEXT);
+        // SDK'nin iptal sinyali sarmalayiciya devredilir: oturum kapaninca
+        // calisan tool da haberdar olur (`ToolContext.signal`).
+        result = await executeTool(
+          definition,
+          args,
+          TOOL_CONTEXT,
+          details?.signal === undefined ? {} : { signal: details.signal },
+        );
       } catch (error) {
-        // Tool implementasyonu kendi hatasini ele almadiysa da oturum dusmez;
-        // ama olay gizlenmez (ASU-019 log formati).
+        // `executeTool` sozlesmesi geregi firlatmaz; buraya dusmek beklenmez.
+        // Yine de gizlenmez (ASU-019 log formati) ve oturum dusmez.
         const info = describeSessionError(error);
         toolLogger.warn(`\`${definition.name}\` calistirilamadi: ${info.message}`, {
           tool: definition.name,
           kind: info.kind,
         });
         return `${TOOL_FAILURE_PREFIX} ${info.message}`;
+      }
+      if (!result.ok) {
+        toolLogger.warn(`\`${definition.name}\` basarisiz: ${result.summary}`, {
+          tool: definition.name,
+          errorKind: result.errorKind,
+        });
       }
       return toModelOutput(result);
     },
@@ -354,8 +370,9 @@ export interface AsunaRealtimeServiceOptions {
   /** `loadFrontendConfig()` ciktisi — model, ses ve transkript politikasi buradan. */
   readonly config: FrontendConfig;
   /**
-   * Phase 1'de **bos gecilir**. Phase 5'te (ASU-05x) registry'den gelecek
-   * (phase-1.md ASU-013 notlari).
+   * Modele acilan tool'lar. Uretimde `asunaToolRegistry.list()` gecirilir
+   * (ASU-047) — servis kendi listesini kurmaz, registry tek kaynaktir.
+   * Verilmezse bos: tool'suz bir oturum gecerli bir durumdur (testler).
    */
   readonly tools?: readonly AsunaToolDefinition[];
   /** Paylasilan durum makinesi. Verilmezse servis kendi ornegini kurar. */
@@ -821,7 +838,8 @@ export class AsunaRealtimeService {
         this.publishTranscripts(signal.entries);
         return;
 
-      // Phase 5 (ASU-05x): Phase 1'de tool verilmedigi icin bu sinyaller gelmez.
+      // ASU-047'den beri registry'de tool var; bu sinyaller gercekten geliyor.
+      // Onay akisi (AWAITING_APPROVAL) ASU-048/053 ile doldurulacak.
       case 'tool_start':
         this.applyTransition('TOOL_PENDING', 'TOOL_CALL_STARTED', signal.type);
         this.publish({ type: 'tool_call_started', toolName: signal.toolName });

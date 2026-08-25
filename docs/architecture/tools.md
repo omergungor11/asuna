@@ -18,13 +18,26 @@ interface AsunaToolDefinition {
   description: string;
   risk: ToolRisk;
   requiresApproval: boolean;
+  timeoutMs: number;
+  parameters: ToolInputSchema; // zod object — şemanın tek kaynağı
   execute(args: unknown, ctx: ToolContext): Promise<ToolResult>;
 }
 ```
 
-Tool'lar merkezi bir **registry**'de durur. SDK'ya adaptasyon **tek yönlüdür**:
-`AsunaToolDefinition` → `tool()` (`@openai/agents-realtime`). Ters yön yok — SDK tipleri
-tool katmanına sızmaz (ADR-002 / `voice.md` Bölüm 9).
+Tool'lar merkezi bir **registry**'de durur (`src/asuna/tools/registry.ts`, ASU-047):
+`register` / `list` / `resolve`. Sözleşme **kayıt anında** zorlanır — aynı isim iki kez,
+snake_case olmayan ad, timeout'suz tanım ve onay istemeyen risk 2/3 reddedilir; geçersiz
+tanım modele hiç açılmaz.
+
+Çalıştırmanın tek meşru yolu `executeTool(definition, args, ctx, options?)`: şema
+doğrulaması (geçersizse `execute` **çağrılmaz**), `timeoutMs` + `AbortSignal`, ve her
+zaman yapısal `ToolResult`. `errorKind` sabitleri: `invalid_arguments`, `timeout`,
+`aborted`, `tool_failed`.
+
+SDK'ya adaptasyon **tek yönlüdür**: `AsunaToolDefinition` → `tool()`
+(`@openai/agents-realtime`). Ters yön yok — SDK tipleri tool katmanına sızmaz
+(ADR-002 / `voice.md` Bölüm 9); `realtime-service.ts` adaptörü `parameters`'ı SDK
+şemasına verir ve `execute` gövdesinde yine `executeTool`'u çağırır.
 
 ## 2. Risk seviyeleri
 
@@ -127,8 +140,8 @@ kozmetik değil (PROJECT.md 19 "Visible action state").
 
 | # | Açık | Nerede |
 |---|---|---|
-| T1 | `ToolContext` / `ToolResult` tiplerinin kesin şekli | ASU-047 |
-| T2 | Registry API'si: kayıt, keşif, SDK'ya adaptasyon fonksiyonu | ASU-047 |
+| ~~T1~~ | ~~`ToolContext` / `ToolResult` tiplerinin kesin şekli~~ — kapandı (ASU-047, `tools/types.ts`) | — |
+| ~~T2~~ | ~~Registry API'si: kayıt, keşif, SDK'ya adaptasyon fonksiyonu~~ — kapandı (ASU-047) | — |
 | T3 | Risk 1 için onay politikası davranışı (`safe` modda sorar mı) | ASU-048 |
 | T4 | Path sandbox implementasyonu: `realpath` + root prefix + symlink escape | ASU-049 |
 | T5 | Blocklist modülünün yeri ve glob eşleşme sırası (symlink çözümünden **sonra**) | ASU-049 |
