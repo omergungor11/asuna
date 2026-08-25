@@ -509,3 +509,244 @@ body,
   cursor: default;
   opacity: 0.55;
 }
+
+/* --- Projeler sekmesi (ASU-045) — kayit yuzeyi, dashboard degil. --- */
+
+.asuna-projects {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(520px, 100%);
+  font-size: 0.85rem;
+  /* Yol metni okunacak ve kopyalanacak; kabuktaki `user-select: none` burada gecersiz. */
+  user-select: text;
+}
+
+.asuna-projects__note,
+.asuna-projects__notice {
+  margin: 0;
+  opacity: 0.75;
+}
+
+.asuna-projects__notice[role='alert'] {
+  padding: 8px 10px;
+  background: #241417;
+  border: 1px solid #4a2126;
+  border-radius: 6px;
+  opacity: 1;
+}
+
+.asuna-projects__add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.asuna-projects__field {
+  display: flex;
+  flex: 1 1 220px;
+  align-items: center;
+  gap: 6px;
+}
+
+.asuna-projects__field span {
+  opacity: 0.6;
+}
+
+.asuna-projects__field input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 6px;
+  font: inherit;
+  font-size: 0.8rem;
+  color: inherit;
+  background: #12151d;
+  border: 1px solid #22262f;
+  border-radius: 6px;
+}
+
+.asuna-projects__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 45vh;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.asuna-project {
+  padding: 8px 10px;
+  background: #12151d;
+  border: 1px solid #22262f;
+  border-radius: 6px;
+}
+
+/* Yolu kaybolmus kayit "kayitli" gibi gorunmez. */
+.asuna-project[data-status='missing'],
+.asuna-project[data-status='unlinked'] {
+  opacity: 0.75;
+  border-color: #4a3a21;
+}
+
+.asuna-project__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.asuna-project__name {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.asuna-project__badge {
+  padding: 1px 6px;
+  font-size: 0.7rem;
+  background: #1b1f2a;
+  border-radius: 999px;
+  opacity: 0.8;
+}
+
+.asuna-project__badge--current {
+  background: #1c2a1b;
+  opacity: 1;
+}
+
+.asuna-project__path {
+  margin: 4px 0 0;
+  font-size: 0.78rem;
+  /* Uzun yollar satiri tasirmasin; duz metin olarak render edilir. */
+  overflow-wrap: anywhere;
+}
+
+.asuna-project__meta,
+.asuna-project__hint {
+  margin: 2px 0 6px;
+  font-size: 0.75rem;
+  opacity: 0.6;
+}
+
+.asuna-project__actions,
+.asuna-project__confirm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.asuna-project__confirm-text {
+  flex: 1 1 auto;
+  margin: 0;
+  font-size: 0.75rem;
+}
+
+.asuna-projects button,
+.asuna-project__actions button,
+.asuna-project__confirm button {
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 0.75rem;
+  color: inherit;
+  background: #1b1f2a;
+  border: 1px solid #2a2f3d;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.asuna-projects button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.asuna-project-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  background: #12151d;
+  border: 1px solid #22262f;
+  border-radius: 6px;
+}
+
+.asuna-project-detail__title {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.asuna-project-detail__notice,
+.asuna-project-detail__note,
+.asuna-project-detail__handoff {
+  margin: 0;
+  font-size: 0.78rem;
+  opacity: 0.75;
+}
+
+.asuna-project-detail__notice[role='alert'] {
+  padding: 6px 8px;
+  background: #241417;
+  border: 1px solid #4a2126;
+  border-radius: 6px;
+  opacity: 1;
+}
+
+.asuna-project-detail__facts {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  font-size: 0.78rem;
+}
+
+.asuna-project-detail__fact {
+  display: flex;
+  gap: 6px;
+}
+
+.asuna-project-detail__fact dt {
+  opacity: 0.6;
+}
+
+.asuna-project-detail__fact dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.asuna-project-detail__sources {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 30vh;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.asuna-project-detail__source-name {
+  display: flex;
+  gap: 6px;
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+
+.asuna-project-detail__badge {
+  padding: 0 6px;
+  font-size: 0.7rem;
+  font-weight: 400;
+  background: #1b1f2a;
+  border-radius: 999px;
+  opacity: 0.8;
+}
+
+.asuna-project-detail__excerpt {
+  margin: 2px 0 0;
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  opacity: 0.85;
+}

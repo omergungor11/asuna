@@ -112,7 +112,7 @@
 | ASU-042 | Git metadata provider | 4 | M | backend | DONE |
 | ASU-043 | `.asuna/context.json` okuma/yazma | 4 | M | backend | DONE |
 | ASU-044 | `get_current_project` tool (risk 0) | 4 | M | backend | PENDING |
-| ASU-045 | Projects UI sekmesi | 4 | M | frontend | PENDING |
+| ASU-045 | Projects UI sekmesi | 4 | M | frontend | DONE |
 | ASU-046 | **Phase 4 kabul testi** | 4 | S | test | PENDING |
 | ASU-047 | `AsunaToolDefinition` + tool registry | 5 | L | backend | PENDING |
 | ASU-048 | Risk / approval policy katmani | 5 | M | backend | PENDING |

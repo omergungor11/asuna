@@ -13,9 +13,14 @@
 
 import { useAsunaSession, type UseAsunaSessionOptions } from '../asuna/agent/use-asuna-session';
 import { describeSessionOutcome } from '../asuna/memory/session-service';
+import {
+  useCurrentProject,
+  type CurrentProjectPort,
+} from '../asuna/projects/use-current-project';
 
 import { ErrorNotice } from './error-notice';
 import { MicIndicator } from './mic-indicator';
+import { describeCurrentProject } from './project-text';
 import { TalkButton } from './talk-button';
 import { TranscriptView } from './transcript-view';
 import { VoiceStatusBadge } from './voice-status-badge';
@@ -23,10 +28,16 @@ import { VoiceStatusBadge } from './voice-status-badge';
 export interface VoicePanelProps {
   /** Testlerin sahte servis/mikrofon/config enjekte etmesi icin. */
   readonly options?: UseAsunaSessionOptions;
+  /** Guncel proje kaynagi (ASU-045); testler sahte port verir. */
+  readonly projectPort?: CurrentProjectPort;
 }
 
-export function VoicePanel({ options }: VoicePanelProps): React.JSX.Element {
+export function VoicePanel({ options, projectPort }: VoicePanelProps): React.JSX.Element {
   const session = useAsunaSession(options);
+  // "Mevcut proje" panelin guven yuzeyinin parcasi (PROJECT.md Bolum 19):
+  // Asuna hangi projede oldugunu sanip yanlis yere bakiyorsa kullanici bunu
+  // konusmadan once gormeli.
+  const project = useCurrentProject(projectPort);
   const blocked = session.error !== null && !session.error.retryable;
 
   return (
@@ -54,6 +65,10 @@ export function VoicePanel({ options }: VoicePanelProps): React.JSX.Element {
       <TranscriptView lines={session.transcript} />
 
       <dl className="asuna-panel__facts">
+        <div className="asuna-panel__fact">
+          <dt>Proje</dt>
+          <dd>{describeCurrentProject(project)}</dd>
+        </div>
         <div className="asuna-panel__fact">
           <dt>Model</dt>
           <dd>{session.model ?? '—'}</dd>

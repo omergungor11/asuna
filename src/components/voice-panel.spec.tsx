@@ -21,9 +21,31 @@ import type {
 import { MicrophoneAccessError, type MicrophoneProbe } from '../asuna/audio/microphone-access';
 import type { FrontendConfig } from '../asuna/config/frontend-config';
 import { AsunaLogger } from '../asuna/observability';
+import type { CurrentProjectPort } from '../asuna/projects/use-current-project';
 import { VoiceStateMachine } from '../asuna/state/voice-state-machine';
+import type { ProjectRecord } from '../shared/project';
 
 import { VoicePanel } from './voice-panel';
+
+const ASUNA_PROJECT: ProjectRecord = {
+  id: 'asuna',
+  name: 'Asuna',
+  path: '/Users/arlec/Work/asuna',
+  description: null,
+  status: 'active',
+  primaryLanguage: 'TypeScript',
+  framework: 'React',
+  gitRemote: null,
+  lastOpenedAt: '2026-08-24T09:30:00Z',
+  createdAt: '2026-08-01T09:30:00Z',
+  updatedAt: '2026-08-24T09:30:00Z',
+  metadataJson: '{}',
+};
+
+/** Proje kaydi ayri bir IPC yuzeyi; testte gercek `invoke`'a gidilmez. */
+const NO_PROJECTS: CurrentProjectPort = {
+  list: (): Promise<readonly ProjectRecord[]> => Promise.resolve([]),
+};
 
 const CONFIG: FrontendConfig = {
   realtimeModel: 'gpt-realtime-2.1-mini',
@@ -90,7 +112,7 @@ async function click(name: string): Promise<void> {
 
 describe('VoicePanel', () => {
   it('durum rozetini ve mikrofon gostergesini her an gosterir', () => {
-    render(<VoicePanel options={createOptions()} />);
+    render(<VoicePanel options={createOptions()} projectPort={NO_PROJECTS} />);
 
     expect(screen.getByRole('status')).toHaveTextContent('Bağlı değil');
     expect(screen.getByText('Mikrofon kapalı')).toBeInTheDocument();
@@ -98,7 +120,7 @@ describe('VoicePanel', () => {
   });
 
   it('tek buton: baglaninca "Stop" olur, tekrar basinca kapanir', async () => {
-    render(<VoicePanel options={createOptions()} />);
+    render(<VoicePanel options={createOptions()} projectPort={NO_PROJECTS} />);
 
     await click('Talk to Asuna');
 
@@ -119,6 +141,7 @@ describe('VoicePanel', () => {
         options={createOptions((): Promise<MicrophoneProbe> =>
           Promise.reject(new MicrophoneAccessError('mic_permission_denied', 'reddedildi')),
         )}
+        projectPort={NO_PROJECTS}
       />,
     );
 
@@ -132,8 +155,49 @@ describe('VoicePanel', () => {
     expect(screen.getByRole('button', { name: 'Talk to Asuna' })).toBeEnabled();
   });
 
+  /**
+   * ASU-045: "mevcut proje" overlay'de de gorunur (PROJECT.md Bolum 19).
+   * Asuna yanlis projede oldugunu saniyorsa kullanici bunu konusmadan once
+   * gormeli.
+   */
+  it('guncel projeyi gosterir; secim yoksa uydurmaz', async () => {
+    const { unmount } = render(
+      <VoicePanel options={createOptions()} projectPort={NO_PROJECTS} />,
+    );
+
+    expect(await screen.findByText('seçilmedi')).toBeInTheDocument();
+    unmount();
+
+    render(
+      <VoicePanel
+        options={createOptions()}
+        projectPort={{
+          list: (): Promise<readonly ProjectRecord[]> => Promise.resolve([ASUNA_PROJECT]),
+        }}
+      />,
+    );
+
+    expect(await screen.findByText('Asuna')).toBeInTheDocument();
+  });
+
+  it('proje kaydi okunamazsa "proje yok" gibi gostermez', async () => {
+    render(
+      <VoicePanel
+        options={createOptions()}
+        projectPort={{
+          list: (): Promise<readonly ProjectRecord[]> =>
+            Promise.reject(new Error('proje kaydi kullanilamiyor')),
+        }}
+      />,
+    );
+
+    expect(
+      await screen.findByText(/okunamadı: proje kaydi kullanilamiyor/),
+    ).toBeInTheDocument();
+  });
+
   it('sohbet arayuzu degil: metin girisi ve gonder butonu yok', () => {
-    render(<VoicePanel options={createOptions()} />);
+    render(<VoicePanel options={createOptions()} projectPort={NO_PROJECTS} />);
 
     expect(screen.queryByRole('textbox')).toBeNull();
     expect(screen.queryAllByRole('button')).toHaveLength(1);

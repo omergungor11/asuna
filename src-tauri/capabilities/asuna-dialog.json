@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "asuna-dialog",
+  "description": "Sistem DIZIN SECICI (ASU-045). Tek izin acar: `dialog:allow-open` — kullanici Projeler sekmesinde bir proje kokunu kendisi secebilsin diye. Bilerek KAPALI olanlar: `dialog:allow-save` (dosya yazma hedefi sectirmek bu ekranin isi degil), `dialog:allow-message` / `dialog:allow-ask` / `dialog:allow-confirm` (Asuna onaylari uygulama icinde, iptal edilebilir satir icinde alinir — WKWebView'de modal sistem penceresi ses oturumunu kilitler). Secici bir DOSYA OKUMA yetkisi degildir: donen sey yalnizca bir metin yoldur ve `project_add` komutuna gider; mutlak olma, var olma, symlink cozumu ve dizin olma dogrulamasi Rust tarafinda yapilir (renderer'da yapilan dogrulama guvenlik siniri olusturamaz). Dosya sistemi (`fs`) izni hala YOKTUR. Kapsam ana pencere ile sinirlidir; wildcard izin yoktur.",
+  "platforms": ["macOS"],
+  "windows": ["main"],
+  "permissions": ["dialog:allow-open"]
+}

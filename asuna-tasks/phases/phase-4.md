@@ -251,15 +251,45 @@ oturumuna dogrudan tanimlanir; Phase 5'te registry'ye tasinir.
 
 ## ASU-045: Projects UI Sekmesi
 
-**Scope**: frontend | **Boyut**: M | **Durum**: PENDING | **Bagimlilik**: ASU-040, ASU-041
+**Scope**: frontend | **Boyut**: M | **Durum**: DONE (2026-08-25) | **Bagimlilik**: ASU-040, ASU-041
 
 ### Acceptance Criteria
-- [ ] Kayitli projelerin listesi: ad, yol, dil/framework, son acilma
-- [ ] Proje ekleme / kaldirma
-- [ ] "Guncel proje" secimi ve gorunur gostergesi (overlay'de de gorunuyor)
-- [ ] Secili projenin ozeti, git branch'i ve son oturum ozeti gorunuyor
-- [ ] Missing (yolu kaybolmus) proje acikca isaretli
-- [ ] Sekme minimal tutulmus (R7)
+- [x] Kayitli projelerin listesi: ad, yol, dil/framework, son acilma
+- [x] Proje ekleme / kaldirma
+- [x] "Guncel proje" secimi ve gorunur gostergesi (overlay'de de gorunuyor)
+- [x] Secili projenin ozeti, git branch'i ve son oturum ozeti gorunuyor
+- [x] Missing (yolu kaybolmus) proje acikca isaretli
+- [x] Sekme minimal tutulmus (R7)
+
+### Uygulama notlari
+- Bilesenler: `src/components/projects-view.tsx` (container) + `project-item.tsx`,
+  `project-detail.tsx`, `project-text.ts` (saf metin katmani). Servis yuzeyi
+  `ProjectsViewPort` ile enjekte edilir; bilesen `invoke` cagirmaz.
+- **Dizin secici**: `src/asuna/projects/directory-picker.ts` (`@tauri-apps/plugin-dialog`,
+  `{ directory: true, multiple: false }`). Rust tarafinda plugin `lib.rs`'e kaydedildi ve
+  `capabilities/asuna-dialog.json` **yalnizca** `dialog:allow-open` aciyor —
+  `save`/`message`/`ask`/`confirm` bilerek kapali (modal sistem penceresi WKWebView'de ses
+  oturumunu kilitler). Secici bir dosya okuma yetkisi degil: donen metin dogrudan
+  `project_add`'e gider, dogrulamayi (mutlak olma, var olma, symlink, dizin mi) Rust yapar.
+  Fallback olarak yol elle de yazilabilir — dizin secicisi acilmayan bir ortamda sekme islevsiz
+  kalmaz.
+- **`unlinked` durustlugu**: `project_remove` `unlinked` donerse ekran "sildim" demez;
+  "kayıt kaldırıldı, hafıza etiketi korundu (N kayıt)" yazar. Kayitli kokü olmayan bir etiket
+  "guncel proje" **yapilamaz** (buton disabled — Rust da reddeder, iki kat).
+- **Detay = guncel projenin baglami**: `project_context` (ASU-044) argument almadigi icin detay
+  bir satir secimiyle degil, kullanicinin acik "güncel proje yap" eylemiyle degisir. Ekranda
+  gorunen ile Asuna'nin sesli soyleyecegi ayni komuttan besleniyor.
+  Sarmalayici `src/asuna/projects/project-context.ts` **hosgorulu ve reddetmeyen**: komut yoksa
+  ya da cevap anlasilmazsa `unavailable` doner, ekran "Detay yüklenemedi: <neden>" yazar; liste
+  ve secim calismaya devam eder.
+- **Son oturum ozeti** `session_list` (limit 1) uzerinden gelir. `SessionListItem` proje kimligi
+  tasimadigi icin bu "bu projenin son oturumu" degil, en son konusmanin ozetidir — ekranda bu
+  kapsam acikca yazili (`LAST_SESSION_SCOPE_NOTE`). Proje bazli filtre ayri bir is.
+- **Overlay gostergesi**: `VoicePanel`'e "Proje" satiri eklendi. Panel hicbir zaman unmount
+  edilmedigi icin secim degisikligini `project-events.ts` (tek satirlik pub/sub, veri tasimayan
+  sinyal) ile ogrenir ve gercegi servisten **yeniden okur**. State kutuphanesi/context
+  saglayici eklenmedi (R7).
+- Sekme minimal: arama, siralama, surukle-birak, proje duzenleme yok.
 
 ---
 

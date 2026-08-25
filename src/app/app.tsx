@@ -1,6 +1,7 @@
 import { Suspense, lazy, useState } from 'react';
 
 import { MemoryView } from '../components/memory-view';
+import { ProjectsView } from '../components/projects-view';
 import { SettingsView } from '../components/settings-view';
 import { VoicePanel } from '../components/voice-panel';
 
@@ -19,6 +20,7 @@ const DebugPanel = import.meta.env.DEV
 
 const TABS = [
   { id: 'conversation', label: 'Konuşma' },
+  { id: 'projects', label: 'Projeler' },
   { id: 'memory', label: 'Hafıza' },
   { id: 'settings', label: 'Ayarlar' },
 ] as const;
@@ -73,6 +75,20 @@ export function App(): React.JSX.Element {
       >
         <VoicePanel />
       </div>
+
+      {/* Projeler de yalnizca acikken monte olur: kapali sekme proje listesi
+          sormaz. Guncel proje secimi ses panelinde ayrica gorunur, o yuzden bu
+          panelin acik kalmasi gerekmez (ASU-045). */}
+      {tab === 'projects' && (
+        <div
+          id="asuna-panel-projects"
+          role="tabpanel"
+          aria-labelledby="asuna-tab-projects"
+          className="asuna-shell__panel"
+        >
+          <ProjectsView />
+        </div>
+      )}
 
       {tab === 'memory' && (
         <div

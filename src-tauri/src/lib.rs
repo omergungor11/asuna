@@ -71,6 +71,13 @@ pub fn run() {
     // hatasini ele almak icin `setup`'in `Result`'ina bagimli kalirdik —
     // oysa DB hatasi uygulamayi durdurmamali.
     let app = tauri::Builder::default()
+        // ASU-045: proje kokunu **kullanicinin** secmesi icin sistem dizin
+        // secici. Yalnizca `dialog:allow-open` acildi ve yalnizca ana pencere
+        // icin (`capabilities/asuna-dialog.json`); save/message/confirm izinleri
+        // bilerek kapali. Secim penceresi bir dosya okuma yetkisi DEGILDIR:
+        // secilen yol yalnizca `project_add`'e metin olarak gider, dogrulamayi
+        // (mutlak olma, var olma, symlink cozumu) Rust tarafi yapar.
+        .plugin(tauri_plugin_dialog::init())
         // Config yalnizca Rust tarafinda yasar; komutlar `State<AsunaConfig>` ile erisir.
         .manage(config)
         // Ephemeral Realtime token uretimi (ASU-011). HTTPS istemcisi ilk

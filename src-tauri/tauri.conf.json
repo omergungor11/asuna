@@ -68,7 +68,8 @@
         "asuna-session",
         "asuna-projects-read",
         "asuna-projects-write",
-        "asuna-privacy"
+        "asuna-privacy",
+        "asuna-dialog"
       ]
     }
   },

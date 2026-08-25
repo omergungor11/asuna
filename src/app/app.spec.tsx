@@ -1,8 +1,11 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
+import type * as ProjectContextModule from '../asuna/projects/project-context';
+import type * as ProjectRegistryModule from '../asuna/projects/project-registry';
 import type { DbStatus } from '../shared/db-status';
 import type { PrivacySettings } from '../shared/privacy';
+import type { ProjectRecord } from '../shared/project';
 
 import { App } from './app';
 
@@ -35,6 +38,34 @@ vi.mock('../asuna/memory/privacy-service', () => ({
   updatePrivacySettings: (): Promise<PrivacySettings> => Promise.resolve(PRIVACY),
 }));
 
+// ASU-045: proje kaydi da ayri bir IPC yuzeyi. Hem Projeler sekmesi hem de ses
+// panelindeki "mevcut proje" gostergesi bu servisten okur.
+const ASUNA_PROJECT: ProjectRecord = {
+  id: 'asuna',
+  name: 'Asuna',
+  path: '/Users/arlec/Work/asuna',
+  description: null,
+  status: 'active',
+  primaryLanguage: 'TypeScript',
+  framework: 'React',
+  gitRemote: null,
+  lastOpenedAt: '2026-08-24T09:30:00Z',
+  createdAt: '2026-08-01T09:30:00Z',
+  updatedAt: '2026-08-24T09:30:00Z',
+  metadataJson: '{}',
+};
+
+vi.mock('../asuna/projects/project-registry', async (importOriginal) => ({
+  ...(await importOriginal<typeof ProjectRegistryModule>()),
+  listProjects: (): Promise<readonly ProjectRecord[]> => Promise.resolve([ASUNA_PROJECT]),
+}));
+
+vi.mock('../asuna/projects/project-context', async (importOriginal) => ({
+  ...(await importOriginal<typeof ProjectContextModule>()),
+  fetchProjectContext: (): Promise<{ status: 'unavailable'; message: string }> =>
+    Promise.resolve({ status: 'unavailable', message: 'test ortamında komut yok' }),
+}));
+
 // Phase 0 smoke testi: test zincirinin (Vitest + jsdom + JSX + strict TS)
 // uctan uca calistigini kanitlar. Gercek davranis testleri Phase 1'de gelir.
 describe('App', () => {
@@ -65,6 +96,23 @@ describe('App', () => {
     expect(conversation).toHaveAttribute('hidden');
     // Gizli ama YIKILMAMIS: canli Realtime oturumu sekme degisiminde kopmaz.
     expect(conversation?.querySelector('.asuna-panel')).not.toBeNull();
+  });
+
+  /** ASU-045: projeler kendi sekmesinde; guncel proje ses panelinde de gorunur. */
+  it('projeler sekmesi kayitli projeleri acar, ses panelini yikmaz', async () => {
+    render(<App />);
+
+    expect(document.getElementById('asuna-panel-projects')).toBeNull();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Projeler' }));
+
+    expect(await screen.findByRole('heading', { name: 'Asuna', level: 3 })).toBeInTheDocument();
+
+    const conversation = document.getElementById('asuna-panel-conversation');
+    expect(conversation).toHaveAttribute('hidden');
+    expect(conversation?.querySelector('.asuna-panel')).not.toBeNull();
+    // Gizli panelde bile guncel proje yazili: overlay'e cikacak deger bu.
+    expect(conversation).toHaveTextContent('Asuna');
   });
 
   /** ASU-037: gizlilik kontrolleri kendi sekmesinde, ses paneli yine monte. */
