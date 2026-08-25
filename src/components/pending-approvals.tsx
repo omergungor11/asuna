@@ -61,6 +61,9 @@ export function PendingApprovals({
   onChanged,
 }: PendingApprovalsProps): React.JSX.Element | null {
   const [records, setRecords] = useState<readonly MemoryRecord[]>([]);
+  // Tarama tavana carptiysa kuyrugun tamamini gormedigimizi biliyoruz (sunucu
+  // en fazla PENDING_SCAN_LIMIT kayit doner) — bunu kullaniciya acikca soyleriz.
+  const [scanHitCap, setScanHitCap] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
@@ -79,6 +82,7 @@ export function PendingApprovals({
       (result) => {
         if (!cancelled) {
           setRecords(result.filter(isPendingApproval));
+          setScanHitCap(result.length >= PENDING_SCAN_LIMIT);
         }
       },
       () => {
@@ -86,6 +90,7 @@ export function PendingApprovals({
         // gosteriliyor. Burada sessizce bos kalir.
         if (!cancelled) {
           setRecords([]);
+          setScanHitCap(false);
         }
       },
     );
@@ -205,6 +210,12 @@ export function PendingApprovals({
           </li>
         ))}
       </ul>
+      {scanHitCap && (
+        <p className="asuna-approvals__notice">
+          Yalnızca en yeni {PENDING_SCAN_LIMIT} kayıt tarandı — kuyruğun tamamı bundan uzun
+          olabilir.
+        </p>
+      )}
     </section>
   );
 }

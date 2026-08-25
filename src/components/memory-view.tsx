@@ -302,7 +302,14 @@ export function MemoryView({
     );
   }
 
-  const showLoadMore = !loading && loadError === null && records.length >= limit;
+  // Sunucu tavani: memory_list en fazla 200 kayit doner (MAX_LIST_LIMIT, Rust tarafi).
+  // Tavana carpildiginda "Daha fazla yukle" bir sey getiremez — sessiz kalmak yerine
+  // acikca soyleriz (PROJECT.md 20: depo incelenebilir olmali). Sunucu tarafli
+  // sayfalama (hasMore/total) backlog'da.
+  const SERVER_LIST_CAP = 200;
+  const atServerCap = records.length >= SERVER_LIST_CAP;
+  const showLoadMore =
+    !loading && loadError === null && records.length >= limit && !atServerCap;
 
   return (
     <section className="asuna-memory" aria-label="Hafıza">
@@ -391,6 +398,13 @@ export function MemoryView({
         >
           Daha fazla yükle
         </button>
+      )}
+
+      {atServerCap && (
+        <p className="asuna-memory__notice">
+          En yeni {SERVER_LIST_CAP} kayıt gösteriliyor — daha eski kayıtlar için arama veya
+          filtre kullanın.
+        </p>
       )}
     </section>
   );
