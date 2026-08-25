@@ -155,6 +155,33 @@ Kurallar:
 **Stage B (semantik retrieval)** ve **Stage C (konsolidasyon)** MVP kapsamı dışı — yeterli
 memory birikip Stage A'nın yetmediği **ölçülene** kadar açılmaz.
 
+### 4.1 Uygulanan hâli (ASU-035)
+
+Kod: `src-tauri/src/db/retrieval.rs` (üretim) + `src/asuna/memory/bootstrap-context.ts`
+(prompt'a çevirme). Komut: `get_bootstrap_context` — **parametresiz**; aktif proje, tür
+politikası, sıralama ve boyut tavanı host tarafındadır, renderer değiştiremez.
+
+| Bölüm | Kaynak sorgu | Tavan |
+|---|---|---|
+| `userPreferences` | `kind = preference`, `importance DESC` | 8 kayıt |
+| `recentSession` | son `end_reason = 'completed'` + `summary IS NOT NULL` oturum | 250 kelime |
+| `relevantMemories` | proje biliniyorsa `project`+`decision` (o proje), sonra global; `importance DESC, created_at DESC` | 12 kayıt |
+| `currentProject` | — (Phase 4 / ASU-039+) | tipli ama boş |
+| `activeTasks` | — (Phase 6) | tipli ama boş |
+
+Her sorguda ortak filtre: `is_archived = 0`, süresi geçmemiş, `pendingApproval IS NOT 1`,
+`markAccessed: true`. Bu bileşim `idx_memories_stage_a` index'inin karşıladığı sorgudur.
+
+**Boyut tavanı (T3):** paket toplamı **2000 kelime**; kalem tavanları hafıza başına 120,
+oturum özeti 250 kelime. Ölçüm `ContextBudget` ile geri döner (`wordCount`, `included`,
+`dropped`, `truncated`) ve iki tarafta da log'lanır. Bütçe taşarsa **ilk taşmada durulur**;
+düşen ilk şey en düşük önemli ilgili hafızalardır — tercihler ve son oturum özeti korunur.
+
+Prompt tarafı: bölümler `buildAsunaInstructions({ additionalSections })` ile çekirdek
+prompt'un ardına eklenir. **Bağlam boşsa** bölüm eklenmez ama prompt'a açık bir satır girer
+("Kalıcı hafıza boş — ... hatırlıyormuş gibi davranma"); kapalı hafıza ve okunamayan hafıza
+için ayrı iki cümle vardır. Hafıza okunamazsa konuşma **bloklanmaz**.
+
 ## 5. Gizlilik kancaları
 
 | Kontrol | Değişken / mekanizma |
@@ -173,7 +200,7 @@ Detaylı checklist: [`asuna-config/security.md`](../../asuna-config/security.md)
 |---|---|---|
 | ~~T1~~ | ~~Gerçek `CREATE TABLE` DDL'leri~~ — **kapandı (ASU-030)**: `src-tauri/src/db/migrations/001_memories_sessions.up.sql` | ASU-029/030 |
 | ~~T2~~ | ~~`memories.kind` enum değerleri~~ — **kapandı (ASU-030)**: Bölüm 2.1 | ASU-030 |
-| T3 | Stage A sıralama formülü + context boyut tavanı | ASU-035 |
+| ~~T3~~ | ~~Stage A sıralama formülü + context boyut tavanı~~ — **kapandı (ASU-035)**: Bölüm 4.1 | ASU-035 |
 | T4 | Memory extraction promptu ve kaydetme eşikleri (PROJECT.md 26) | ASU-034 |
 | T5 | `sessions` token/maliyet alanlarının şekli — skaler kolonlar + `usage_json` ile geçici olarak karşılandı; `Usage.inputTokensDetails` anahtarları runtime'da doğrulanınca kolon açılacak (`voice.md` V9) | ASU-032 |
 | T6 | Export/yedekleme: WAL yüzünden 3 dosya var → `VACUUM INTO` yolu | Phase 3 export |

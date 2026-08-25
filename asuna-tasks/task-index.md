@@ -11,13 +11,16 @@
 | 0 | Arastirma + Scaffold | 11 | 11 | 0 | 0 | 0 | 0 |
 | 1 | Realtime Voice (dikey dilim) | 11 | 11 | 0 | 0 | 0 | 0 |
 | 2 | Wake Word | 8 | 1 | 0 | 0 | 7 | 0 |
-| 3 | Memory | 10 | 7 | 0 | 0 | 3 | 0 |
+| 3 | Memory | 10 | 9 | 0 | 0 | 1 | 0 |
 | 4 | Project Context | 8 | 0 | 0 | 0 | 8 | 0 |
 | 5 | One Useful Action (Tools) | 9 | 0 | 0 | 0 | 9 | 0 |
 | 6 | Focus Recovery (MVP) | 8 | 0 | 0 | 0 | 8 | 0 |
-| **Total** | | **65** | **30** | **0** | **0** | **35** | **0** |
+| **Total** | | **65** | **32** | **0** | **0** | **33** | **0** |
 
-**Progress**: 30/65 (46%)
+**Progress**: 32/65 (49%)
+
+> Phase 3 implementasyonu ASU-035 ile kapandi (2026-08-25): ASU-029..ASU-037 DONE.
+> Acik olan tek madde **ASU-038** — M3 manuel kabul testi (gercek mikrofon + uygulama restart'i).
 
 > ASU-008b spike tamamlandi (2026-08-24): motor/lisans/CPU/bundle dogrulandi, ADR-004 accepted
 > (kapsami daraltilmis). ACIK: model+ifade secimi — gigaspeech-3.3M "Hey Asuna"yi tasimiyor (R2).
@@ -91,7 +94,7 @@
 | ASU-032 | Session kaydi + opsiyonel transcript persist | 3 | M | backend | DONE |
 | ASU-033 | Session summary pipeline | 3 | M | backend | DONE |
 | ASU-034 | Memory extraction pipeline (PROJECT.md Bolum 26) | 3 | L | backend | DONE |
-| ASU-035 | Stage A deterministik retrieval + `SessionBootstrapContext` | 3 | L | backend | PENDING |
+| ASU-035 | Stage A deterministik retrieval + `SessionBootstrapContext` | 3 | L | backend | DONE |
 | ASU-036 | Memory UI (listele / ara / sil / arsivle) | 3 | M | frontend | DONE |
 | ASU-037 | Memory gizlilik kontrolleri (toggle'lar) | 3 | S | frontend | DONE |
 | ASU-038 | **M3 kabul testi** — restart sonrasi hatirlama | 3 | M | test | PENDING |

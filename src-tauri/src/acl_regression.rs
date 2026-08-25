@@ -95,6 +95,7 @@ fn build_test_app_with_privacy(db_state: DbState, privacy: PrivacyState) -> App<
             crate::db::memory_repository::memory_archive,
             crate::db::memory_repository::memory_delete,
             crate::db::memory_repository::memory_delete_all,
+            crate::db::retrieval::get_bootstrap_context,
             crate::db::session_repository::session_start,
             crate::db::session_repository::session_finalize,
             crate::privacy::get_privacy_settings,
@@ -345,6 +346,85 @@ fn memory_commands_work_end_to_end_over_the_real_acl() {
     assert_eq!(empty, "[]", "yanit: {empty}");
 }
 
+/// **ASU-035 kabul kriteri**: oturum acilis baglami gercek ACL uzerinden
+/// uretiliyor, yazilan hafizayi iceriyor ve **silinen** hafizayi icermiyor.
+///
+/// Komut bilerek parametresiz: renderer'in retrieval politikasina (proje,
+/// siralama, boyut tavani) dokunma yolu yok.
+#[test]
+fn the_bootstrap_context_reflects_the_store_over_the_real_acl() {
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+
+    let empty = invoke(&webview, "get_bootstrap_context").expect("baglam komutu calismali");
+    assert!(
+        empty.contains("\"memoryAvailable\":true") && empty.contains("\"relevantMemories\":[]"),
+        "bos depoda beklenmeyen baglam: {empty}"
+    );
+
+    let created = invoke_with(&webview, "memory_create", memory_draft_args())
+        .expect("memory_create calismali");
+    let id = serde_json::from_str::<serde_json::Value>(&created).expect("JSON")["record"]["id"]
+        .as_i64()
+        .expect("kayit kimligi");
+
+    let filled = invoke(&webview, "get_bootstrap_context").expect("baglam komutu calismali");
+    assert!(
+        filled.contains("Wake word yerel kalir"),
+        "yazilan hafiza baglama girmedi: {filled}"
+    );
+
+    invoke_with(&webview, "memory_delete", serde_json::json!({ "id": id }))
+        .expect("memory_delete calismali");
+
+    // ASU-036'dan devralinan kriter: silinen hafiza bir sonraki oturumun
+    // baglamina **girmez**. Onbellek yok — baglam her acilista yeniden okunur.
+    let after_delete = invoke(&webview, "get_bootstrap_context").expect("baglam komutu calismali");
+    assert!(
+        !after_delete.contains("Wake word yerel kalir"),
+        "silinen hafiza hala baglamda: {after_delete}"
+    );
+    assert!(
+        after_delete.contains("\"relevantMemories\":[]"),
+        "beklenmeyen baglam: {after_delete}"
+    );
+}
+
+/// Hafiza kapaliyken baglam **bos ama durust** doner: `memoryAvailable: false`.
+/// Konusma bloklanmaz, hata da uretilmez (kapali olmak bir ariza degil).
+#[test]
+fn the_bootstrap_context_is_empty_and_marked_when_memory_is_disabled() {
+    let app = build_test_app(); // DbState::Disabled
+    let webview = main_webview(&app);
+
+    let context = invoke(&webview, "get_bootstrap_context").expect("komut hata vermemeli");
+    assert!(
+        context.contains("\"memoryAvailable\":false"),
+        "beklenmeyen yanit: {context}"
+    );
+    assert!(
+        context.contains("\"relevantMemories\":[]") && context.contains("\"recentSession\":null"),
+        "beklenmeyen yanit: {context}"
+    );
+}
+
+/// Bozuk hafiza sessizce "hatirlayacak bir sey yok"a donusmez: baglam komutu
+/// da `unavailable` kodlu tipli hata verir (PROJECT.md Bolum 30).
+#[test]
+fn the_bootstrap_context_surfaces_a_typed_error_when_the_database_is_unavailable() {
+    let app = build_test_app_with(DbState::Unavailable {
+        reason: "sema migration'lari uygulanamadi".to_owned(),
+    });
+    let webview = main_webview(&app);
+
+    let error = invoke(&webview, "get_bootstrap_context").expect_err("hata bekleniyordu");
+    assert!(
+        !is_acl_denial(&error),
+        "ACL reddi degil, ariza bekleniyordu: {error}"
+    );
+    assert!(error.contains("unavailable"), "beklenmeyen hata: {error}");
+}
+
 /// **ASU-031 kabul kriteri**: `ASUNA_MEMORY_ENABLED=false` iken servis yazma
 /// yapmaz, okuma bos doner ve uygulama calismaya devam eder.
 ///
@@ -528,6 +608,40 @@ fn turning_durable_memory_off_at_runtime_stops_writes_without_a_restart() {
         deleted.contains("\"status\":\"deleted\""),
         "yanit: {deleted}"
     );
+}
+
+/// **ASU-035 + ASU-037**: kullanici hafizayi calisma zamaninda kapatinca bir
+/// sonraki oturum gecmisi **hatirlamaz** — baglam bos ve `memoryAvailable`
+/// `false` doner.
+///
+/// Kayitlar silinmez ve Memory UI'da gorunmeye devam eder: incelemek ile
+/// konusmaya tasimak ayri seylerdir. Anahtarin adi "durable memory"; kapatildigi
+/// anda modele gecmis tasimak, kullanicinin verdigi karari bosa cikarirdi.
+#[test]
+fn turning_memory_off_at_runtime_empties_the_next_session_context() {
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+
+    invoke_with(&webview, "memory_create", memory_draft_args()).expect("yazma calismali");
+    let before = invoke(&webview, "get_bootstrap_context").expect("baglam");
+    assert!(before.contains("Wake word yerel kalir"), "yanit: {before}");
+
+    invoke_with(
+        &webview,
+        "set_privacy_settings",
+        serde_json::json!({ "patch": { "memoryEnabled": false } }),
+    )
+    .expect("kapatma kabul edilmeli");
+
+    let after = invoke(&webview, "get_bootstrap_context").expect("baglam");
+    assert!(
+        after.contains("\"memoryAvailable\":false") && !after.contains("Wake word yerel kalir"),
+        "kapali hafiza baglami tasimaya devam ediyor: {after}"
+    );
+
+    // Kayit **duruyor**: kapatmak silmek degil (Memory UI hala gosterir).
+    let listed = invoke_with(&webview, "memory_list", serde_json::Value::Null).expect("okuma");
+    assert!(listed.contains("Wake word yerel kalir"), "yanit: {listed}");
 }
 
 /// Acilista kapatilmis bir anahtar calisma zamaninda **acilamaz**; istek tipli

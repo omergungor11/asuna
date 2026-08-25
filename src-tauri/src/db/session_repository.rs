@@ -418,6 +418,41 @@ pub fn attach_usage(
     record.ok_or(StoreError::NotFound)
 }
 
+/// Ozeti yazilmis, **temiz kapanmis** en son oturum (ASU-035 Stage A girdisi).
+///
+/// Uc kosul birlikte aranir ve ucu de bilincli:
+///
+/// - `ended_at IS NOT NULL` — hala acik bir oturumun ozeti yoktur.
+/// - `summary IS NOT NULL` — ozet uretimi basarisiz olduysa (ag hatasi) o
+///   oturumdan tasinacak bir bilgi yok; bir onceki ozete duselim.
+/// - `end_reason = 'completed'` — yarim kalan (`abandoned`) oturumun `summary`
+///   alani zaten bostur; hata ile biten (`error`) oturumun ozeti ise eksik bir
+///   konusmayi anlatir. Sonraki oturuma "gecen sefer sunu konustuk" diye
+///   eksik/yanlis bir ozet tasimak, hic tasimamaktan kotudur.
+///
+/// `ORDER BY ended_at DESC, id DESC`: zaman damgasi saniye hassasiyetinde
+/// (bkz. [`clock`]); ayni saniyede kapanan iki kaydin sirasi `id` ile cozulur.
+pub fn latest_completed_summary(db: &AsunaDb) -> Result<Option<SessionRecord>, StoreError> {
+    db.with_connection(|connection| {
+        connection
+            .query_row(
+                &format!(
+                    "SELECT {} FROM sessions
+                      WHERE ended_at IS NOT NULL
+                        AND summary IS NOT NULL
+                        AND end_reason = ?1
+                      ORDER BY ended_at DESC, id DESC
+                      LIMIT 1",
+                    SessionRecord::select_columns()
+                ),
+                params![SessionEndReason::Completed],
+                SessionRecord::from_row,
+            )
+            .optional()
+    })
+    .map_err(|error| StoreError::storage(error, "session_recent"))
+}
+
 /// Tek oturumu kimligiyle okur.
 pub fn get_by_id(db: &AsunaDb, id: i64) -> Result<Option<SessionRecord>, StoreError> {
     db.with_connection(|connection| load(connection, id))

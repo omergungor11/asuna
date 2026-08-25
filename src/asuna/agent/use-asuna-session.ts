@@ -46,6 +46,7 @@ import { registerWindowCloseHandler } from './window-lifecycle';
 import { probeMicrophoneAccess, type MicrophoneProbe } from '../audio/microphone-access';
 import { loadFrontendConfig } from '../config/config.service';
 import { describeTurnDetection, type FrontendConfig } from '../config/frontend-config';
+import { buildSessionInstructions } from '../memory/bootstrap-context';
 import { SessionRecorder, type SessionOutcome } from '../memory/session-service';
 import {
   createLoggedVoiceStateMachine,
@@ -525,6 +526,10 @@ function defaultCreateService(context: AsunaSessionContext): AsunaSessionPort {
   return new AsunaRealtimeService({
     config: context.config,
     stateMachine: context.stateMachine,
+    // ASU-035: oturum acilmadan once Stage A baglami cekilir ve talimata
+    // enjekte edilir. Hafiza kapali/bozuksa `buildSessionInstructions` durust
+    // bir "hatirlamiyorum" satiriyla doner — konusma bloklanmaz.
+    prepareInstructions: (): Promise<string> => buildSessionInstructions(),
   });
 }
 

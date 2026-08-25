@@ -13,6 +13,12 @@
 >
 > **Ilke (PROJECT.md Bolum 5.3 / Bolum 14):** Tum konusmayi sonsuza kadar saklamak hafiza degildir.
 > Working context ile durable memory ayridir. Her working-context maddesi kalici hafizaya terfi etmez.
+>
+> **Durum (2026-08-25):** ASU-035 ile birlikte **Phase 3'un implementasyon halkasi kapandi**
+> (ASU-029..ASU-037 DONE). Geriye yalnizca **ASU-038** kaldi: M3 manuel kabul testi — gercek
+> mikrofon, gercek Realtime oturumu ve gercek uygulama yeniden baslatmasi gerektirir, otomatik
+> testle karsilanamaz. Yazma yolu (oturum → ozet → cikarim) ve okuma yolu (Stage A retrieval →
+> prompt enjeksiyonu) artik uctan uca bagli.
 
 ---
 
@@ -352,26 +358,78 @@ Bu, "never invent memories" ilkesinin muhendislik karsiligidir.
 
 ## ASU-035: Stage A Deterministik Retrieval + `SessionBootstrapContext`
 
-**Scope**: backend | **Boyut**: L | **Durum**: PENDING | **Bagimlilik**: ASU-034
+**Scope**: backend | **Boyut**: L | **Durum**: DONE (2026-08-25) | **Bagimlilik**: ASU-034
 
 ### Aciklama
 PROJECT.md Bolum 13 Stage A + Bolum 25. Embedding **yok** — Phase 3 deterministik kalir.
 
 ### Acceptance Criteria
-- [ ] `SessionBootstrapContext` uretiliyor: userPreferences, currentProject (Phase 4'te dolacak),
+- [x] `SessionBootstrapContext` uretiliyor: userPreferences, currentProject (Phase 4'te dolacak),
       recentSession, activeTasks (Phase 6'da dolacak), relevantMemories
-- [ ] Stage A kurallari: proje biliniyorsa proje ozeti + son proje kararlari + son oturum ozeti
-- [ ] Proje bilinmiyorsa: global tercihler + son oturum ozeti ile siniri korunmus baglam
-- [ ] Baglam paketi boyutu sinirli ve olculuyor (PROJECT.md Bolum 25: "Do not attach huge raw histories")
-- [ ] Baglam `buildAsunaInstructions(context)` uzerinden prompt'a enjekte ediliyor (ASU-012 ile birlesir)
-- [ ] Hicbir hafiza yoksa Asuna "hatirliyorum" gibi davranmiyor — baglam bos gecerse prompt bunu belirtiyor
-- [ ] Unit testler: siralama/oncelik kurallari, boyut siniri, bos durum
+      — `src-tauri/src/db/retrieval.rs`; `currentProject`/`activeTasks` **tipli ama bos**
+        (bkz. Notlar). Komut: `get_bootstrap_context` (okuma capability'si, ACL 3 adim)
+- [x] Stage A kurallari: proje biliniyorsa proje ozeti + son proje kararlari + son oturum ozeti
+      — `build_bootstrap_context(db, project_id, now)`: proje verildiginde once o projenin
+        `project` + `decision` kayitlari, sonra global kume (dedup'li).
+        **Cagrilan taraf Phase 4'e kadar `None` veriyor**; kod yolu yazildi ve test edildi
+        (`project_decisions_come_first_when_the_project_is_known`)
+- [x] Proje bilinmiyorsa: global tercihler + son oturum ozeti ile siniri korunmus baglam
+      — tercihler ayri bolum (`kind = preference`, en fazla 8), ilgili hafizalar onem sirali
+        (en fazla 12); `working_context` / `tool_state` **hicbir zaman** girmez
+- [x] Baglam paketi boyutu sinirli ve olculuyor (PROJECT.md Bolum 25: "Do not attach huge raw histories")
+      — `CONTEXT_WORD_LIMIT = 2000` kelime + kalem tavanlari (hafiza 120, oturum ozeti 250).
+        Olcum `ContextBudget` ile geri doner (`wordCount`, `included`, `dropped`, `truncated`)
+        ve hem Rust hem TS tarafinda log'lanir
+- [x] Baglam `buildAsunaInstructions(context)` uzerinden prompt'a enjekte ediliyor (ASU-012 ile birlesir)
+      — `src/asuna/memory/bootstrap-context.ts` → `additionalSections`; enjeksiyon noktasi
+        `AsunaRealtimeService.prepareInstructions` (her `connect()` oncesi **taze**)
+- [x] Hicbir hafiza yoksa Asuna "hatirliyorum" gibi davranmiyor — baglam bos gecerse prompt bunu belirtiyor
+      — `EMPTY_MEMORY_NOTICE`: "Kalıcı hafıza boş — geçmiş konuşma hatırlamıyorsun,
+        hatırlıyormuş gibi davranma." Kapali hafiza ve okunamayan hafiza icin **ayri** iki cumle
+- [x] Unit testler: siralama/oncelik kurallari, boyut siniri, bos durum
+      — Rust: `db::retrieval::tests` (siralama, proje onceligi, pending/arsiv/expired dislama,
+        silme sonrasi, butce tasmasi, bos durum) + `acl_regression` uzerinden 4 IPC testi.
+        TS: `bootstrap-context.spec.ts` (12 test) + `realtime-service.spec.ts` (3 test)
 
 ### Notlar
 - **ASU-034 sozlesmesi**: onay bekleyen hafizalar retrieval'a **girmez**. Stage A filtresi
   `json_extract(metadata_json, '$.pendingApproval') IS NOT 1` (anahtar adi:
   `extraction::PENDING_APPROVAL_KEY`). Elle olusturulan kayitlarda anahtar yoktur ve bu kayitlar
   onay beklemez — kosul `IS NOT 1` bilerek boyle yazildi, `= 0` degil.
+  → Uygulandi: `MemoryFilter::exclude_pending_approval` (varsayilan `false`). **Memory UI'in
+  davranisi degismedi**: onay bekleyenler listede gorunmeye devam ediyor; yalnizca retrieval
+  `true` veriyor.
+- **`MemoryRecord` degil `ContextMemory` donuluyor.** Baglam bir DB satiri degil, kirpilmis bir
+  prompt parcasi. Satiri dondurup icerigini kisaltmak "satir buydu" yalanini uretirdi; burada
+  kirpma `truncated` ile gorunur ve `metadata_json` / `confidence` gibi alanlar modele hic gitmez.
+- **Boyut tavani neden 2000 kelime.** Enjekte edilen metin **her turda** yeniden faturalanir
+  (voice.md Bolum 6); ~2000 kelime kabaca 3 bin token'lik sabit bir yuk. Kayit sayisi tavanlari
+  (8 tercih + 12 hafiza) tek basina yetmiyor: kalem tavanlariyla birlikte en kotu durum ~2700
+  kelime, yani kelime butcesi gercekten baglayici. Tasma **ilk tasmada durur** — "belki daha
+  kucugu sigar" diye aramak, sirasi onem olan bir listeyi sessizce yeniden siralardi. Once
+  dusen: en dusuk onemli ilgili hafizalar; tercihler ve son oturum ozeti korunur.
+- **`currentProject` / `activeTasks` neden simdiden sozlesmede.** Bos donuyorlar ama tipleri var:
+  Phase 4/6'da alan eklemek renderer sozlesmesini **ve** prompt bicimini birlikte degistirirdi.
+  Bos donmek "bilmiyorum"un durust hali; uydurulmus bir proje ozeti degil.
+- **Talimat oturum basina uretilir, servis omru boyunca degil.** `AsunaRealtimeService`
+  kurucusundaki sabit `instructions` ikinci oturumda **eski** hafizayi enjekte ederdi (ozet ve
+  cikarim kapanista calisiyor). Yeni `prepareInstructions` kancasi her `connect()` oncesi bir kez
+  cagrilir — retry'larda tekrar cagrilmaz (denemeler arasi prompt degismesin).
+- **Baglam okunamazsa konusma bloklanmaz.** `unavailable` / ACL / IPC hatasi durumunda oturum
+  yine acilir; prompt'a "hafiza su an okunamiyor, hatirliyormus gibi davranma" satiri girer ve
+  neden log'a duser. Sessiz yutma yok, kapali kapi da yok (PROJECT.md Bolum 30).
+- **Calisma zamaninda kapatilan hafiza baglam uretmez.** `get_bootstrap_context` `PrivacyState`e
+  bakar; kapaliyken `memoryAvailable: false` ile bos doner. Kayitlar **silinmez** ve Memory UI'da
+  gorunmeye devam eder — incelemek ile konusmaya tasimak ayri seyler (ASU-037 ile tutarli:
+  anahtar "daha az hatirla" yonunu kapatmaz).
+- **`markAccessed: true`.** Baglama girmek erisimdir; liste goruntulemek degildir (ASU-036 notu).
+  Aday kumesi `limit` ile dar oldugu icin "okundu ama butceye sigmadi" nadir bir kenar durum ve
+  yaslandirma icin yine de dogru sinyal.
+- **Son oturum ozeti yalnizca `end_reason = 'completed'` kayitlardan.** `abandoned` oturumlarin
+  `summary` alani zaten bos; `error` ile bitenin ozeti eksik bir konusmayi anlatir. Eksik/yanlis
+  bir "gecen sefer sunu konustuk" cumlesi, hic ozet olmamasindan kotudur.
+- **GIZLILIK**: log satirlari **sayi** tasir (kac kayit, kac kelime). Hafiza basligi ya da icerigi
+  ne Rust log'una ne renderer log'una yazilir.
 
 ---
 
@@ -394,10 +452,14 @@ checklist maddesi — opsiyonel degil.
         canli ses oturumu arkada calisiyor olabilir)
 - [x] Bir hafizanin hangi oturumdan geldigi gorulebiliyor
       — `source_session_id` her satirda: "Oturum #7" ya da acikca "Kaynak oturum bilinmiyor"
-- [~] Silinen hafiza sonraki oturumun baglamina girmiyor (dogrulanmis)
-      — **ASU-035 ile birlikte** kapanir: retrieval/bootstrap katmani orada yaziliyor.
-        Bu task'ta dogrulanan: silme sonrasi liste depodan **yeniden okunuyor**, silinen
-        kayit ekranda kalmiyor (`onaydan sonra siler ve liste tutarli kalir` testi)
+- [x] Silinen hafiza sonraki oturumun baglamina girmiyor (dogrulanmis)
+      — **ASU-035 ile kapandi**. Bu task'ta dogrulanan: silme sonrasi liste depodan yeniden
+        okunuyor, silinen kayit ekranda kalmiyor (`onaydan sonra siler ve liste tutarli kalir`).
+        ASU-035'te eklenen kanit: `db::retrieval::tests::
+        a_deleted_memory_never_reaches_the_next_session_context` (repository ucu) ve
+        `acl_regression::the_bootstrap_context_reflects_the_store_over_the_real_acl`
+        (gercek ACL uzerinden: yaz → baglamda gor → sil → baglamda **yok**).
+        Onbellek yok; baglam her oturum acilisinda depodan yeniden okunuyor
 - [x] Liste buyudugunde UI donmuyor (sayfalama veya sanal liste)
       — "son N + daha fazla yukle": `limit` tavani 25'er buyur, sanal liste kutuphanesi yok
 
@@ -488,3 +550,24 @@ PROJECT.md Bolum 31'deki "Memory" manuel kabul testi.
 - [ ] Silindikten sonra ayni soru sorulunca Asuna **uydurmuyor**, bilmedigini soyluyor
 - [ ] `ASUNA_MEMORY_ENABLED=false` ile ayni akis calisiyor (hafizasiz ama coken degil)
 - [ ] Manuel senaryo `asuna-config/testing.md`'ye eklenmis
+
+### Hazirlik (ASU-035 devri)
+Otomatik testler zinciri **kod ucunda** kapatti; ASU-038'in isi bunu gercek ses/restart ile
+dogrulamak. Testi kosarken bakilacak yerler:
+
+- **Baglam gercekten enjekte edildi mi?** Dev konsolunda `memory-context` scope'lu satir:
+  `Oturum baglami hazir.` + `wordCount` / `preferences` / `relevantMemories` sayilari. Rust
+  tarafinda ayni olcum: `[asuna] Stage A baglami: N/2000 kelime, ...`. Iki satir da yoksa
+  baglam cekilmemistir.
+- **Hafiza bos oldugunda** prompt'a `Kalıcı hafıza boş — ...` satiri girer; Asuna'nin
+  "hatirliyorum" demesi bu asamada **bug**'dir, ASU-035 kriteri.
+- **Silme sonrasi** yeni oturum acmak yeterli: baglam onbelleklenmiyor, her `connect()`
+  yeniden okuyor. Ayni uygulama calisirken bile ikinci oturum guncel hafizayi gorur.
+- **Ilk oturumda hafiza olusmasi** ASU-033/034'e bagli: ozet yazilmadan cikarim calismaz ve
+  ozet icin konusmanin yeterince uzun olmasi gerekir (`summary` skip kurallari). Kisa bir
+  "merhaba" oturumundan hafiza cikmamasi beklenen davranistir.
+- **`ASUNA_MEMORY_ENABLED=false`** yolunda `get_bootstrap_context` `memoryAvailable: false`
+  doner; oturum acilir, prompt "hafiza kapali" satirini tasir, hicbir DB dosyasi olusmaz.
+- Hassas turlerden (`profile`, `relationship`) cikan hafizalar `pendingApproval` ile gelir ve
+  **onaylanana kadar** baglama girmez — "kaydettim ama hatirlamiyor" gorunumu bu ise beklenen
+  davranistir; Ayarlar > onay bekleyenler ekranindan onaylanmali.

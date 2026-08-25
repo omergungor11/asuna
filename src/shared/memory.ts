@@ -199,6 +199,14 @@ export interface MemoryFilter {
   /** `title` / `content` / `summary` icinde alt dize aramasi. */
   readonly search?: string;
   readonly includeExpired?: boolean;
+  /**
+   * `true` ise kullanici onayi bekleyen kayitlar elenir (ASU-034/ASU-035).
+   *
+   * Varsayilan `false`: Memory UI onay bekleyenleri **gormeye devam etmeli**
+   * (kullanici onlari inceleyip onaylayabilsin). Stage A retrieval'i Rust
+   * tarafinda `true` verir — onaylanmamis hafiza modelin baglamina girmez.
+   */
+  readonly excludePendingApproval?: boolean;
   readonly sort?: MemorySort;
   readonly limit?: number;
   /**

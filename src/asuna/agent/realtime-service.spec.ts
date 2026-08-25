@@ -245,6 +245,69 @@ describe('AsunaRealtimeService — yasam dongusu', () => {
     expect(spec?.instructions).toBe(buildAsunaInstructions());
   });
 
+  /**
+   * ASU-035: oturum baglami her `connect()` oncesi **taze** uretilir. Servis
+   * omru boyunca sabit bir talimat, ikinci oturumda eski hafizayi enjekte
+   * etmek demekti (ozet + cikarim kapanista calisiyor).
+   */
+  it('talimat her baglantida yeniden uretilir (baglam enjeksiyonu)', async () => {
+    let call = 0;
+    const harness = createHarness({
+      service: {
+        prepareInstructions: (): Promise<string> => {
+          call += 1;
+          return Promise.resolve(`TALIMAT-${call.toString()}`);
+        },
+      },
+    });
+
+    await harness.service.connect();
+    harness.service.disconnect();
+    await harness.service.connect();
+
+    expect(harness.sessions[0]?.spec.instructions).toBe('TALIMAT-1');
+    expect(harness.sessions[1]?.spec.instructions).toBe('TALIMAT-2');
+  });
+
+  /** Retry'lar ayni talimatla denenir: baglam oturum basina bir kez cekilir. */
+  it('yeniden denemede baglam tekrar cekilmez', async () => {
+    let call = 0;
+    const harness = createHarness({
+      connectBehaviours: [
+        (): Promise<void> => Promise.reject(new Error('gecici hata')),
+        (): Promise<void> => Promise.resolve(),
+      ],
+      service: {
+        prepareInstructions: (): Promise<string> => {
+          call += 1;
+          return Promise.resolve(`TALIMAT-${call.toString()}`);
+        },
+      },
+    });
+
+    await harness.service.connect();
+
+    expect(call).toBe(1);
+    expect(harness.sessions[1]?.spec.instructions).toBe('TALIMAT-1');
+  });
+
+  /**
+   * Baglam uretimi patlarsa konusma **bloklanmaz**: cekirdek talimatla devam
+   * edilir ve olay gorunur kalir (sessiz yutma yok).
+   */
+  it('baglam uretimi patlarsa cekirdek talimatla devam eder', async () => {
+    const harness = createHarness({
+      service: {
+        prepareInstructions: (): Promise<string> => Promise.reject(new Error('baglam yok')),
+      },
+    });
+
+    await harness.service.connect();
+
+    expect(harness.sessions[0]?.spec.instructions).toBe(buildAsunaInstructions());
+    expect(eventTypes(harness.events)).toEqual(['error', 'connecting', 'connected']);
+  });
+
   it('turn detection semantic_vad config`inden kuruluyor (ASU-064)', async () => {
     const harness = createHarness({
       config: { ...CONFIG, turnDetection: 'semantic_vad', vadEagerness: 'low' },

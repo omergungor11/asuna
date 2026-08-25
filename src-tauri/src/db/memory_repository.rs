@@ -184,6 +184,14 @@ pub struct MemoryFilter {
     /// `true` ise suresi dolmus kayitlar da doner (inceleme/silme icin).
     #[serde(default)]
     pub include_expired: bool,
+    /// `true` ise kullanici onayi bekleyen kayitlar **elenir** (ASU-034/ASU-035).
+    ///
+    /// Varsayilan `false` bilincli: Memory UI onay bekleyenleri **gormeye devam
+    /// etmeli** (kullanici onlari inceleyip onaylayabilsin/silebilsin,
+    /// PROJECT.md Bolum 20). Stage A retrieval ise `true` verir — onaylanmamis
+    /// bir hafiza modelin baglamina girmez.
+    #[serde(default)]
+    pub exclude_pending_approval: bool,
     #[serde(default)]
     pub sort: MemorySort,
     #[serde(default)]
@@ -493,6 +501,17 @@ fn build_list_query(filter: &MemoryFilter, now: &str) -> Result<ListQuery, Store
     if !filter.include_expired {
         conditions.push("(expires_at IS NULL OR expires_at > ?)".to_owned());
         params.push(Value::Text(now.to_owned()));
+    }
+
+    if filter.exclude_pending_approval {
+        // `IS NOT 1`, `= 0` DEGIL. Elle (Memory UI) olusturulan kayitlarda
+        // anahtar hic yoktur ve `json_extract` `NULL` doner; `= 0` bu kayitlarin
+        // hepsini sessizce elerdi — oysa kullanicinin kendi yazdigi hafiza onay
+        // beklemez. SQLite'ta `NULL IS NOT 1` -> 1 (uc degerli mantik degil).
+        conditions.push(format!(
+            "json_extract(metadata_json, '$.{}') IS NOT 1",
+            crate::extraction::PENDING_APPROVAL_KEY
+        ));
     }
 
     let where_clause = if conditions.is_empty() {
@@ -1136,6 +1155,51 @@ mod tests {
             titles(&records),
             ["Baska fikir", "Kisa cevap", "Wake word yerel"]
         );
+    }
+
+    /// **ASU-034 sozlesmesi / ASU-035 filtresi**: `excludePendingApproval` yalnizca
+    /// bayragi **`true`** olan kayitlari eler.
+    ///
+    /// Kritik ayrim: elle (Memory UI) olusturulan kayitlarda anahtar hic yoktur ve
+    /// bu kayitlar onay beklemez. Kosul `IS NOT 1` bu yuzden; `= 0` yazilsaydi
+    /// kullanicinin kendi yazdigi her hafiza sessizce retrieval disinda kalirdi.
+    #[test]
+    fn pending_approval_filter_only_drops_the_flagged_records() {
+        let db = fresh_db();
+        create(
+            &db,
+            &MemoryDraft {
+                metadata_json: Some(r#"{"pendingApproval":true}"#.to_owned()),
+                ..draft(MemoryKind::Profile, "Onay bekliyor", "hassas")
+            },
+            NOW,
+        )
+        .expect("kayit");
+        create(
+            &db,
+            &MemoryDraft {
+                metadata_json: Some(r#"{"pendingApproval":false}"#.to_owned()),
+                ..draft(MemoryKind::Decision, "Onaylanmis", "a")
+            },
+            NOW,
+        )
+        .expect("kayit");
+        // Anahtar yok (elle olusturulmus kayit).
+        create(&db, &draft(MemoryKind::Idea, "Elle yazilmis", "b"), NOW).expect("kayit");
+
+        // Varsayilan: UI davranisi degismez — onay bekleyen de gorunur.
+        assert_eq!(list_all(&db, MemoryFilter::default()).len(), 3);
+
+        let filtered = list_all(
+            &db,
+            MemoryFilter {
+                exclude_pending_approval: true,
+                ..MemoryFilter::default()
+            },
+        );
+        let mut visible = titles(&filtered);
+        visible.sort_unstable();
+        assert_eq!(visible, ["Elle yazilmis", "Onaylanmis"]);
     }
 
     #[test]

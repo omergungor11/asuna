@@ -27,6 +27,10 @@ fn main() {
             // ASU-037: tum hafizayi silme. Yazma capability'sinin parcasi;
             // komut ayrica birebir bir onay ifadesi ister.
             "memory_delete_all",
+            // ASU-035: oturum acilisindaki Stage A baglam paketi
+            // (capabilities/asuna-memory-read.json). Salt okuma; renderer
+            // parametre veremez — retrieval politikasi host tarafinda.
+            "get_bootstrap_context",
             // ASU-032: oturum kaydi (capabilities/asuna-session.json). Model
             // config'ten gelir, transcript yolu Rust tarafinda cozulur —
             // renderer ikisini de veremez.

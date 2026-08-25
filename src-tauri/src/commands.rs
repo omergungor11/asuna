@@ -25,11 +25,12 @@ pub fn get_frontend_config(config: State<'_, AsunaConfig>) -> FrontendConfig {
 /// etkinlestirme) ve `lib.rs` (`generate_handler!`) ile karsilastirir. Yeni bir
 /// `#[tauri::command]` eklerken dort yerin hepsi guncellenmeli.
 #[cfg(test)]
-pub const EXPOSED_COMMANDS: [&str; 13] = [
+pub const EXPOSED_COMMANDS: [&str; 14] = [
     "get_frontend_config",
     "mint_realtime_token",
     "db_status",
     "memory_list",
+    "get_bootstrap_context",
     "memory_create",
     "memory_update",
     "memory_archive",
@@ -41,14 +42,18 @@ pub const EXPOSED_COMMANDS: [&str; 13] = [
     "set_privacy_settings",
 ];
 
-/// Hafizayi **okuyan** komutlar (ASU-031).
+/// Hafizayi **okuyan** komutlar (ASU-031, ASU-035).
 ///
 /// Okuma ve yazma ayri capability dosyalarinda tutulur; asagidaki test ikisinin
 /// birbirine karismadigini dogrular. Karisirsa "salt okunur hafiza" diye bir
 /// mod kalmaz: yazma iznini kaldirmak okumayi da kapatir ya da tam tersi,
 /// okuma izni sessizce silme yetkisi tasir.
+///
+/// `get_bootstrap_context` adi `memory_` ile baslamiyor ama **hafiza okumasi**:
+/// Stage A retrieval'in ciktisi hafiza kayitlarindan olusur, dolayisiyla okuma
+/// capability'sinde durur.
 #[cfg(test)]
-pub const MEMORY_READ_COMMANDS: [&str; 1] = ["memory_list"];
+pub const MEMORY_READ_COMMANDS: [&str; 2] = ["memory_list", "get_bootstrap_context"];
 
 /// Hafizayi **degistiren** komutlar (ASU-031, ASU-037).
 ///

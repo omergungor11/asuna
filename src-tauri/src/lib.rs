@@ -96,6 +96,7 @@ pub fn run() {
             db::memory_repository::memory_archive,
             db::memory_repository::memory_delete,
             db::memory_repository::memory_delete_all,
+            db::retrieval::get_bootstrap_context,
             db::session_repository::session_start,
             db::session_repository::session_finalize,
             privacy::get_privacy_settings,

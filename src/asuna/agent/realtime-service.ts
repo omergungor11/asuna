@@ -272,6 +272,18 @@ export interface AsunaRealtimeServiceOptions {
   readonly stateMachine?: VoiceStateMachine;
   /** Modele verilecek talimat. Varsayilan: `buildAsunaInstructions()`. */
   readonly instructions?: string;
+  /**
+   * Her `connect()` cagrisindan **once** taze talimat uretir (ASU-035).
+   *
+   * Neden kurucuda sabit bir metin yetmiyor: oturum baglami hafizadan gelir ve
+   * iki oturum arasinda degisir (ozet + cikarim kapanista calisir). Servis
+   * omru boyunca ayni metni kullanmak, ikinci oturumda **eski** hafizayi
+   * enjekte etmek demekti.
+   *
+   * Hata firlatirsa oturum dusmez: [`instructions`] degerine geri donulur ve
+   * olay `error` event'i ile gorunur kalir (sessiz yutma yok).
+   */
+  readonly prepareInstructions?: () => Promise<string>;
   /** SDK yerine sahte oturum enjekte etmek icin (testler). */
   readonly createSession?: RealtimeSessionFactory;
   /** Token kaynagi. Varsayilan: `mint_realtime_token` IPC komutu. */
@@ -321,6 +333,8 @@ export class AsunaRealtimeService {
 
   private readonly instructions: string;
 
+  private readonly prepareInstructions: (() => Promise<string>) | null;
+
   private readonly createSession: RealtimeSessionFactory;
 
   private readonly mintToken: () => Promise<EphemeralRealtimeToken>;
@@ -361,6 +375,7 @@ export class AsunaRealtimeService {
     this.tools = options.tools ?? [];
     this.stateMachine = options.stateMachine ?? new VoiceStateMachine();
     this.instructions = options.instructions ?? buildAsunaInstructions();
+    this.prepareInstructions = options.prepareInstructions ?? null;
     this.createSession = options.createSession ?? createOpenAiRealtimeSession;
     this.mintToken = options.mintToken ?? mintRealtimeToken;
     this.maxConnectAttempts = Math.max(
@@ -410,10 +425,21 @@ export class AsunaRealtimeService {
     this.applyTransition('WAKING', 'ACTIVATION_REQUESTED', 'connect');
     this.applyTransition('CONNECTING', 'REALTIME_CONNECTING', 'connect');
 
+    // Baglam **oturum basina bir kez** cekilir: retry'larda tekrar sorgulamak
+    // hem gereksiz IPC hem de denemeler arasinda degisen bir prompt demekti.
+    // Saglayici yoksa `await` edilmez — bos bir microtask, oturumun acilisini
+    // sebepsiz yere bir tur geciktirirdi.
+    const instructions =
+      this.prepareInstructions === null ? this.instructions : await this.resolveInstructions();
+    if (generation !== this.generation) {
+      // Baglam beklenirken kapatildi: henuz acilmis bir oturum yok.
+      return;
+    }
+
     for (let attempt = 1; attempt <= this.maxConnectAttempts; attempt += 1) {
       this.publish({ type: 'connecting', attempt, maxAttempts: this.maxConnectAttempts });
 
-      const result = await this.attemptConnect();
+      const result = await this.attemptConnect(instructions);
 
       if (generation !== this.generation) {
         // Bu akis terk edildi (disconnect ya da yeni bir connect). Acilmis bir oturum
@@ -497,9 +523,28 @@ export class AsunaRealtimeService {
 
   // --- Baglanti ic akisi ------------------------------------------------
 
-  private async attemptConnect(): Promise<ConnectAttemptResult> {
+  /**
+   * Oturum talimatini uretir (ASU-035 baglam enjeksiyonu).
+   *
+   * Saglayici patlarsa **konusma bloklanmaz**: cekirdek talimatla devam edilir
+   * ve hata event'e duser. Bu yolun normalde calismamasi beklenir — baglam
+   * saglayicisi kendi hatalarini zaten ele alir (`buildSessionInstructions`).
+   */
+  private async resolveInstructions(): Promise<string> {
+    if (this.prepareInstructions === null) {
+      return this.instructions;
+    }
+    try {
+      return await this.prepareInstructions();
+    } catch (error) {
+      this.publish({ type: 'error', error: describeSessionError(error) });
+      return this.instructions;
+    }
+  }
+
+  private async attemptConnect(instructions: string): Promise<ConnectAttemptResult> {
     const spec: RealtimeSessionSpec = {
-      instructions: this.instructions,
+      instructions,
       model: this.config.realtimeModel,
       voice: this.config.realtimeVoice,
       transcription: this.config.transcriptStorage,
