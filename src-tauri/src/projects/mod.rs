@@ -7,8 +7,10 @@
 //! | Modul | Sorumluluk |
 //! |---|---|
 //! | [`registry`] | Kayitli proje koklerinin tek kaynagi (ASU-040) |
+//! | [`context`] | Kayitli bir projeden guvenli ve kisa ozet (ASU-041) |
 //!
-//! Sonraki task'lar bu modulun altina eklenir: `context` (ASU-041),
-//! `git_metadata` (ASU-042), `handoff` (ASU-043).
+//! Sonraki task'lar bu modulun altina eklenir: `git_metadata` (ASU-042),
+//! `handoff` (ASU-043).
 
+pub mod context;
 pub mod registry;

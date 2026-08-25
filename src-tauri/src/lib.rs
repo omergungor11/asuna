@@ -21,6 +21,7 @@ pub mod privacy;
 pub mod projects;
 pub mod realtime_token;
 pub mod redaction;
+pub mod security;
 pub mod summary;
 
 /// Uygulama context'i — **crate basina tek `generate_context!` cagrisi**.

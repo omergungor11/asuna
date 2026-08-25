@@ -99,23 +99,49 @@ Asuna sadece **kayitli** proje root'larini gorur. Diskin tamami taranmaz (PROJEC
 
 ## ASU-041: `ProjectContextService`
 
-**Scope**: backend | **Boyut**: L | **Durum**: PENDING | **Bagimlilik**: ASU-040
+**Scope**: backend | **Boyut**: L | **Durum**: DONE (2026-08-25) | **Bagimlilik**: ASU-040
 
 ### Aciklama
 PROJECT.md Bolum 15. Kayitli bir projenin metadata'sini ve secili baglam dosyalarini okuyup ajana
 **guvenli ve kisa** bir ozet uretir.
 
 ### Acceptance Criteria
-- [ ] Baglam kaynaklari okunuyor (varsa): `PROJECT.md`, `README.md`, `CLAUDE.md`, `AGENTS.md`,
+- [x] Baglam kaynaklari okunuyor (varsa): `PROJECT.md`, `README.md`, `CLAUDE.md`, `AGENTS.md`,
       `package.json`, `pyproject.toml`, `Cargo.toml`, `.git/config`
-- [ ] Dil/framework tespiti manifest dosyalarindan yapiliyor
-- [ ] Her dosya icin maksimum okuma boyutu var; buyuk dosya kirpiliyor
-- [ ] Uretilen ozetin toplam boyutu sinirli ve olculuyor (repo dump'i degil)
-- [ ] `.env` ve hassas dosyalar hicbir kosulda okunmuyor (bu asamada da blocklist var)
-- [ ] "Guncel proje" tespiti acik ve tahmine dayali degil: kullanici secimi + `last_opened_at`;
+- [x] Dil/framework tespiti manifest dosyalarindan yapiliyor
+- [x] Her dosya icin maksimum okuma boyutu var; buyuk dosya kirpiliyor
+- [x] Uretilen ozetin toplam boyutu sinirli ve olculuyor (repo dump'i degil)
+- [x] `.env` ve hassas dosyalar hicbir kosulda okunmuyor (bu asamada da blocklist var)
+- [x] "Guncel proje" tespiti acik ve tahmine dayali degil: kullanici secimi + `last_opened_at`;
       belirsizse Asuna soruyor, uydurmuyor
-- [ ] Sonuclar kisa sureli cache'leniyor (her cagride diski yeniden taramiyor)
-- [ ] Unit testler: kirpma, eksik dosya, blocklist
+- [x] Sonuclar kisa sureli cache'leniyor (her cagride diski yeniden taramiyor)
+- [x] Unit testler: kirpma, eksik dosya, blocklist
+
+### Uygulama notlari
+- `src-tauri/src/projects/context.rs` + merkezi blok listesi
+  `src-tauri/src/security/blocklist.rs` (security.md Bolum 1: "tool'lar kendi kopyasini tutmaz").
+- **Uc ayri tavan, ucu de olculuyor**: dosya basi okuma 32 KiB · kaynak basi alinti 1200
+  karakter · toplam ozet 6000 karakter. Toplam `total_chars` / `maxChars` olarak doner ve
+  acilista log'lanir. Kirpma sessiz degil — her kaynak `truncated` bayragi tasir.
+- Okunacak dosyalar **sabit allowlist**; model ya da renderer dosya secemez. Her aday ayrica
+  blok listesinden gecer (ikinci kapi) ve kontrol `canonicalize` **sonrasi** yapilir:
+  kok icindeki `README.md -> ~/.ssh/id_ed25519` bagi da, kok disina cikan bir symlink de
+  reddedilir.
+- `.env` testi zorunluydu ve iki katmanda var: `blocklist.rs` (birim) +
+  `context.rs` (uctan uca — `.env` icerigi serilestirilmis ozette aranmiyor).
+- `.git/config` **okunur ama icerigi ozete girmez**: yalnizca remote adi turetilir,
+  `@` oncesi kimlik bilgisi atilir ve sonuc `redact_sensitive_text`'ten gecer.
+- Manifest'ler dumplenmez, **ozetlenir** (ad, aciklama, script adlari, ilk 12 bagimlilik adi;
+  surum numaralari yok). TOML icin yeni bagimlilik eklenmedi — minimal, bilincli olarak eksik
+  bir tarayici var ve bulunamayan bilgiyi uydurmuyor.
+- Dil/framework catismasinda **deterministik oncelik**: Tauri kanitli `Cargo.toml` (0) →
+  diger `Cargo.toml`/`pyproject.toml` (1) → `package.json` (2). Asuna gibi bir projede
+  "bu bir Node projesi" demek yanlis olurdu.
+- Onbellek **iki kapili**: 30 sn TTL **ve** kaynaklarin mtime+boyut parmak izi. Yalnizca
+  sure eski bilgi verirdi; yalnizca parmak izi her cagride 8 `stat` demekti.
+- Belirsizlik hata degil: `ProjectContext::Unknown` uc ayri nedenle doner
+  (`no-registered-project` / `no-current-selection` / `root-missing`) — Asuna'nin soracagi
+  soru her birinde farkli.
 
 ---
 
