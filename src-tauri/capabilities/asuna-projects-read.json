@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "asuna-projects-read",
+  "description": "Kayitli proje kokleri OKUMA yuzeyi (ASU-040). Tek komut acar: `project_list` — kullanicinin ACIKCA kaydettigi proje koklerini dondurur. Otomatik disk taramasi YOKTUR ve bu komut hicbir dizinin ICINE girmez; yalnizca zaten kayitli koklerin diskte hala var olup olmadigi sorulur (kaybolan kok `missing` isaretlenir, kayit silinmez). Komut argument almaz — renderer ne siralamayi ne de filtreyi secebilir. Kayit/kaldirma bu dosyada YOKTUR (asuna-projects-write): projeleri gormek ile kok kaydedebilmek ayri yetkilerdir; kayitli kok listesi ASU-049 path sandbox'inin tek kaynagi olacagi icin yazma yuzeyi ayri tutuluyor. Kapsam ana pencere ile sinirlidir; wildcard izin yoktur.",
+  "platforms": ["macOS"],
+  "windows": ["main"],
+  "permissions": ["allow-project-list"]
+}

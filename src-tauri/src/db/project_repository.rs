@@ -56,6 +56,170 @@ pub fn ensure_optional_label(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Kayit islemleri (ASU-040 registry'nin SQL yuzu)
+// ---------------------------------------------------------------------------
+//
+// Bu fonksiyonlarin hicbiri yol dogrulamasi yapmaz. Yolun mutlak, var olan,
+// symlink'i cozulmus bir dizin oldugu `projects::registry` tarafinda garanti
+// edilir; burada yalnizca semanin kisitlari (UNIQUE path, `unlinked <=> path
+// IS NULL`) devrededir.
+
+/// Kayitli bir projenin yaratilmasi icin gereken alanlar.
+pub struct NewProject<'a> {
+    pub id: &'a str,
+    pub name: &'a str,
+    /// Normalize edilmis, symlink'i cozulmus mutlak dizin yolu.
+    pub path: &'a str,
+}
+
+/// Yeni bir **kayitli** (`active`) proje ekler.
+pub fn insert_registered(
+    connection: &Connection,
+    new: &NewProject<'_>,
+    now: &str,
+) -> rusqlite::Result<()> {
+    connection.execute(
+        "INSERT INTO projects (id, name, path, status, created_at, updated_at)
+         VALUES (?1, ?2, ?3, 'active', ?4, ?4)",
+        params![new.id, new.name, new.path, now],
+    )?;
+    Ok(())
+}
+
+/// Devralinan bir etiketi (`unlinked`) gercek bir kayda **yukseltir**.
+///
+/// `WHERE ... status = 'unlinked'`: kayitli bir projenin yolu bu yoldan
+/// degistirilemez. Donen deger 0 ise satir zaten kayitliydi ve cagiran taraf
+/// baska bir id secmek zorunda.
+///
+/// Neden onemli: Phase 3'te `project_id = 'asuna'` yazilmis hafizalar, kullanici
+/// o dizini ilk kez kaydettiginde **kendiliginden** dogru projeye baglanir.
+/// Yeni bir satir acilsaydi eski hafizalar oksuz kalirdi (ASU-039 karari).
+pub fn adopt_unlinked(
+    connection: &Connection,
+    id: &str,
+    name: &str,
+    path: &str,
+    now: &str,
+) -> rusqlite::Result<usize> {
+    connection.execute(
+        "UPDATE projects
+            SET name = ?2, path = ?3, status = 'active', updated_at = ?4
+          WHERE id = ?1 AND status = 'unlinked'",
+        params![id, name, path, now],
+    )
+}
+
+/// Transaction icinden tek satir okur.
+pub fn load(connection: &Connection, id: &str) -> rusqlite::Result<Option<ProjectRecord>> {
+    connection
+        .query_row(
+            &format!(
+                "SELECT {} FROM projects WHERE id = ?1",
+                ProjectRecord::select_columns()
+            ),
+            params![id],
+            ProjectRecord::from_row,
+        )
+        .optional()
+}
+
+/// Yolu **olan** bir kaydin durumunu degistirir (`active` / `missing` /
+/// `archived`).
+///
+/// `unlinked` bu yoldan yazilamaz: sema `unlinked <=> path IS NULL` kisitini
+/// zorlar ve yolu bosaltmak ayri bir islemdir ([`demote_to_unlinked`]).
+pub fn set_status(
+    connection: &Connection,
+    id: &str,
+    status: ProjectStatus,
+    now: &str,
+) -> rusqlite::Result<usize> {
+    debug_assert!(
+        status.has_registered_root(),
+        "`unlinked` icin `demote_to_unlinked` kullanilmali"
+    );
+    connection.execute(
+        "UPDATE projects SET status = ?2, updated_at = ?3 WHERE id = ?1",
+        params![id, status, now],
+    )
+}
+
+/// "Guncel proje" secimi: `last_opened_at` tazelenir.
+///
+/// Tahmin yok — bu yalnizca kullanicinin acik seciminde cagrilir (ASU-040).
+pub fn touch_last_opened(connection: &Connection, id: &str, now: &str) -> rusqlite::Result<usize> {
+    connection.execute(
+        "UPDATE projects SET last_opened_at = ?2, updated_at = ?2 WHERE id = ?1",
+        params![id, now],
+    )
+}
+
+/// Bu projeye bagli hafiza + oturum sayisi.
+///
+/// Kaydi kaldirirken satiri gercekten silmek ile etikete dusurmek arasindaki
+/// karari bu sayi belirler (bkz. `registry::remove`).
+pub fn reference_count(connection: &Connection, id: &str) -> rusqlite::Result<i64> {
+    connection.query_row(
+        "SELECT (SELECT count(*) FROM memories WHERE project_id = ?1)
+              + (SELECT count(*) FROM sessions WHERE project_id = ?1)",
+        params![id],
+        |row| row.get(0),
+    )
+}
+
+/// Kaydi etikete dusurur: yol silinir, satir ve etiket korunur.
+///
+/// Kullanici projeyi kayittan cikardiginda **hafizasini kaybetmemeli**. Satir
+/// silinseydi FK `ON DELETE SET NULL` tum `project_id` degerlerini bosaltir ve
+/// "proje X'te alinan karar" baglami kalici olarak kaybolurdu.
+pub fn demote_to_unlinked(connection: &Connection, id: &str, now: &str) -> rusqlite::Result<usize> {
+    connection.execute(
+        "UPDATE projects SET path = NULL, status = 'unlinked', updated_at = ?2 WHERE id = ?1",
+        params![id, now],
+    )
+}
+
+/// Satiri gercekten siler. Yalnizca hicbir hafiza/oturum baglamiyorken.
+pub fn delete(connection: &Connection, id: &str) -> rusqlite::Result<usize> {
+    connection.execute("DELETE FROM projects WHERE id = ?1", params![id])
+}
+
+/// Verilen kolonlari gunceller; `updated_at` her zaman tazelenir.
+///
+/// Kolon adlari **cagiran tarafta sabit metindir**, kullanici girdisi degil
+/// (`registry::ProjectPatch`); deger tarafi her zaman parametredir.
+pub fn apply_patch(
+    connection: &Connection,
+    id: &str,
+    assignments: &[(&'static str, rusqlite::types::Value)],
+    now: &str,
+) -> rusqlite::Result<usize> {
+    if assignments.is_empty() {
+        return connection.execute(
+            "UPDATE projects SET updated_at = ?2 WHERE id = ?1",
+            params![id, now],
+        );
+    }
+
+    let clause = assignments
+        .iter()
+        .map(|(column, _)| format!("{column} = ?"))
+        .collect::<Vec<String>>()
+        .join(", ");
+
+    let mut values: Vec<rusqlite::types::Value> =
+        assignments.iter().map(|(_, value)| value.clone()).collect();
+    values.push(rusqlite::types::Value::Text(now.to_owned()));
+    values.push(rusqlite::types::Value::Text(id.to_owned()));
+
+    connection.execute(
+        &format!("UPDATE projects SET {clause}, updated_at = ? WHERE id = ?"),
+        rusqlite::params_from_iter(values.iter()),
+    )
+}
+
 /// Tek projeyi kimligiyle okur.
 pub fn find_by_id(db: &AsunaDb, id: &str) -> Result<Option<ProjectRecord>, DbError> {
     db.with_connection(|connection| {

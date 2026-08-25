@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "asuna-projects-write",
+  "description": "Kayitli proje koklerini DEGISTIREN yuzey (ASU-040). Uc komut acar: `project_add` (kok kaydeder), `project_remove` (kaydi kaldirir), `project_set_current` (guncel proje secimi). `project_add` bir yol METNI alir ama host tarafi yalnizca VAR OLAN, mutlak, `canonicalize` edilmis (symlink ve `..` cozulmus) bir DIZINI kabul eder; `~` genisletilmez ve filesystem koku reddedilir. Ayni normalize edilmis yol iki kez kaydedilemez. `project_remove` bagli hafiza varsa satiri SILMEZ, etikete dusurur — kaydi kaldirmak kullanicinin hafizasini silmemeli. `project_set_current` yalnizca `last_opened_at` tazeler; guncel proje kullanicinin ACIK secimidir, Asuna tahmin etmez. Bu liste ASU-049 path sandbox'inin tek kaynagi olacagi icin okuma yuzeyinden ayri tutuluyor: `tauri.conf.json` listesinden bu dosyayi cikarmak, yeni kok eklenmesini kapatir ama var olan projeleri gorunur birakir. Kapsam ana pencere ile sinirlidir; wildcard izin yoktur.",
+  "platforms": ["macOS"],
+  "windows": ["main"],
+  "permissions": ["allow-project-add", "allow-project-remove", "allow-project-set-current"]
+}

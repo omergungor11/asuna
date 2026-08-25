@@ -25,7 +25,7 @@ pub fn get_frontend_config(config: State<'_, AsunaConfig>) -> FrontendConfig {
 /// etkinlestirme) ve `lib.rs` (`generate_handler!`) ile karsilastirir. Yeni bir
 /// `#[tauri::command]` eklerken dort yerin hepsi guncellenmeli.
 #[cfg(test)]
-pub const EXPOSED_COMMANDS: [&str; 17] = [
+pub const EXPOSED_COMMANDS: [&str; 21] = [
     "get_frontend_config",
     "mint_realtime_token",
     "db_status",
@@ -41,6 +41,10 @@ pub const EXPOSED_COMMANDS: [&str; 17] = [
     "session_list",
     "session_delete",
     "session_clear_all",
+    "project_list",
+    "project_add",
+    "project_remove",
+    "project_set_current",
     "get_privacy_settings",
     "set_privacy_settings",
 ];
@@ -94,6 +98,24 @@ pub const SESSION_WRITE_COMMANDS: [&str; 4] = [
     "session_delete",
     "session_clear_all",
 ];
+
+/// Kayitli proje koklerini **okuyan** komutlar (ASU-040).
+#[cfg(test)]
+pub const PROJECT_READ_COMMANDS: [&str; 1] = ["project_list"];
+
+/// Kayitli proje koklerini **degistiren** komutlar (ASU-040).
+///
+/// Bu liste ASU-049 path sandbox'inin tek kaynagini besliyor: yeni bir kok
+/// eklemenin tek yolu `project_add`. Yazma capability'sini `tauri.conf.json`
+/// listesinden cikarmak, kok eklemeyi kapatir ama var olan projeleri gorunur
+/// birakir — "yalnizca incele" modu.
+///
+/// `project_set_current` neden yazma tarafinda: `last_opened_at`i degistiriyor
+/// ve o alan "guncel proje"nin tek eksenidir. Okuma iznine konsaydi, salt
+/// okunur sanilan bir yuzey Asuna'nin hangi projede oldugunu degistirebilirdi.
+#[cfg(test)]
+pub const PROJECT_WRITE_COMMANDS: [&str; 3] =
+    ["project_add", "project_remove", "project_set_current"];
 
 #[cfg(test)]
 mod tests {
@@ -445,6 +467,72 @@ mod tests {
         {
             assert!(
                 SESSION_READ_COMMANDS.contains(command) ^ SESSION_WRITE_COMMANDS.contains(command),
+                "`{command}` ya okuma ya yazma listesinde olmali (ikisinde birden degil)"
+            );
+        }
+    }
+
+    /// **ASU-040 kabul kaniti**: proje okuma ve proje kaydi ayri capability
+    /// dosyalari.
+    ///
+    /// Ayrimin somut karsiligi: `asuna-projects-write`'i `tauri.conf.json`
+    /// listesinden cikarmak yeni kok eklenmesini kapatir ama var olan
+    /// projeleri gorunur birakir. Kayitli kok listesi ASU-049 sandbox'inin tek
+    /// kaynagi oldugu icin bu iki yetkinin ayni dosyada olmamasi onemli.
+    #[test]
+    fn project_reads_and_writes_are_separate_permissions() {
+        let read_permissions = permissions_of("asuna-projects-read.json");
+        let write_permissions = permissions_of("asuna-projects-write.json");
+
+        for command in PROJECT_READ_COMMANDS {
+            assert!(
+                read_permissions.contains(&permission_name(command)),
+                "`{command}` proje okuma capability'sinde yok"
+            );
+            assert!(
+                !write_permissions.contains(&permission_name(command)),
+                "`{command}` (okuma) yazma capability'sinde de aciliyor"
+            );
+        }
+
+        for command in PROJECT_WRITE_COMMANDS {
+            assert!(
+                write_permissions.contains(&permission_name(command)),
+                "`{command}` proje yazma capability'sinde yok"
+            );
+            assert!(
+                !read_permissions.contains(&permission_name(command)),
+                "`{command}` (yazma) okuma capability'sinde aciliyor — \
+                 salt okunur proje listesi imkansiz hale gelir"
+            );
+        }
+
+        // Proje yuzeyleri hafiza ve oturum yuzeylerine karismaz.
+        for file in [
+            "asuna-memory-read.json",
+            "asuna-memory-write.json",
+            "asuna-session-read.json",
+            "asuna-session.json",
+        ] {
+            let permissions = permissions_of(file);
+            for command in PROJECT_READ_COMMANDS.iter().chain(&PROJECT_WRITE_COMMANDS) {
+                assert!(
+                    !permissions.contains(&permission_name(command)),
+                    "`{command}` `{file}` icinde de aciliyor"
+                );
+            }
+        }
+    }
+
+    /// Yeni bir `project_*` komutu siniflandirilmadan eklenemesin.
+    #[test]
+    fn every_project_command_is_classified_as_read_or_write() {
+        for command in EXPOSED_COMMANDS
+            .iter()
+            .filter(|name| name.starts_with("project_"))
+        {
+            assert!(
+                PROJECT_READ_COMMANDS.contains(command) ^ PROJECT_WRITE_COMMANDS.contains(command),
                 "`{command}` ya okuma ya yazma listesinde olmali (ikisinde birden degil)"
             );
         }

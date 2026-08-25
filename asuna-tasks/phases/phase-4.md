@@ -54,19 +54,46 @@
 
 ## ASU-040: `ProjectRegistry`
 
-**Scope**: backend | **Boyut**: M | **Durum**: PENDING | **Bagimlilik**: ASU-039
+**Scope**: backend | **Boyut**: M | **Durum**: DONE (2026-08-25) | **Bagimlilik**: ASU-039
 
 ### Aciklama
 Asuna sadece **kayitli** proje root'larini gorur. Diskin tamami taranmaz (PROJECT.md Bolum 4:
 "full filesystem indexing" MVP disi).
 
 ### Acceptance Criteria
-- [ ] Proje ekleme (dizin secici ile), listeleme, guncelleme, kaldirma
-- [ ] Eklenen yol normalize ediliyor, sembolik link'ler cozuluyor
-- [ ] Var olmayan / erisilemeyen yol eklenemiyor; sonradan kaybolursa durum "missing" olarak isaretleniyor
-- [ ] Kayitli root'lar sonraki phase'lerdeki sandbox'in tek kaynagi (ASU-049 bunu kullanacak)
-- [ ] Otomatik disk taramasi **yok** — sadece kullanicinin ekledigi projeler
-- [ ] Unit test: normalizasyon, cift kayit engeli, missing durumu
+- [x] Proje ekleme (dizin secici ile), listeleme, guncelleme, kaldirma
+- [x] Eklenen yol normalize ediliyor, sembolik link'ler cozuluyor
+- [x] Var olmayan / erisilemeyen yol eklenemiyor; sonradan kaybolursa durum "missing" olarak isaretleniyor
+- [x] Kayitli root'lar sonraki phase'lerdeki sandbox'in tek kaynagi (ASU-049 bunu kullanacak)
+- [x] Otomatik disk taramasi **yok** — sadece kullanicinin ekledigi projeler
+- [x] Unit test: normalizasyon, cift kayit engeli, missing durumu
+
+### Uygulama notlari
+- `src-tauri/src/projects/registry.rs` (policy) + `src-tauri/src/db/project_repository.rs` (SQL).
+  Renderer sarmalayicisi: `src/asuna/projects/project-registry.ts`.
+- Yol normalizasyonu `RegisteredRoot::resolve`: bos/uzunluk → `~` reddi → mutlak olma →
+  `canonicalize` (symlink + `..` + var olma) → dizin olma → filesystem koku reddi → UTF-8.
+  `~` **genisletilmez**: hangi home dizini oldugunu tahmin etmek olurdu.
+- Cift kayit **hata degil**: `ProjectAddOutcome::AlreadyRegistered` doner. Karsilastirma
+  normalize edilmis yol uzerinden, yani `.../baska/../asuna` da ayni kaydi bulur.
+- `missing`: `list()` her cagride kayitli koklerin var olup olmadigini `stat` eder.
+  **Bu tarama degil** — bilinmeyen hicbir yol ziyaret edilmez, dizinlerin icine girilmez.
+  Kaybolan kok `missing`, geri gelen kok `active`; `archived` kullanicinin karari, dokunulmaz.
+- Kaldirma: bagli hafiza/oturum varsa satir **silinmez**, etikete dusurulur
+  (`ProjectRemoveOutcome::Unlinked`). Satir silinseydi FK `ON DELETE SET NULL` tum
+  `project_id` degerlerini bosaltir ve "proje X'te alinan karar" baglami kaybolurdu.
+- "Guncel proje" ayri bir bayrak degil, `last_opened_at`. Tek eksen: iki kaynak
+  (bayrak + zaman damgasi) birbirinden kayabilirdi. `missing` ya da `unlinked` bir proje
+  guncel yapilamaz — Asuna okuyamayacagi bir projeyi "su an buradayiz" diye sunmaz.
+- **ASU-049 notu** `registry.rs` bas yorumunda: sandbox kok listesini yalnizca buradan alir,
+  yalnizca `path`i dolu kayitlari gorur, karsilastirmayi `canonicalize` edilmis yollar
+  uzerinde yapar ve bir tool kendi kokunu ekleyemez.
+- Komutlar: `project_list` (okuma capability) / `project_add`, `project_remove`,
+  `project_set_current` (yazma capability). Ayrim bilincli: yazma dosyasini
+  `tauri.conf.json`'dan cikarmak yeni kok eklenmesini kapatir, listeyi gorunur birakir.
+- `project_*` komutlari kalici depolama kapaliyken **sessizce atlamaz**, tipli
+  `disabled` hatasi doner (`memory_create` ile bilerek farkli): "proje eklendi" demek
+  yalan olurdu.
 
 ---
 

@@ -12,12 +12,12 @@
 | 1 | Realtime Voice (dikey dilim) | 11 | 11 | 0 | 0 | 0 | 0 |
 | 2 | Wake Word | 8 | 1 | 0 | 0 | 7 | 0 |
 | 3 | Memory | 11 | 10 | 0 | 0 | 1 | 0 |
-| 4 | Project Context | 8 | 1 | 0 | 0 | 7 | 0 |
+| 4 | Project Context | 8 | 2 | 0 | 0 | 6 | 0 |
 | 5 | One Useful Action (Tools) | 9 | 0 | 0 | 0 | 9 | 0 |
 | 6 | Focus Recovery (MVP) | 8 | 0 | 0 | 0 | 8 | 0 |
-| **Total** | | **66** | **34** | **0** | **0** | **32** | **0** |
+| **Total** | | **66** | **35** | **0** | **0** | **31** | **0** |
 
-**Progress**: 34/66 (52%)
+**Progress**: 35/66 (53%)
 
 > Phase 3 implementasyonu ASU-035 ile kapandi (2026-08-25): ASU-029..ASU-037 DONE.
 > Gate 3 review bulgulari duzeltildi (2026-08-25): calisma zamani gizlilik kapisi oturum
@@ -107,7 +107,7 @@
 | ASU-037 | Memory gizlilik kontrolleri (toggle'lar) | 3 | S | frontend | DONE |
 | ASU-038 | **M3 kabul testi** — restart sonrasi hatirlama | 3 | M | test | PENDING |
 | ASU-039 | `projects` tablosu + migration | 4 | S | db | DONE |
-| ASU-040 | `ProjectRegistry` (kayitli proje root'lari) | 4 | M | backend | PENDING |
+| ASU-040 | `ProjectRegistry` (kayitli proje root'lari) | 4 | M | backend | DONE |
 | ASU-041 | `ProjectContextService` (metadata + context dosyalari) | 4 | L | backend | PENDING |
 | ASU-042 | Git metadata provider | 4 | M | backend | PENDING |
 | ASU-043 | `.asuna/context.json` okuma/yazma | 4 | M | backend | PENDING |

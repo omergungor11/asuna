@@ -101,6 +101,10 @@ fn build_test_app_with_privacy(db_state: DbState, privacy: PrivacyState) -> App<
             crate::db::session_repository::session_list,
             crate::db::session_repository::session_delete,
             crate::db::session_repository::session_clear_all,
+            crate::projects::registry::project_list,
+            crate::projects::registry::project_add,
+            crate::projects::registry::project_remove,
+            crate::projects::registry::project_set_current,
             crate::privacy::get_privacy_settings,
             crate::privacy::set_privacy_settings
         ])
@@ -1244,4 +1248,141 @@ fn session_commands_are_no_ops_when_memory_is_disabled() {
         finalized.contains("\"status\":\"skipped\""),
         "yanit: {finalized}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Proje kayitlari (ASU-040)
+// ---------------------------------------------------------------------------
+
+/// **ASU-040 kabul kaniti** — gercek ACL uzerinden, renderer'in gonderdigi
+/// istegin aynisiyla: kayit → listeleme → guncel proje secimi → kaldirma.
+#[test]
+fn the_project_registry_works_end_to_end_over_the_real_acl() {
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+
+    // Kayitli proje yokken liste bos — Asuna proje uydurmaz.
+    assert_eq!(
+        invoke(&webview, "project_list").expect("liste calismali"),
+        "[]"
+    );
+
+    let directory = std::env::temp_dir().join(format!("asuna-acl-projects-{}", std::process::id()));
+    let root = directory.join("asuna");
+    std::fs::create_dir_all(&root).expect("gecici proje dizini");
+
+    let added = invoke_with(
+        &webview,
+        "project_add",
+        serde_json::json!({ "path": root.to_str().expect("UTF-8 yol") }),
+    )
+    .expect("kayit calismali");
+    assert!(
+        added.contains("\"status\":\"registered\""),
+        "yanit: {added}"
+    );
+    assert!(added.contains("\"id\":\"asuna\""), "yanit: {added}");
+    // Kayit "guncel proje" secimi degildir.
+    assert!(added.contains("\"lastOpenedAt\":null"), "yanit: {added}");
+
+    // Ayni dizin ikinci kez: hata degil, ama yeni satir da acilmaz.
+    let again = invoke_with(
+        &webview,
+        "project_add",
+        serde_json::json!({ "path": root.to_str().expect("UTF-8 yol") }),
+    )
+    .expect("ikinci cagri hata olmamali");
+    assert!(
+        again.contains("\"status\":\"already-registered\""),
+        "yanit: {again}"
+    );
+
+    let selected = invoke_with(
+        &webview,
+        "project_set_current",
+        serde_json::json!({ "projectId": "asuna" }),
+    )
+    .expect("secim calismali");
+    assert!(
+        !selected.contains("\"lastOpenedAt\":null"),
+        "guncel proje secimi zaman damgasi yazmali: {selected}"
+    );
+
+    let removed = invoke_with(
+        &webview,
+        "project_remove",
+        serde_json::json!({ "projectId": "asuna" }),
+    )
+    .expect("kaldirma calismali");
+    assert!(
+        removed.contains("\"status\":\"deleted\""),
+        "yanit: {removed}"
+    );
+
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// Renderer gecerli olmayan bir yol gonderirse istek **IPC sinirinda** duser;
+/// DB'ye hicbir sey yazilmaz ve hata tipli doner.
+#[test]
+fn an_unusable_project_path_is_refused_at_the_ipc_boundary() {
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+
+    for (path, expected_code) in [
+        ("gorece/yol", "path-refused"),
+        ("~/Work/asuna", "path-refused"),
+        ("/", "path-refused"),
+        ("/bu/yol/kesinlikle/yok", "path-not-found"),
+    ] {
+        let error = invoke_with(&webview, "project_add", serde_json::json!({ "path": path }))
+            .expect_err("gecersiz yol reddedilmeli");
+        assert!(
+            !is_acl_denial(&error),
+            "ACL reddi degil, dogrulama hatasi bekleniyordu: {error}"
+        );
+        assert!(
+            error.contains(expected_code),
+            "`{path}` icin `{expected_code}` bekleniyordu: {error}"
+        );
+    }
+
+    assert_eq!(
+        invoke(&webview, "project_list").expect("liste calismali"),
+        "[]",
+        "reddedilen yollar kayit acmamali"
+    );
+}
+
+/// Kalici depolama kapaliyken "proje eklendi" demek yalan olurdu: komut sessizce
+/// atlamak yerine tipli hata doner (`memory_create` ile bilerek farkli).
+#[test]
+fn project_commands_report_disabled_storage_instead_of_pretending() {
+    let app = build_test_app(); // DbState::Disabled
+    let webview = main_webview(&app);
+
+    let error = invoke_with(
+        &webview,
+        "project_add",
+        serde_json::json!({ "path": "/tmp" }),
+    )
+    .expect_err("kapali depolamada kayit tutulamaz");
+    assert!(!is_acl_denial(&error), "hata: {error}");
+    assert!(error.contains("disabled"), "hata: {error}");
+
+    let error = invoke(&webview, "project_list").expect_err("kapali depolamada liste yok");
+    assert!(error.contains("disabled"), "hata: {error}");
+}
+
+/// Bozuk hafiza sessizce "kayitli proje yok"a donusmez.
+#[test]
+fn project_list_surfaces_a_typed_error_when_the_database_is_unavailable() {
+    let app = build_test_app_with(DbState::Unavailable {
+        reason: "sema migration'lari uygulanamadi".to_owned(),
+    });
+    let webview = main_webview(&app);
+
+    let error = invoke(&webview, "project_list").expect_err("ariza hata olarak donmeli");
+    assert!(!is_acl_denial(&error), "hata: {error}");
+    assert!(error.contains("unavailable"), "hata: {error}");
 }

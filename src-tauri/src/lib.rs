@@ -18,6 +18,7 @@ pub mod env_file;
 pub mod extraction;
 pub mod pricing;
 pub mod privacy;
+pub mod projects;
 pub mod realtime_token;
 pub mod redaction;
 pub mod summary;
@@ -103,6 +104,10 @@ pub fn run() {
             db::session_repository::session_list,
             db::session_repository::session_delete,
             db::session_repository::session_clear_all,
+            projects::registry::project_list,
+            projects::registry::project_add,
+            projects::registry::project_remove,
+            projects::registry::project_set_current,
             privacy::get_privacy_settings,
             privacy::set_privacy_settings
         ])

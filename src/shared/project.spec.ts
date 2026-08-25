@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  AsunaRegistryError,
   PROJECT_RECORD_KEYS,
   ProjectContractError,
+  UNKNOWN_REGISTRY_ERROR_CODE,
   hasRegisteredRoot,
+  parseProjectAddOutcome,
   parseProjectRecord,
   parseProjectRecords,
+  parseProjectRemoveOutcome,
+  toRegistryError,
 } from './project';
 
 function payload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -103,5 +108,51 @@ describe('parseProjectRecords', () => {
 
   it('bos liste gecerlidir — kayitli proje yoksa uydurma yapilmaz', () => {
     expect(parseProjectRecords([])).toEqual([]);
+  });
+});
+
+describe('registry sonuclari (ASU-040)', () => {
+  it('ekleme sonucu status ile ayirt edilir', () => {
+    expect(parseProjectAddOutcome({ status: 'registered', project: payload() })).toMatchObject({
+      status: 'registered',
+    });
+    expect(
+      parseProjectAddOutcome({ status: 'already-registered', project: payload() }),
+    ).toMatchObject({ status: 'already-registered' });
+  });
+
+  it('bilinmeyen ekleme status"u reddedilir', () => {
+    expect(() => parseProjectAddOutcome({ status: 'ok', project: payload() })).toThrow(
+      ProjectContractError,
+    );
+  });
+
+  /** Kayit kaldirmak hafizayi silmez: `unlinked` sonucu bunu tasir. */
+  it('kaldirma sonucu silinen ile etikete dusen ayrimini tasir', () => {
+    expect(parseProjectRemoveOutcome({ status: 'deleted', id: 'asuna' })).toEqual({
+      status: 'deleted',
+      id: 'asuna',
+    });
+
+    const unlinked = parseProjectRemoveOutcome({
+      status: 'unlinked',
+      project: payload({ status: 'unlinked', path: null }),
+      references: 3,
+    });
+    expect(unlinked).toMatchObject({ status: 'unlinked', references: 3 });
+  });
+
+  it('registry hatasi tipli koda cevrilir, mesaj yutulmaz', () => {
+    const typed = toRegistryError({
+      code: 'path-not-found',
+      message: 'verilen yol bulunamadi',
+    });
+    expect(typed).toBeInstanceOf(AsunaRegistryError);
+    expect(typed.code).toBe('path-not-found');
+
+    // ACL reddi duz string olarak gelir; kod uydurulmaz ama mesaj korunur.
+    const acl = toRegistryError('project_add not allowed. Command not found');
+    expect(acl.code).toBe(UNKNOWN_REGISTRY_ERROR_CODE);
+    expect(acl.message).toContain('not allowed');
   });
 });

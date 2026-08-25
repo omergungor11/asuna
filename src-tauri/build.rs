@@ -45,6 +45,16 @@ fn main() {
             // disina cikmasi reddedilir.
             "session_delete",
             "session_clear_all",
+            // ASU-040: kayitli proje kokleri (capabilities/asuna-projects-read.json).
+            // Salt okuma; renderer parametre veremez.
+            "project_list",
+            // ASU-040: proje kaydi (capabilities/asuna-projects-write.json).
+            // Komut bir yol metni alir ama yalnizca **var olan**, mutlak,
+            // symlink'i cozulmus bir dizini kabul eder; `~` genisletilmez.
+            // Bu liste ASU-049 sandbox'inin tek kaynagi olacak.
+            "project_add",
+            "project_remove",
+            "project_set_current",
             // ASU-037: calisma zamani gizlilik anahtarlari
             // (capabilities/asuna-privacy.json). Secret icermez; yalnizca
             // kullanicinin kendi ayarlari okunur/yazilir.

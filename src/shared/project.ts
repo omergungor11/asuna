@@ -134,3 +134,146 @@ export function parseProjectRecords(value: unknown): ProjectRecord[] {
 export function hasRegisteredRoot(project: ProjectRecord): boolean {
   return project.status !== 'unlinked';
 }
+
+// ---------------------------------------------------------------------------
+// Registry sonuclari (ASU-040)
+// ---------------------------------------------------------------------------
+
+/**
+ * Proje ekleme sonucu — Rust `ProjectAddOutcome` aynasi.
+ *
+ * Cift kayit bir **hata degil**: kullanici ayni dizini iki kez secmis olabilir.
+ * Ama "eklendi" demek de yanlis olurdu; hangisinin oldugu acikca doner.
+ */
+export type ProjectAddOutcome =
+  | { readonly status: 'registered'; readonly project: ProjectRecord }
+  | { readonly status: 'already-registered'; readonly project: ProjectRecord };
+
+/**
+ * Proje kaydini kaldirma sonucu — Rust `ProjectRemoveOutcome` aynasi.
+ *
+ * `unlinked`: bu projeye bagli hafiza vardi, bu yuzden satir silinmedi;
+ * yalnizca kayitli kok kaldirildi. Kaydi kaldirmak kullanicinin hafizasini
+ * silmemeli — UI bunu acikca soylemeli.
+ */
+export type ProjectRemoveOutcome =
+  | { readonly status: 'deleted'; readonly id: string }
+  | {
+      readonly status: 'unlinked';
+      readonly project: ProjectRecord;
+      /** Etiketi kullanan hafiza + oturum sayisi. */
+      readonly references: number;
+    };
+
+export function parseProjectAddOutcome(value: unknown): ProjectAddOutcome {
+  if (!isRecord(value)) {
+    throw new ProjectContractError('Proje ekleme sonucu bir nesne olmali.');
+  }
+
+  switch (value['status']) {
+    case 'registered':
+      assertNoUnexpectedKeys(value, ['status', 'project'], failWith);
+      return { status: 'registered', project: parseProjectRecord(value['project']) };
+
+    case 'already-registered':
+      assertNoUnexpectedKeys(value, ['status', 'project'], failWith);
+      return { status: 'already-registered', project: parseProjectRecord(value['project']) };
+
+    default:
+      fail('status', 'su degerlerden biri: registered, already-registered');
+  }
+}
+
+export function parseProjectRemoveOutcome(value: unknown): ProjectRemoveOutcome {
+  if (!isRecord(value)) {
+    throw new ProjectContractError('Proje kaldirma sonucu bir nesne olmali.');
+  }
+
+  const read = readers(value, fail);
+
+  switch (value['status']) {
+    case 'deleted':
+      assertNoUnexpectedKeys(value, ['status', 'id'], failWith);
+      return { status: 'deleted', id: read.text('id') };
+
+    case 'unlinked':
+      assertNoUnexpectedKeys(value, ['status', 'project', 'references'], failWith);
+      return {
+        status: 'unlinked',
+        project: parseProjectRecord(value['project']),
+        references: read.count('references'),
+      };
+
+    default:
+      fail('status', 'su degerlerden biri: deleted, unlinked');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Registry hatasi (ASU-040)
+// ---------------------------------------------------------------------------
+
+/** Rust `RegistryErrorCode` ile birebir. */
+export const REGISTRY_ERROR_CODES = [
+  'invalid',
+  /** Yol mutlak degil, `~` iceriyor, filesystem koku ya da UTF-8 disi. */
+  'path-refused',
+  'path-not-found',
+  'not-a-directory',
+  'not-found',
+  /** Islem bu proje durumunda anlamsiz (orn. etiketi guncel proje yapmak). */
+  'refused',
+  /** `ASUNA_MEMORY_ENABLED=false` — kayit tutulamiyor. */
+  'disabled',
+  'unavailable',
+  'storage',
+] as const;
+
+export type RegistryErrorCode = (typeof REGISTRY_ERROR_CODES)[number];
+
+/** Taninmayan sekil (cogunlukla ACL reddi ya da IPC katmani hatasi). */
+export const UNKNOWN_REGISTRY_ERROR_CODE = 'unknown';
+
+export type AsunaRegistryErrorCode = RegistryErrorCode | typeof UNKNOWN_REGISTRY_ERROR_CODE;
+
+export class AsunaRegistryError extends Error {
+  public override readonly name = 'AsunaRegistryError';
+
+  public constructor(
+    public readonly code: AsunaRegistryErrorCode,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+function isRegistryErrorCode(value: unknown): value is RegistryErrorCode {
+  return (
+    typeof value === 'string' && (REGISTRY_ERROR_CODES as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * `invoke` reddini tipli hataya cevirir. Hicbir zaman yutmaz; en kotu ihtimalle
+ * `unknown` kodlu ama mesaji korunmus bir hata uretir (`toStoreError` ile ayni
+ * sozlesme).
+ */
+export function toRegistryError(value: unknown): AsunaRegistryError {
+  if (value instanceof AsunaRegistryError) {
+    return value;
+  }
+  if (
+    isRecord(value) &&
+    isRegistryErrorCode(value['code']) &&
+    typeof value['message'] === 'string'
+  ) {
+    return new AsunaRegistryError(value['code'], value['message']);
+  }
+  if (typeof value === 'string' && value.length > 0) {
+    return new AsunaRegistryError(UNKNOWN_REGISTRY_ERROR_CODE, value);
+  }
+  if (value instanceof Error) {
+    return new AsunaRegistryError(UNKNOWN_REGISTRY_ERROR_CODE, value.message);
+  }
+  return new AsunaRegistryError(UNKNOWN_REGISTRY_ERROR_CODE, 'Proje islemi basarisiz oldu.');
+}
