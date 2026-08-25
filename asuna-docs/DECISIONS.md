@@ -88,6 +88,27 @@ Katman mimarileri: `docs/architecture/{voice,memory,tools,security}.md`.
   acikca yaziyor. Kapsami sessizce genisletmek ("hepsini sildim" deyip bir seyi birakmak ya da
   kullanicinin beklemedigi bir seyi silmek) daha kotu; temizlik ayri, gorunur bir aksiyon
   olarak tasarlanacak — **ASU-065** (Phase 3+, backlog).
+  → **M3 testiyle revize edildi (2026-08-25): kararin kendisi dogruydu, zamanlamasi degildi.**
+  M3 kabul testinde kullanici hafiza kayitlarini sildi ve Asuna hatirlamaya devam etti; sebep
+  Stage A'nin her oturum acilisinda enjekte ettigi **son oturum ozeti** (`sessions.summary`),
+  ki o zamana kadar urun icinden **hicbir yerden** silinemiyordu. "Kullanici hafizasini
+  gercekten silebilir" (PROJECT.md Bolum 20) sozu bu haliyle kagit uzerinde kaliyordu, yani
+  ASU-065 bir iyilestirme degil M3 blokeriydi ve backlog'dan Phase 3'e cekildi.
+  **Kapsam genisletme yapilmadi**: `memory_delete_all` hala yalnizca `memories`. Temizlik
+  ayri komutlarla (`session_delete`, `session_clear_all`), ayri bir onay ifadesiyle
+  (`KONUSMA GECMISINI SIL` — `TUM HAFIZAYI SIL`'den bilerek farkli, biri yazilip digeri
+  calistirilamasin) ve ayri ekranlarla geldi; her iki ekran da digerinin **kapsam disi**
+  oldugunu yaziyor. Detay: `asuna-tasks/phases/phase-3.md` → ASU-065.
+
+- **NOT (M3 ikinci bulgusu, kod degisikligi YOK): "yeniden ogrenme" hortlama degildir.**
+  Ayni testte gorulen ikinci davranis: bir hafiza silindikten sonra kullanici ayni konuyu
+  yeniden konusursa Asuna onu tekrar ogreniyor. Bu **dogru davranis** — silinen kaydin geri
+  gelmesi degil, yeni konusmanin kaydi. Kullanicinin sildigi sey gecmis bir konusmadan
+  turetilen kayitti; gelecekteki konusmalar ayni boru hattindan (ozet → cikarim → kalici
+  hafiza) gecmeye devam eder. Aksini istemek "bu konuyu bir daha ogrenme" turu kalici bir
+  kara liste gerektirirdi: MVP kapsami disi ve muhtemelen istenmeyen (kullanici fikrini
+  degistirebilir). Kayitlarin kaynagi zaten izlenebilir (`source_session_id`) ve her yeni
+  kayit Memory UI'da gorulup silinebilir.
 - **`ASUNA_SUMMARY_MODEL` zorunlu env anahtari** (LOW-11): ASU-033 ile eklendi ve
   `config::load()` eksik anahtarda **acilisi durduruyor**. Phase 2 oncesinde olusturulmus
   `.env` dosyalari bu satiri eklemeden Asuna'yi acamaz (`.env.example` guncel). Karar

@@ -98,6 +98,9 @@ fn build_test_app_with_privacy(db_state: DbState, privacy: PrivacyState) -> App<
             crate::db::retrieval::get_bootstrap_context,
             crate::db::session_repository::session_start,
             crate::db::session_repository::session_finalize,
+            crate::db::session_repository::session_list,
+            crate::db::session_repository::session_delete,
+            crate::db::session_repository::session_clear_all,
             crate::privacy::get_privacy_settings,
             crate::privacy::set_privacy_settings
         ])
@@ -995,6 +998,225 @@ fn turning_memory_off_at_runtime_stops_session_writes_without_a_restart() {
         finalized.contains("\"status\":\"recorded\"") && finalized.contains("\"summary\":null"),
         "yanit: {finalized}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// ASU-065 — oturum ozeti + dokum temizligi
+// ---------------------------------------------------------------------------
+
+/// Test config'inde `ASUNA_TRANSCRIPT_STORAGE=false` oldugu icin hicbir oturum
+/// kaydinda dokum yolu yoktur; dolayisiyla asagidaki testler **dosya sistemine
+/// dokunmaz**.
+///
+/// `session_clear_all`'in **basarili** yolu bilerek burada kosulmuyor: mock
+/// uygulama gercek `app_data_dir()`'i cozer (identifier `tauri.conf.json`'dan
+/// gelir) ve komut o dizindeki `transcripts/` klasorunu temizler — yani test
+/// kullanicinin gercek dokumlerini silerdi. Diskteki davranis gecici dizinle
+/// `db::transcript` testlerinde, DB tarafi `db::session_repository`
+/// testlerinde olculuyor. Burada olculen sey ACL kapisi ve onay ifadesi.
+#[test]
+fn session_history_can_be_listed_and_deleted_over_the_real_acl() {
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+
+    let empty = invoke_with(&webview, "session_list", serde_json::Value::Null)
+        .expect("session_list calismali");
+    assert!(
+        empty.contains("\"sessions\":[]") && empty.contains("\"total\":0"),
+        "bos depoda beklenmeyen yanit: {empty}"
+    );
+    // Tavan gorunur: UI "hepsi bu kadar" diye tahmin yurutmez.
+    assert!(
+        empty.contains("\"limit\":50") && empty.contains("\"limitMax\":200"),
+        "sinirlar yanitta yok: {empty}"
+    );
+
+    let started = invoke_with(&webview, "session_start", serde_json::json!({}))
+        .expect("session_start calismali");
+    let session_id = serde_json::from_str::<serde_json::Value>(&started).expect("JSON")["session"]
+        ["id"]
+        .as_i64()
+        .expect("oturum kimligi");
+    invoke_with(
+        &webview,
+        "session_finalize",
+        serde_json::json!({ "sessionId": session_id }),
+    )
+    .expect("session_finalize calismali");
+
+    let listed = invoke_with(&webview, "session_list", serde_json::json!({}))
+        .expect("session_list calismali");
+    assert!(listed.contains("\"total\":1"), "yanit: {listed}");
+    // GIZLILIK: liste dosya yolu tasimaz.
+    assert!(
+        listed.contains("\"hasTranscriptFile\":false") && !listed.contains("transcriptPath"),
+        "yanit: {listed}"
+    );
+
+    let deleted = invoke_with(
+        &webview,
+        "session_delete",
+        serde_json::json!({ "sessionId": session_id }),
+    )
+    .expect("session_delete calismali");
+    assert!(
+        deleted.contains("\"status\":\"deleted\"")
+            && deleted.contains("\"transcriptFile\":\"not-recorded\""),
+        "yanit: {deleted}"
+    );
+
+    let after = invoke_with(&webview, "session_list", serde_json::Value::Null).expect("okuma");
+    assert!(after.contains("\"total\":0"), "yanit: {after}");
+
+    // Silinmis oturum bir daha silinemez: sessizce "sildim" denmez.
+    let error = invoke_with(
+        &webview,
+        "session_delete",
+        serde_json::json!({ "sessionId": session_id }),
+    )
+    .expect_err("ikinci silme hata vermeli");
+    assert!(!is_acl_denial(&error), "hata: {error}");
+    assert!(error.contains("not-found"), "hata tipli degil: {error}");
+}
+
+/// **ASU-065 / M3 blokaji**: silinen oturumun **ozeti** bir sonraki oturumun
+/// baglamina girmez.
+///
+/// M3 kabul testinde yakalanan acik tam buydu: kullanici hafiza kayitlarini
+/// sildi ama Asuna hatirlamaya devam etti, cunku Stage A her acilista son
+/// oturum ozetini enjekte ediyordu ve `sessions.summary` silinemiyordu.
+/// Burada ozet `session_finalize` sonrasi arka plan gorevi olmadan (ozet
+/// servisi bilerek `manage` edilmiyor) uretilemeyecegi icin dogrudan
+/// repository ile yazilir; olculen sey **baglamin silmeyi yansitmasi**.
+#[test]
+fn a_deleted_session_summary_leaves_the_next_bootstrap_context() {
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+
+    let started = invoke_with(&webview, "session_start", serde_json::json!({}))
+        .expect("session_start calismali");
+    let session_id = serde_json::from_str::<serde_json::Value>(&started).expect("JSON")["session"]
+        ["id"]
+        .as_i64()
+        .expect("oturum kimligi");
+    invoke_with(
+        &webview,
+        "session_finalize",
+        serde_json::json!({ "sessionId": session_id }),
+    )
+    .expect("session_finalize calismali");
+
+    // Ozet normalde arka planda uretilir (ASU-033); testte ag'a cikilmadigi
+    // icin ayni yazma dogrudan yapilir.
+    let db_state = app.state::<DbState>();
+    let db = db_state
+        .access()
+        .expect("hafiza acik olmali")
+        .expect("DB olmali");
+    crate::db::session_repository::attach_summary(
+        db,
+        session_id,
+        "Konusulanlar: wake word yerel kalir.",
+        None,
+    )
+    .expect("ozet yazilmali");
+
+    let before = invoke(&webview, "get_bootstrap_context").expect("baglam");
+    assert!(
+        before.contains("wake word yerel kalir"),
+        "ozet baglama girmedi: {before}"
+    );
+
+    invoke_with(
+        &webview,
+        "session_delete",
+        serde_json::json!({ "sessionId": session_id }),
+    )
+    .expect("session_delete calismali");
+
+    let after = invoke(&webview, "get_bootstrap_context").expect("baglam");
+    assert!(
+        !after.contains("wake word yerel kalir") && after.contains("\"recentSession\":null"),
+        "silinen oturum ozeti hala baglamda: {after}"
+    );
+}
+
+/// Toplu temizlik yanlis onay ifadesiyle **hicbir seye dokunmaz**.
+///
+/// Ifade kontrolu komutun ilk satiri: reddedilen bir cagri ne DB'ye ne dokum
+/// dizinine erisir (bu yuzden bu test diskte de guvenlidir, bkz. yukaridaki
+/// gerekce).
+#[test]
+fn clearing_the_session_history_requires_the_exact_confirmation_phrase() {
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+
+    invoke_with(&webview, "session_start", serde_json::json!({})).expect("oturum");
+
+    for wrong in [
+        "",
+        "konusma gecmisini sil",
+        "KONUSMA GECMISINI SIL ",
+        // Hafiza silmenin ifadesi burada calismaz: iki aksiyon ayri.
+        "TUM HAFIZAYI SIL",
+    ] {
+        let error = invoke_with(
+            &webview,
+            "session_clear_all",
+            serde_json::json!({ "confirmationPhrase": wrong }),
+        )
+        .expect_err("yanlis ifade reddedilmeli");
+        assert!(!is_acl_denial(&error), "hata: {error}");
+        assert!(error.contains("invalid"), "hata tipli degil: {error}");
+    }
+
+    // Hicbiri silmedi.
+    let listed = invoke_with(&webview, "session_list", serde_json::Value::Null).expect("okuma");
+    assert!(listed.contains("\"total\":1"), "yanit: {listed}");
+}
+
+/// Hafiza kapaliyken okuma **bos sayfa**, tek silme `skipped` doner; ikisi de
+/// hata degil (`memory_list` / `memory_delete` ile ayni sozlesme).
+#[test]
+fn session_history_commands_are_no_ops_when_memory_is_disabled() {
+    let app = build_test_app(); // DbState::Disabled
+    let webview = main_webview(&app);
+
+    let listed = invoke_with(&webview, "session_list", serde_json::Value::Null)
+        .expect("kapali hafiza hata degil");
+    assert!(
+        listed.contains("\"sessions\":[]") && listed.contains("\"total\":0"),
+        "yanit: {listed}"
+    );
+
+    let deleted = invoke_with(
+        &webview,
+        "session_delete",
+        serde_json::json!({ "sessionId": 1 }),
+    )
+    .expect("kapali hafiza hata degil");
+    assert!(
+        deleted.contains("\"status\":\"skipped\"")
+            && deleted.contains("\"reason\":\"memory-disabled\""),
+        "yanit: {deleted}"
+    );
+}
+
+/// Bozuk hafiza sessizce "gecmis yok"a donusmez: liste de tipli hata verir.
+#[test]
+fn session_list_surfaces_a_typed_error_when_the_database_is_unavailable() {
+    let app = build_test_app_with(DbState::Unavailable {
+        reason: "sema migration'lari uygulanamadi".to_owned(),
+    });
+    let webview = main_webview(&app);
+
+    let error = invoke_with(&webview, "session_list", serde_json::Value::Null)
+        .expect_err("ariza hata olarak donmeli");
+    assert!(
+        !is_acl_denial(&error),
+        "ACL reddi degil, ariza bekleniyordu: {error}"
+    );
+    assert!(error.contains("unavailable"), "hata: {error}");
 }
 
 /// **ASU-032 kabul kriteri**: hafiza kapaliyken oturum kaydi olusmaz ve

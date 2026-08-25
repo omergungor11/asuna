@@ -100,6 +100,9 @@ pub fn run() {
             db::retrieval::get_bootstrap_context,
             db::session_repository::session_start,
             db::session_repository::session_finalize,
+            db::session_repository::session_list,
+            db::session_repository::session_delete,
+            db::session_repository::session_clear_all,
             privacy::get_privacy_settings,
             privacy::set_privacy_settings
         ])

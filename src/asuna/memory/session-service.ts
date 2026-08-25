@@ -18,19 +18,34 @@
 import { invoke } from '@tauri-apps/api/core';
 
 import {
+  parseSessionDeleteResult,
+  parseSessionPage,
+  parseSessionPurgeResult,
   parseSessionWriteResult,
+  type SessionDeleteResult,
   type SessionFinalizeInput,
+  type SessionPage,
+  type SessionPurgeResult,
   type SessionWriteResult,
 } from '../../shared/session';
 import { toStoreError } from '../../shared/store-error';
 
 /**
  * Rust tarafindaki komut adlari. `src-tauri/build.rs` (ACL manifest) ve
- * `src-tauri/capabilities/asuna-session.json` ile birebir ayni olmali.
+ * `src-tauri/capabilities/asuna-session{,-read}.json` ile birebir ayni olmali.
+ *
+ * Okuma ve degistirme bilerek ayri kumeler: oturum gecmisini gorunur kilmak ile
+ * silebilmek ayri yetkiler (`asuna-session-read` / `asuna-session`).
  */
+export const SESSION_READ_COMMANDS = {
+  list: 'session_list',
+} as const;
+
 export const SESSION_COMMANDS = {
   start: 'session_start',
   finalize: 'session_finalize',
+  delete: 'session_delete',
+  clearAll: 'session_clear_all',
 } as const;
 
 async function call(command: string, args: Record<string, unknown>): Promise<unknown> {
@@ -58,6 +73,51 @@ export async function finalizeSessionRecord(
   input: SessionFinalizeInput = {},
 ): Promise<SessionWriteResult> {
   return parseSessionWriteResult(await call(SESSION_COMMANDS.finalize, { sessionId, input }));
+}
+
+/**
+ * Oturum gecmisini listeler (ASU-065).
+ *
+ * Hafiza kapaliyken **bos sayfa** doner (hata degil); bozuk oldugunda
+ * `unavailable` kodlu hata firlatir. Renderer siralamayi ya da alanlari
+ * secemez — yalnizca kac satir istedigini soyleyebilir ve bu istek sunucu
+ * tavanina kirpilir (`limit` / `limitMax` yanitta gorunur).
+ */
+export async function listSessions(limit?: number): Promise<SessionPage> {
+  return parseSessionPage(
+    await call(SESSION_READ_COMMANDS.list, { query: limit === undefined ? null : { limit } }),
+  );
+}
+
+/**
+ * Tek oturumu siler: kaydi (ozeti dahil) ve varsa diskteki dokum dosyasi.
+ *
+ * Silinen ozet bir sonraki oturumun baglamina **giremez**: Stage A baglami
+ * onbelleklenmiyor, her `connect()` oncesi depodan yeniden okunuyor.
+ *
+ * Dosya yolu bu servise verilmez ve bu servisten donmez: yol Rust tarafinda
+ * veritabanindan okunur ve `app_data_dir()` altinda oldugu dogrulanir. Donen
+ * `transcriptFile` yalnizca **ne olduğunu** soyler.
+ */
+export async function deleteSession(sessionId: number): Promise<SessionDeleteResult> {
+  return parseSessionDeleteResult(await call(SESSION_COMMANDS.delete, { sessionId }));
+}
+
+/**
+ * **Tum** oturum kayitlarini ve dokum dosyalarini siler (ASU-065).
+ *
+ * Onay ifadesi cagiran taraftan gelir ve Rust'ta birebir karsilastirilir; bu
+ * servis onu **uydurmaz** — `clearSessionHistory()` diye parametresiz bir cagri
+ * mumkun degil. Ifade tutmazsa `invalid` kodlu hata firlar ve ne DB'ye ne diske
+ * dokunulur.
+ *
+ * Kapsam `memories` tablosunu **icermez**; hafiza silme ayri bir aksiyondur
+ * (`deleteAllMemories`).
+ */
+export async function clearSessionHistory(
+  confirmationPhrase: string,
+): Promise<SessionPurgeResult> {
+  return parseSessionPurgeResult(await call(SESSION_COMMANDS.clearAll, { confirmationPhrase }));
 }
 
 /** Kapanmis oturumun UI'da gosterilen ozeti. */

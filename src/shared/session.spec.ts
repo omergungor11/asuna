@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
+import { MEMORY_DELETE_ALL_CONFIRMATION } from './memory';
 import {
+  SESSION_CLEAR_ALL_CONFIRMATION,
   SESSION_END_REASONS,
   SessionContractError,
+  TRANSCRIPT_FILE_OUTCOMES,
   isSessionOpen,
+  parseSessionDeleteResult,
+  parseSessionListItem,
+  parseSessionPage,
+  parseSessionPurgeResult,
   parseSessionRecord,
   parseSessionRecords,
   sessionDurationMs,
@@ -143,5 +150,160 @@ describe('parseSessionRecords', () => {
 
   it('dizi olmayan girdiyi reddeder', () => {
     expect(() => parseSessionRecords(VALID)).toThrow(SessionContractError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Oturum gecmisi: listeleme + silme (ASU-065)
+// ---------------------------------------------------------------------------
+
+const LIST_ITEM = {
+  id: 7,
+  startedAt: '2026-08-25T10:00:00Z',
+  endedAt: '2026-08-25T10:04:00Z',
+  endReason: 'completed',
+  summaryPreview: 'Wake word kararini konustuk.',
+  summaryTruncated: false,
+  hasTranscriptFile: true,
+};
+
+describe('parseSessionListItem', () => {
+  it('gecerli bir satiri dogrular', () => {
+    expect(parseSessionListItem(LIST_ITEM)).toEqual(LIST_ITEM);
+  });
+
+  it('ozetsiz ve acik oturumu kabul eder', () => {
+    const parsed = parseSessionListItem({
+      ...LIST_ITEM,
+      endedAt: null,
+      endReason: null,
+      summaryPreview: null,
+    });
+    expect(parsed.summaryPreview).toBeNull();
+    expect(parsed.endedAt).toBeNull();
+    expect(parsed.endReason).toBeNull();
+  });
+
+  /**
+   * **GUVENLIK/GIZLILIK (ASU-065)**: dokum dosya yolu sozlesmede yok. Backend
+   * bir gun yanlislikla dondurse bu sessizce renderer'a akmaz.
+   */
+  it('dosya yolu iceren bir satiri reddeder', () => {
+    expect(() =>
+      parseSessionListItem({ ...LIST_ITEM, transcriptPath: '/Users/x/transcripts/s.jsonl' }),
+    ).toThrow(SessionContractError);
+  });
+
+  it('eksik bayraklari uydurmaz', () => {
+    expect(() => parseSessionListItem({ ...LIST_ITEM, hasTranscriptFile: 'evet' })).toThrow(
+      SessionContractError,
+    );
+    expect(() => parseSessionListItem({ ...LIST_ITEM, summaryTruncated: 1 })).toThrow(
+      SessionContractError,
+    );
+  });
+});
+
+describe('parseSessionPage', () => {
+  it('sayfayi sinirlariyla birlikte dogrular', () => {
+    const page = parseSessionPage({
+      sessions: [LIST_ITEM],
+      limit: 50,
+      limitMax: 200,
+      total: 214,
+    });
+    expect(page.sessions).toHaveLength(1);
+    expect(page.limit).toBe(50);
+    expect(page.limitMax).toBe(200);
+    expect(page.total).toBe(214);
+  });
+
+  it('bos sayfayi kabul eder', () => {
+    expect(parseSessionPage({ sessions: [], limit: 50, limitMax: 200, total: 0 }).total).toBe(
+      0,
+    );
+  });
+
+  it('sinirlari eksik bir sayfayi reddeder', () => {
+    expect(() => parseSessionPage({ sessions: [], limit: 50, total: 0 })).toThrow(
+      SessionContractError,
+    );
+    expect(() =>
+      parseSessionPage({ sessions: LIST_ITEM, limit: 1, limitMax: 2, total: 1 }),
+    ).toThrow(SessionContractError);
+  });
+});
+
+describe('parseSessionDeleteResult', () => {
+  it('dosya sonucunu tasir', () => {
+    for (const transcriptFile of TRANSCRIPT_FILE_OUTCOMES) {
+      expect(parseSessionDeleteResult({ status: 'deleted', id: 7, transcriptFile })).toEqual({
+        status: 'deleted',
+        id: 7,
+        transcriptFile,
+      });
+    }
+  });
+
+  it('bilinmeyen dosya sonucunu reddeder', () => {
+    expect(() =>
+      parseSessionDeleteResult({ status: 'deleted', id: 7, transcriptFile: 'belki' }),
+    ).toThrow(SessionContractError);
+  });
+
+  it('atlanan islemi hata saymaz', () => {
+    expect(parseSessionDeleteResult({ status: 'skipped', reason: 'memory-disabled' })).toEqual({
+      status: 'skipped',
+      reason: 'memory-disabled',
+    });
+  });
+
+  it('bilinmeyen durumu reddeder', () => {
+    expect(() => parseSessionDeleteResult({ status: 'purged', deleted: 1 })).toThrow(
+      SessionContractError,
+    );
+  });
+});
+
+describe('parseSessionPurgeResult', () => {
+  it('olculen sayilari tasir', () => {
+    expect(
+      parseSessionPurgeResult({
+        status: 'purged',
+        deletedSessions: 4,
+        deletedFiles: 2,
+        remainingFiles: 1,
+      }),
+    ).toEqual({ status: 'purged', deletedSessions: 4, deletedFiles: 2, remainingFiles: 1 });
+  });
+
+  it('sifir gecerli bir sonuctur', () => {
+    const result = parseSessionPurgeResult({
+      status: 'purged',
+      deletedSessions: 0,
+      deletedFiles: 0,
+      remainingFiles: 0,
+    });
+    expect(result.status).toBe('purged');
+  });
+
+  it('eksik sayimi reddeder', () => {
+    expect(() =>
+      parseSessionPurgeResult({ status: 'purged', deletedSessions: 1, deletedFiles: 1 }),
+    ).toThrow(SessionContractError);
+  });
+});
+
+describe('onay ifadeleri', () => {
+  /**
+   * Iki toplu silme aksiyonunun ifadesi **ayni olmamali**: kapsamlari farkli ve
+   * birini yazip digerini calistirmak mumkun olmamali. Rust aynasi:
+   * `session_repository::CLEAR_ALL_CONFIRMATION`.
+   */
+  it('oturum temizligi hafiza silmeden farkli bir ifade ister', () => {
+    expect(SESSION_CLEAR_ALL_CONFIRMATION).toBe('KONUSMA GECMISINI SIL');
+    expect(SESSION_CLEAR_ALL_CONFIRMATION).not.toBe(MEMORY_DELETE_ALL_CONFIRMATION);
+    // Turkce karakter yok: klavye duzeninden bagimsiz yazilabilmeli.
+    expect(SESSION_CLEAR_ALL_CONFIRMATION).toMatch(/^[A-Z ]+$/);
   });
 });

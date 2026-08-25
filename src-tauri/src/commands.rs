@@ -25,7 +25,7 @@ pub fn get_frontend_config(config: State<'_, AsunaConfig>) -> FrontendConfig {
 /// etkinlestirme) ve `lib.rs` (`generate_handler!`) ile karsilastirir. Yeni bir
 /// `#[tauri::command]` eklerken dort yerin hepsi guncellenmeli.
 #[cfg(test)]
-pub const EXPOSED_COMMANDS: [&str; 14] = [
+pub const EXPOSED_COMMANDS: [&str; 17] = [
     "get_frontend_config",
     "mint_realtime_token",
     "db_status",
@@ -38,6 +38,9 @@ pub const EXPOSED_COMMANDS: [&str; 14] = [
     "memory_delete_all",
     "session_start",
     "session_finalize",
+    "session_list",
+    "session_delete",
+    "session_clear_all",
     "get_privacy_settings",
     "set_privacy_settings",
 ];
@@ -66,6 +69,30 @@ pub const MEMORY_WRITE_COMMANDS: [&str; 5] = [
     "memory_archive",
     "memory_delete",
     "memory_delete_all",
+];
+
+/// Oturum gecmisini **okuyan** komutlar (ASU-065).
+///
+/// Hafiza okuma capability'sine (`asuna-memory-read`) konmadi: oturum kaydi ile
+/// durable memory farkli katmanlar (PROJECT.md Bolum 14) ve izinleri de ayri
+/// (ASU-032 karari). Ayni gerekce okuma tarafinda da gecerli — "oturum
+/// gecmisini goster" yetkisini kapatmak, hafiza listesini kapatmak zorunda
+/// birakmamali.
+#[cfg(test)]
+pub const SESSION_READ_COMMANDS: [&str; 1] = ["session_list"];
+
+/// Oturum kaydini **degistiren** komutlar (ASU-032, ASU-065).
+///
+/// Silme burada, ayri bir "temizlik" capability'sinde degil: `memory_delete_all`
+/// ile ayni gerekce (ASU-037). Kaydi acan yetki kaldirilmis bir kurulumda toplu
+/// temizligi acik birakmak, kapali sanilan bir yuzey uretirdi. Kullanicinin
+/// **calisma zamani** anahtari ise silmeyi engellemez — o ayri bir eksen.
+#[cfg(test)]
+pub const SESSION_WRITE_COMMANDS: [&str; 4] = [
+    "session_start",
+    "session_finalize",
+    "session_delete",
+    "session_clear_all",
 ];
 
 #[cfg(test)]
@@ -357,6 +384,67 @@ mod tests {
         {
             assert!(
                 MEMORY_READ_COMMANDS.contains(command) ^ MEMORY_WRITE_COMMANDS.contains(command),
+                "`{command}` ya okuma ya yazma listesinde olmali (ikisinde birden degil)"
+            );
+        }
+    }
+
+    /// **ASU-065 kabul kaniti**: oturum okuma ve oturum degistirme ayri
+    /// capability dosyalari.
+    ///
+    /// Ayrimin somut karsiligi: `asuna-session`'i `tauri.conf.json` listesinden
+    /// cikarmak kaydi **ve** silmeyi kapatir, ama oturum gecmisini gorunur
+    /// birakir — "yalnizca incele" modu. Tersi de dogru: okuma dosyasi hicbir
+    /// silme izni tasiyamaz.
+    #[test]
+    fn session_reads_and_writes_are_separate_permissions() {
+        let read_permissions = permissions_of("asuna-session-read.json");
+        let write_permissions = permissions_of("asuna-session.json");
+
+        for command in SESSION_READ_COMMANDS {
+            assert!(
+                read_permissions.contains(&permission_name(command)),
+                "`{command}` oturum okuma capability'sinde yok"
+            );
+            assert!(
+                !write_permissions.contains(&permission_name(command)),
+                "`{command}` (okuma) yazma capability'sinde de aciliyor"
+            );
+        }
+
+        for command in SESSION_WRITE_COMMANDS {
+            assert!(
+                write_permissions.contains(&permission_name(command)),
+                "`{command}` oturum yazma capability'sinde yok"
+            );
+            assert!(
+                !read_permissions.contains(&permission_name(command)),
+                "`{command}` (yazma/silme) okuma capability'sinde aciliyor — \
+                 salt okunur oturum gecmisi imkansiz hale gelir"
+            );
+        }
+
+        // Oturum yuzeyleri hafiza yuzeylerine karismaz (PROJECT.md Bolum 14).
+        let memory_read = permissions_of("asuna-memory-read.json");
+        let memory_write = permissions_of("asuna-memory-write.json");
+        for command in SESSION_READ_COMMANDS.iter().chain(&SESSION_WRITE_COMMANDS) {
+            assert!(
+                !memory_read.contains(&permission_name(command))
+                    && !memory_write.contains(&permission_name(command)),
+                "`{command}` hafiza capability'lerinde aciliyor"
+            );
+        }
+    }
+
+    /// Yeni bir `session_*` komutu siniflandirilmadan eklenemesin.
+    #[test]
+    fn every_session_command_is_classified_as_read_or_write() {
+        for command in EXPOSED_COMMANDS
+            .iter()
+            .filter(|name| name.starts_with("session_"))
+        {
+            assert!(
+                SESSION_READ_COMMANDS.contains(command) ^ SESSION_WRITE_COMMANDS.contains(command),
                 "`{command}` ya okuma ya yazma listesinde olmali (ikisinde birden degil)"
             );
         }

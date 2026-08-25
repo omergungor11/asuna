@@ -809,6 +809,43 @@ mod tests {
         assert!(!recent.truncated);
     }
 
+    /// **ASU-065 kabul kriteri (M3 blokaji)**: silinen oturumun ozeti bir
+    /// sonraki baglama girmez.
+    ///
+    /// M3 kabul testinde yakalanan acik: kullanici hafiza kayitlarini sildi ama
+    /// Asuna hatirlamaya devam etti — cunku Stage A her acilista son oturum
+    /// ozetini enjekte ediyor ve `sessions.summary` silinemiyordu. Retrieval
+    /// kodu bu is icin **degismedi**; silme sonrasi `latest_completed_summary`
+    /// zaten bir onceki kalan ozete (ya da `None`'a) duser. Bu test o
+    /// davranisin baglam ucunda gercekten gorundugunu sabitler.
+    #[test]
+    fn a_deleted_session_summary_never_reaches_the_next_session_context() {
+        let db = fresh_db();
+        completed_session(&db, "Eski oturum: sema kararlari konusuldu.");
+        let newest = completed_session(&db, "Son oturum: wake word yerel kalir.");
+
+        let before = bootstrap(&db).recent_session.expect("ozet baglama girmeli");
+        assert_eq!(before.id, newest);
+
+        session_repository::delete(&db, newest).expect("oturum silinmeli");
+
+        // Bir onceki ozet devralinir — bos birakilmaz, uydurulmaz.
+        let after = bootstrap(&db).recent_session.expect("onceki ozet kalmali");
+        assert_eq!(after.summary, "Eski oturum: sema kararlari konusuldu.");
+        assert!(
+            !after.summary.contains("wake word"),
+            "silinen ozet hala baglamda: {}",
+            after.summary
+        );
+
+        // Tum oturumlar silinince tasinacak ozet kalmaz.
+        session_repository::delete_all(&db).expect("temizlik");
+        assert!(
+            bootstrap(&db).recent_session.is_none(),
+            "silinen oturum ozeti baglamda"
+        );
+    }
+
     #[test]
     fn a_session_without_a_summary_is_not_attached() {
         let db = fresh_db();

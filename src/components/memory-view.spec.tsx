@@ -22,6 +22,7 @@ import type {
   MemoryRecord,
   MemoryWriteResult,
 } from '../shared/memory';
+import type { SessionDeleteResult, SessionPage } from '../shared/session';
 import { AsunaStoreError } from '../shared/store-error';
 
 import { MemoryView, type MemoryViewPort } from './memory-view';
@@ -73,7 +74,18 @@ interface TestPort extends MemoryViewPort {
   readonly archive: Mock<(id: number, archived: boolean) => Promise<MemoryWriteResult>>;
   readonly remove: Mock<(id: number) => Promise<MemoryWriteResult>>;
   readonly update: Mock<(id: number, patch: MemoryPatch) => Promise<MemoryWriteResult>>;
+  /** Oturum gecmisi (ASU-065) — ayri IPC yuzeyi, ayni ekran. */
+  readonly listSessions: Mock<(limit?: number) => Promise<SessionPage>>;
+  readonly removeSession: Mock<(sessionId: number) => Promise<SessionDeleteResult>>;
 }
+
+/** Oturum listesi bu dosyanin konusu degil; bos ve calisan bir yuzey yeter. */
+const EMPTY_SESSION_PAGE: SessionPage = {
+  sessions: [],
+  limit: 10,
+  limitMax: 200,
+  total: 0,
+};
 
 function createPort(initial: readonly MemoryRecord[], status: DbStatus = READY): TestPort {
   const rows = [...initial];
@@ -111,6 +123,11 @@ function createPort(initial: readonly MemoryRecord[], status: DbStatus = READY):
     return Promise.resolve({ status: 'stored', record: updated });
   });
 
+  const listSessions = vi.fn(() => Promise.resolve(EMPTY_SESSION_PAGE));
+  const removeSession = vi.fn((sessionId: number): Promise<SessionDeleteResult> =>
+    Promise.resolve({ status: 'deleted', id: sessionId, transcriptFile: 'not-recorded' }),
+  );
+
   return {
     rows,
     fetchStatus,
@@ -118,6 +135,8 @@ function createPort(initial: readonly MemoryRecord[], status: DbStatus = READY):
     archive,
     remove,
     update,
+    listSessions,
+    removeSession,
     lastFilter: (): MemoryFilter | undefined => list.mock.calls.at(-1)?.[0],
   };
 }

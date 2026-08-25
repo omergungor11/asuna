@@ -176,6 +176,186 @@ fn create_private_file(path: &Path) -> io::Result<File> {
     File::create(path)
 }
 
+// ---------------------------------------------------------------------------
+// Silme (ASU-065)
+// ---------------------------------------------------------------------------
+
+/// Bir oturumun dokum dosyasina yapilan silme denemesinin sonucu (ASU-065).
+///
+/// Neden bir enum ve neden bu kadar cok varyant: "sildim" demek yalnizca dosya
+/// gercekten gittiginde dogrudur. `bool` donmek uc ayri gercegi tek kelimeye
+/// sikistirirdi — kayitta dosya yoktu, dosya zaten yoktu, dosyaya dokunmayi
+/// **reddettik**. Ucu de kullaniciya farkli sey soyler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TranscriptFileOutcome {
+    /// Oturum kaydinda dokum yolu yoktu (`ASUNA_TRANSCRIPT_STORAGE=false`).
+    NotRecorded,
+    /// Dosya bulundu ve silindi.
+    Deleted,
+    /// Kayitta yol vardi ama dosya diskte yok (kullanici elle silmis olabilir).
+    AlreadyGone,
+    /// Yol sandbox disina cikiyor ya da dosya degil: **dokunulmadi**.
+    Refused,
+    /// Silme denendi, dosya sistemi izin vermedi. Hata log'lanir.
+    Failed,
+}
+
+/// Kayitli dokum dosyasini siler — **yalnizca** sandbox icindeyse.
+///
+/// # Guvenlik (traversal guard)
+///
+/// Silinecek yol renderer'dan **gelmez**, `sessions.transcript_path`'ten okunur.
+/// Yine de veritabani bozulmus/elle duzenlenmis olabilir: bir satir
+/// `.../transcripts/../../.ssh/id_ed25519` gosteriyorsa o dosya silinmemeli.
+/// Bu yuzden iki kosul birlikte aranir ve ikisi de saglanmazsa
+/// [`TranscriptFileOutcome::Refused`] donulur:
+///
+/// 1. Yol, `base_dir` (`app_data_dir()/transcripts`) **altinda** olmali —
+///    karsilastirma once `..`/`.` bilesenleri lexical olarak cozulerek yapilir
+///    (dosya var olmayabilecegi icin `canonicalize` kullanilamaz).
+/// 2. Dosya adi tam olarak bu oturumun adi olmali
+///    ([`transcript_file_name`]) — bozuk bir satir baska bir oturumun dokumunu
+///    silmeye yol acmasin.
+///
+/// Symlink'ler de reddedilir: dizinin icine yerlestirilmis bir link, kosul (1)
+/// saglaniyor gibi gorunurken hedefi sandbox disinda olabilir.
+pub fn delete_recorded_file(
+    base_dir: &Path,
+    session_id: i64,
+    recorded_path: Option<&str>,
+) -> TranscriptFileOutcome {
+    let Some(recorded) = recorded_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return TranscriptFileOutcome::NotRecorded;
+    };
+
+    let Some(path) = resolve_inside(base_dir, session_id, Path::new(recorded)) else {
+        // GIZLILIK: yol log'a girmiyor; oturum kimligi yeter.
+        eprintln!("[asuna] Oturum {session_id} dokum yolu sandbox disinda, dosyaya dokunulmadi.");
+        return TranscriptFileOutcome::Refused;
+    };
+
+    match fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => TranscriptFileOutcome::AlreadyGone,
+        Err(error) => {
+            eprintln!("[asuna] Dokum dosyasi okunamadi: {error}");
+            TranscriptFileOutcome::Failed
+        }
+        Ok(metadata) if !metadata.file_type().is_file() => {
+            eprintln!("[asuna] Oturum {session_id} dokum yolu duz dosya degil, dokunulmadi.");
+            TranscriptFileOutcome::Refused
+        }
+        Ok(_) => match fs::remove_file(&path) {
+            Ok(()) => TranscriptFileOutcome::Deleted,
+            Err(error) => {
+                eprintln!("[asuna] Dokum dosyasi silinemedi: {error}");
+                TranscriptFileOutcome::Failed
+            }
+        },
+    }
+}
+
+/// Kayitli yolu sandbox icinde dogrular. `None` = reddedildi.
+fn resolve_inside(base_dir: &Path, session_id: i64, recorded: &Path) -> Option<PathBuf> {
+    let base = normalize_lexically(base_dir);
+    let candidate = normalize_lexically(recorded);
+
+    if !candidate.starts_with(&base) {
+        return None;
+    }
+    if candidate.file_name()? != std::ffi::OsStr::new(&transcript_file_name(session_id)) {
+        return None;
+    }
+    Some(candidate)
+}
+
+/// `.` ve `..` bilesenlerini **dosya sistemine dokunmadan** cozer.
+///
+/// `canonicalize` kullanilamaz: silinecek dosya zaten silinmis olabilir ve o
+/// durumda hata donerdi — yani "dosya yok" ile "yol kacis deniyor" ayni gorunurdu.
+fn normalize_lexically(path: &Path) -> PathBuf {
+    use std::path::Component;
+
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
+}
+
+/// Dizin temizliginin sonucu (ASU-065).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TranscriptPurge {
+    /// Silinen dokum dosyasi sayisi.
+    pub deleted: u32,
+    /// Dizinde **birakilan** girdi sayisi: silinemeyen dosyalar ve Asuna'nin
+    /// uretmedigi yabanci girdiler. Sifir degilse kullaniciya soylenir.
+    pub remaining: u32,
+}
+
+/// `transcripts/` dizinindeki tum dokum dosyalarini siler.
+///
+/// Yalnizca **Asuna'nin urettigi** adlar silinir (`session-<id>.jsonl`):
+/// kullanicinin bu dizine koydugu baska bir dosyayi silmek, istemedigi bir seyi
+/// silmek olurdu. Bu tur girdiler `remaining` icinde sayilir ve dizin de
+/// birakilir; dizin ancak tamamen bosaldiginda kaldirilir.
+pub fn purge_directory(base_dir: &Path) -> TranscriptPurge {
+    let mut purge = TranscriptPurge::default();
+
+    let Ok(entries) = fs::read_dir(base_dir) else {
+        // Dizin yok = temizlenecek bir sey yok (hata degil).
+        return purge;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_transcript = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(is_transcript_file_name)
+            && path.is_file();
+
+        if !is_transcript {
+            purge.remaining = purge.remaining.saturating_add(1);
+            continue;
+        }
+        match fs::remove_file(&path) {
+            Ok(()) => purge.deleted = purge.deleted.saturating_add(1),
+            Err(error) => {
+                eprintln!("[asuna] Dokum dosyasi silinemedi: {error}");
+                purge.remaining = purge.remaining.saturating_add(1);
+            }
+        }
+    }
+
+    if purge.remaining == 0 {
+        // Bos dizin de kalmasin; basarisiz olursa onemli degil (sessiz degil,
+        // yalnizca gurultusuz: dosyalar zaten gitti).
+        let _ = fs::remove_dir(base_dir);
+    }
+    purge
+}
+
+/// Ad, Asuna'nin urettigi bir dokum dosyasi adi mi?
+fn is_transcript_file_name(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("session-") else {
+        return false;
+    };
+    let Some(digits) = rest.strip_suffix(".jsonl") else {
+        return false;
+    };
+    !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+}
+
 /// Izinler beklenenden gevsekse sikilastirir. Zaten dogruysa dosya sistemine
 /// dokunmaz (gereksiz `chmod` yok).
 #[cfg(unix)]
@@ -398,5 +578,197 @@ mod tests {
         )
         .is_err());
         assert!(serde_json::from_str::<TranscriptLine>(r#"{"role":"system","text":"x"}"#).is_err());
+    }
+
+    // --- silme (ASU-065) --------------------------------------------------
+
+    /// **ASU-065 kabul kriteri**: dokum dosyasi gercekten diskten gidiyor.
+    #[test]
+    fn deleting_a_session_removes_its_transcript_file_from_disk() {
+        let temp = TempDir::new("delete");
+        let dir = temp.path().join(TRANSCRIPT_DIR_NAME);
+        let path = persist_if_enabled(true, &dir, 42, &lines())
+            .expect("yazma")
+            .expect("yol");
+        assert!(path.exists());
+
+        let outcome = delete_recorded_file(&dir, 42, Some(&path.to_string_lossy()));
+
+        assert_eq!(outcome, TranscriptFileOutcome::Deleted);
+        assert!(!path.exists(), "dosya diskte kalmis");
+        assert!(
+            temp.files().is_empty(),
+            "diskte dosya kalmis: {:?}",
+            temp.files()
+        );
+
+        // Ikinci cagri "sildim" demez: dosya zaten yok.
+        assert_eq!(
+            delete_recorded_file(&dir, 42, Some(&path.to_string_lossy())),
+            TranscriptFileOutcome::AlreadyGone
+        );
+    }
+
+    #[test]
+    fn a_session_without_a_recorded_path_reports_nothing_to_delete() {
+        let temp = TempDir::new("no-path");
+        let dir = temp.path().join(TRANSCRIPT_DIR_NAME);
+
+        assert_eq!(
+            delete_recorded_file(&dir, 1, None),
+            TranscriptFileOutcome::NotRecorded
+        );
+        assert_eq!(
+            delete_recorded_file(&dir, 1, Some("   ")),
+            TranscriptFileOutcome::NotRecorded
+        );
+        assert!(!dir.exists(), "silme yolu dizin olusturmamali");
+    }
+
+    /// **GUVENLIK (ASU-065)**: DB bozulmus/elle duzenlenmis olsa bile silme
+    /// sandbox'in disina cikamaz. Traversal, mutlak kacis ve baska bir oturumun
+    /// dosyasi — ucu de reddedilir ve **hicbiri diske dokunmaz**.
+    #[test]
+    fn the_delete_path_never_escapes_the_transcript_directory() {
+        let temp = TempDir::new("traversal");
+        let dir = temp.path().join(TRANSCRIPT_DIR_NAME);
+        fs::create_dir_all(&dir).expect("dizin");
+
+        // Sandbox disinda, silinmemesi gereken bir "kurban" dosya.
+        let victim = temp.path().join("id_ed25519");
+        fs::write(&victim, b"PRIVATE KEY").expect("kurban dosyasi yazilabilmeli");
+
+        // Sandbox icinde baska bir oturumun dosyasi.
+        let other = persist_if_enabled(true, &dir, 9, &lines())
+            .expect("yazma")
+            .expect("yol");
+
+        let escapes = [
+            // Traversal: dizinin icinden cikip disariya uzaniyor.
+            dir.join("..")
+                .join("id_ed25519")
+                .to_string_lossy()
+                .into_owned(),
+            // `..` ile geri gelip kurbani hedefliyor, ama dosya adi dogru.
+            dir.join("..")
+                .join("session-42.jsonl")
+                .to_string_lossy()
+                .into_owned(),
+            // Tamamen baska bir mutlak yol.
+            "/etc/passwd".to_owned(),
+            // Sandbox icinde ama **baska** oturumun dosyasi.
+            other.to_string_lossy().into_owned(),
+            // Goreli yol: base_dir altinda oldugu dogrulanamaz.
+            "session-42.jsonl".to_owned(),
+        ];
+
+        for escape in escapes {
+            assert_eq!(
+                delete_recorded_file(&dir, 42, Some(&escape)),
+                TranscriptFileOutcome::Refused,
+                "yol reddedilmedi: {escape}"
+            );
+        }
+
+        assert!(victim.exists(), "sandbox disindaki dosya silinmis");
+        assert!(other.exists(), "baska oturumun dokumu silinmis");
+    }
+
+    /// Dizine yerlestirilmis bir symlink, adi dogru olsa bile takip edilmez.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_transcript_is_refused_instead_of_followed() {
+        let temp = TempDir::new("symlink");
+        let dir = temp.path().join(TRANSCRIPT_DIR_NAME);
+        fs::create_dir_all(&dir).expect("dizin");
+
+        let victim = temp.path().join("secret.txt");
+        fs::write(&victim, b"gizli").expect("kurban dosyasi");
+
+        let link = dir.join(transcript_file_name(7));
+        std::os::unix::fs::symlink(&victim, &link).expect("symlink kurulabilmeli");
+
+        assert_eq!(
+            delete_recorded_file(&dir, 7, Some(&link.to_string_lossy())),
+            TranscriptFileOutcome::Refused
+        );
+        assert!(victim.exists(), "symlink hedefi silinmis");
+        assert!(
+            fs::symlink_metadata(&link).is_ok(),
+            "link'e dokunulmamis olmali"
+        );
+    }
+
+    /// **ASU-065 kabul kriteri**: toplu temizlik sonrasi dizin bos.
+    #[test]
+    fn purging_the_directory_removes_every_transcript_file() {
+        let temp = TempDir::new("purge");
+        let dir = temp.path().join(TRANSCRIPT_DIR_NAME);
+        for id in 1..=3 {
+            persist_if_enabled(true, &dir, id, &lines()).expect("yazma");
+        }
+
+        let purge = purge_directory(&dir);
+
+        assert_eq!(purge.deleted, 3);
+        assert_eq!(purge.remaining, 0);
+        assert!(!dir.exists(), "bosalan dizin de kaldirilmali");
+        assert!(temp.files().is_empty(), "kalan: {:?}", temp.files());
+
+        // Dizin yokken tekrar cagirmak hata degil.
+        assert_eq!(purge_directory(&dir), TranscriptPurge::default());
+    }
+
+    /// Asuna'nin uretmedigi dosyalar silinmez: kullanicinin o dizine koydugu bir
+    /// seyi silmek, istemedigi bir seyi silmektir. Sayilir ve **raporlanir**.
+    #[test]
+    fn purging_leaves_files_asuna_did_not_write() {
+        let temp = TempDir::new("purge-foreign");
+        let dir = temp.path().join(TRANSCRIPT_DIR_NAME);
+        persist_if_enabled(true, &dir, 5, &lines()).expect("yazma");
+
+        let foreign = dir.join("notlarim.txt");
+        fs::write(&foreign, b"benim notum").expect("yabanci dosya");
+        let nested = dir.join("session-abc.jsonl");
+        fs::write(&nested, b"{}").expect("desene uymayan dosya");
+
+        let purge = purge_directory(&dir);
+
+        assert_eq!(purge.deleted, 1);
+        assert_eq!(purge.remaining, 2);
+        assert!(foreign.exists(), "yabanci dosya silinmis");
+        assert!(nested.exists(), "desene uymayan dosya silinmis");
+        assert!(dir.exists(), "icinde dosya varken dizin kaldirilmamali");
+    }
+
+    #[test]
+    fn only_generated_transcript_names_are_recognized() {
+        assert!(is_transcript_file_name("session-1.jsonl"));
+        assert!(is_transcript_file_name("session-987654321.jsonl"));
+
+        for name in [
+            "session-.jsonl",
+            "session-1.json",
+            "session-1.jsonl.bak",
+            "sessions-1.jsonl",
+            "session-abc.jsonl",
+            "session--1.jsonl",
+            ".env",
+        ] {
+            assert!(!is_transcript_file_name(name), "kabul edilmemeli: {name}");
+        }
+    }
+
+    #[test]
+    fn the_outcome_is_explicit_on_the_wire() {
+        for (outcome, expected) in [
+            (TranscriptFileOutcome::NotRecorded, "not-recorded"),
+            (TranscriptFileOutcome::Deleted, "deleted"),
+            (TranscriptFileOutcome::AlreadyGone, "already-gone"),
+            (TranscriptFileOutcome::Refused, "refused"),
+            (TranscriptFileOutcome::Failed, "failed"),
+        ] {
+            assert_eq!(serde_json::to_value(outcome).expect("serialize"), expected);
+        }
     }
 }

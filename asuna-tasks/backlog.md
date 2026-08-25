@@ -11,11 +11,13 @@
 
 ## Candidates (MVP'den hemen sonra degerlendirilecek)
 
-- [ ] **ASU-065 — oturum/dokum temizligi** (Gate 3 / MEDIUM-6, 2026-08-25) — `memory_delete_all`
-      yalnizca `memories` tablosunu siliyor; oturum kayitlari/ozetleri (`sessions.summary`) ve
-      diskteki transcript dosyalari duruyor. Kapsami sessizce genisletmek yerine **ayri ve gorunur**
-      bir aksiyon gerekiyor: ne silinecegi tek tek yazili, onayli, geri alinamaz oldugu belirtilmis.
-      Karar gerekcesi `asuna-docs/DECISIONS.md` → "Phase 3 kararlari".
+- [x] **ASU-065 — oturum ozeti + dokum temizligi** (Gate 3 / MEDIUM-6, 2026-08-25) →
+      **Phase 3'e cekildi ve tamamlandi (2026-08-25)**. Backlog'da kalamadi: M3 kabul testi
+      bunu blokere cevirdi — kullanici hafiza kayitlarini sildi ama Asuna hatirlamaya devam
+      etti, cunku Stage A son oturum ozetini enjekte ediyor ve `sessions.summary` urun icinden
+      silinemiyordu. Cozum tasarlandigi gibi **ayri ve gorunur** bir aksiyon oldu (kapsam
+      genisletme degil): `Hafiza > Oturumlar` ve `Ayarlar > Konusma gecmisini sil`.
+      Detay: `asuna-tasks/phases/phase-3.md` → ASU-065.
 - [ ] **Hafiza listesinde sunucu tarafi sayfalama** (Gate 3 / MEDIUM-5) — `memory_list` en fazla 200
       kayit donuyor; UI su an tavana carptigini yalnizca metinle soyluyor. `hasMore`/`total`
       alanlari ve offset destegi backend isi.

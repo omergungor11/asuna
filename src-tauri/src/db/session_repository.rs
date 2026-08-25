@@ -39,8 +39,9 @@ use tauri::State;
 
 use super::clock;
 use super::model::{SessionEndReason, SessionRecord};
+use super::project_repository;
 use super::store_error::{database, StoreError, StoreSkipReason};
-use super::transcript::{self, TranscriptLine};
+use super::transcript::{self, TranscriptFileOutcome, TranscriptLine};
 use super::{AsunaDb, DbState};
 use crate::config::AsunaConfig;
 use crate::privacy::PrivacyState;
@@ -54,6 +55,21 @@ use crate::summary;
 /// (bir test ikisini birbirine bagliyor).
 pub const ABANDONED_SESSION_SUMMARY: &str =
     "Oturum beklenmedik sekilde kapandi (uygulama yeniden acilirken kapatildi).";
+
+/// Oturum listesinin varsayilan uzunlugu (ASU-065).
+pub const DEFAULT_SESSION_LIST_LIMIT: u32 = 50;
+
+/// Oturum listesi icin tavan. Asan istek **reddedilmez, kirpilir** — ama
+/// kirpildigi [`SessionPage`] icinde gorunur olur (`limit` + `total`), cunku
+/// "hepsi bu kadar" yalanini uretmek denetlenebilirligi bozar.
+pub const MAX_SESSION_LIST_LIMIT: u32 = 200;
+
+/// Listede gosterilen ozet on izlemesinin azami karakteri.
+///
+/// Tam ozet listeye konmaz: ekran denetim yuzeyi, okuma ekrani degil. Kirpma
+/// [`SessionListItem::summary_truncated`] ile **gorunur** (kirpilmis metni tam
+/// sanmak, hafizanin ne tasidigi konusunda yanlis fikir verir).
+pub const SUMMARY_PREVIEW_CHARS: usize = 280;
 
 /// Bir oturumda beklenebilecek azami replik sayisi.
 ///
@@ -136,6 +152,103 @@ pub enum SessionWriteResult {
     Skipped { reason: StoreSkipReason },
 }
 
+// ---------------------------------------------------------------------------
+// Listeleme + silme sozlesmesi (ASU-065)
+// ---------------------------------------------------------------------------
+
+/// Oturum listesinin tek satiri.
+///
+/// [`SessionRecord`] **degil**: bu bir denetim satiri, DB kaydinin kopyasi
+/// degil. Iki alan bilerek disarida:
+///
+/// - `transcript_path`: renderer'a dosya yolu gitmez. Kullanicinin dizin yapisi
+///   webview'e tasinacak bir bilgi degil ve silme zaten host tarafinda yapiliyor
+///   — UI'in bilmesi gereken tek sey **dosya var mi**
+///   ([`SessionListItem::has_transcript_file`]).
+/// - `usage_json` / token kirilimi: oturum ozeti UI'i (ASU-032) bunlari kapanis
+///   aninda zaten gosteriyor; listeye tasimak her satirda ham JSON demek olurdu.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionListItem {
+    pub id: i64,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub end_reason: Option<SessionEndReason>,
+    /// `None` = ozet uretilmedi (kisa oturum ya da basarisiz ozetleme).
+    pub summary_preview: Option<String>,
+    /// `true` ise on izleme kirpildi; kaydin kendisi degismedi.
+    pub summary_truncated: bool,
+    /// Diskte bir dokum dosyasi kayitli mi (`transcript_path IS NOT NULL`)?
+    pub has_transcript_file: bool,
+}
+
+/// Oturum listesi + **olculen** sinirlar.
+///
+/// `total` bilerek var: `memory_list` yalnizca kirpilmis bir dizi donuyor ve UI
+/// tavana carptigini tahmin etmek zorunda kaliyor (backlog: sunucu tarafi
+/// sayfalama). Oturum sayisi tek bir `COUNT(*)` ile bilinebiliyor; "50 / 214
+/// oturum" demek, "en yeni 50" demekten durust.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionPage {
+    pub sessions: Vec<SessionListItem>,
+    /// Uygulanan limit (kirpilmis olabilir).
+    pub limit: u32,
+    /// [`MAX_SESSION_LIST_LIMIT`] — tavanin kendisi de gorunur.
+    pub limit_max: u32,
+    /// Depodaki toplam oturum sayisi.
+    pub total: u32,
+}
+
+/// Liste istegi. Renderer yalnizca **kac tane** diyebilir; siralama ve alan
+/// secimi host tarafinda.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionListQuery {
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+/// Tek oturum silmenin sonucu.
+///
+/// `transcript_file` ayri bir alan cunku iki is birlikte yapiliyor ve **ayri
+/// ayri** basarisiz olabilir: satir gidip dosya kalabilir. "Sildim" demek
+/// yalnizca ikisi de bilindiginde dogrudur.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "kebab-case")]
+pub enum SessionDeleteResult {
+    // Alan adlari da `camelCase`: enum uzerindeki `rename_all` yalnizca **varyant**
+    // adlarini etkiler, alanlari etkilemez (bu ayrim bir testle bagli).
+    #[serde(rename_all = "camelCase")]
+    Deleted {
+        id: i64,
+        transcript_file: TranscriptFileOutcome,
+    },
+    Skipped {
+        reason: StoreSkipReason,
+    },
+}
+
+/// Toplu temizligin sonucu — hepsi **sayi**, cunku kullanici "gercekten gitti
+/// mi, ne kadari?" sorusunun cevabini gormeli.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "kebab-case")]
+pub enum SessionPurgeResult {
+    #[serde(rename_all = "camelCase")]
+    Purged {
+        /// Silinen `sessions` satiri sayisi (ozetler dahil).
+        deleted_sessions: u32,
+        /// Diskten silinen dokum dosyasi sayisi.
+        deleted_files: u32,
+        /// Dokum dizininde **birakilan** girdi sayisi (silinemeyenler +
+        /// Asuna'nin uretmedigi dosyalar). Sifir degilse UI bunu yazar.
+        remaining_files: u32,
+    },
+    Skipped {
+        reason: StoreSkipReason,
+    },
+}
+
 /// Kapanis sirasinda dogrulanmis/olculmus degerler.
 struct FinalizeValues {
     ended_at: String,
@@ -186,6 +299,9 @@ pub fn start(
     let record = db
         .with_connection(|connection| {
             let transaction = connection.transaction()?;
+            // 003'ten beri `project_id` bir yabanci anahtar; etiketin karsiligi
+            // yoksa `unlinked` bir satir acilir (`memory_create` ile ayni kural).
+            project_repository::ensure_optional_label(&transaction, project_id.as_deref(), &now)?;
             transaction.execute(
                 "INSERT INTO sessions (started_at, project_id, model, created_at)
                  VALUES (?1, ?2, ?3, ?1)",
@@ -460,6 +576,127 @@ pub fn latest_completed_summary(db: &AsunaDb) -> Result<Option<SessionRecord>, S
     .map_err(|error| StoreError::storage(error, "session_recent"))
 }
 
+// ---------------------------------------------------------------------------
+// Listeleme + silme (ASU-065)
+// ---------------------------------------------------------------------------
+
+/// En yeni oturumlari denetim satiri olarak dondurur.
+///
+/// Siralama `started_at DESC, id DESC`: zaman damgasi saniye hassasiyetinde
+/// (bkz. [`clock`]), ayni saniyede acilan iki oturumun sirasi `id` ile cozulur.
+/// **Acik oturumlar da listelenir** — su an konusulan oturum kullanicidan
+/// gizlenmez; `ended_at = null` olarak gorunur.
+pub fn list_recent(db: &AsunaDb, limit: u32) -> Result<SessionPage, StoreError> {
+    let limit = limit.clamp(1, MAX_SESSION_LIST_LIMIT);
+
+    db.with_connection(|connection| {
+        let total: i64 =
+            connection.query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))?;
+
+        let mut statement = connection.prepare(
+            "SELECT id, started_at, ended_at, end_reason, summary,
+                    transcript_path IS NOT NULL AS has_transcript_file
+               FROM sessions
+              ORDER BY started_at DESC, id DESC
+              LIMIT ?1",
+        )?;
+        let rows = statement.query_map(params![limit], |row| {
+            let summary: Option<String> = row.get("summary")?;
+            let (summary_preview, summary_truncated) = clamp_summary(summary.as_deref());
+            Ok(SessionListItem {
+                id: row.get("id")?,
+                started_at: row.get("started_at")?,
+                ended_at: row.get("ended_at")?,
+                end_reason: row.get("end_reason")?,
+                summary_preview,
+                summary_truncated,
+                has_transcript_file: row.get::<_, i64>("has_transcript_file")? != 0,
+            })
+        })?;
+        let sessions = rows.collect::<rusqlite::Result<Vec<SessionListItem>>>()?;
+
+        Ok(SessionPage {
+            sessions,
+            limit,
+            limit_max: MAX_SESSION_LIST_LIMIT,
+            total: u32::try_from(total).unwrap_or(u32::MAX),
+        })
+    })
+    .map_err(|error| StoreError::storage(error, "session_list"))
+}
+
+/// Ozeti on izleme uzunluguna kirpar. @returns `(on izleme, kirpildi mi)`.
+fn clamp_summary(summary: Option<&str>) -> (Option<String>, bool) {
+    let Some(text) = summary.map(str::trim).filter(|text| !text.is_empty()) else {
+        return (None, false);
+    };
+    if text.chars().count() <= SUMMARY_PREVIEW_CHARS {
+        return (Some(text.to_owned()), false);
+    }
+    let head: String = text.chars().take(SUMMARY_PREVIEW_CHARS).collect();
+    (Some(format!("{head}…")), true)
+}
+
+/// Oturum satirini siler ve varsa **kayitli dokum yolunu** dondurur.
+///
+/// Dosya bu katmanda silinmez: repository dosya sistemine dokunmaz (yazma
+/// yolundaki ayrimin aynisi). Yol cagirana doner, silmeyi komut yapar.
+///
+/// Sira bilincli — **once satir**: kullanicinin sikayeti "sildim ama hatirladi"
+/// idi ve hatirlamayi ureten sey `sessions.summary`. Dosya silinemese bile ozet
+/// gitmis olmali; aksi halde bir `EACCES` hatasi hafizanin silinmesini
+/// engellerdi.
+///
+/// `memories.source_session_id` bu satira bagliysa **hafiza silinmez**: FK
+/// `ON DELETE SET NULL` (migration 001). Kayit durur, kaynagi "bilinmiyor"a
+/// doner — hafizayi silme yetkisi kullanicinindir ve o ayri bir aksiyondur.
+pub fn delete(db: &AsunaDb, id: i64) -> Result<Option<String>, StoreError> {
+    if id <= 0 {
+        return Err(StoreError::invalid("`sessionId` pozitif olmali"));
+    }
+
+    let outcome = db
+        .with_connection(|connection| {
+            let transaction = connection.transaction()?;
+            let recorded: Option<Option<String>> = transaction
+                .query_row(
+                    "SELECT transcript_path FROM sessions WHERE id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+
+            let Some(recorded) = recorded else {
+                transaction.commit()?;
+                return Ok(None);
+            };
+            transaction.execute("DELETE FROM sessions WHERE id = ?1", params![id])?;
+            transaction.commit()?;
+            Ok(Some(recorded))
+        })
+        .map_err(|error| StoreError::storage(error, "session_delete"))?;
+
+    outcome.ok_or(StoreError::NotFound)
+}
+
+/// **Tum** oturum kayitlarini siler ve silinen sayiyi dondurur.
+///
+/// [`memory_repository::delete_all`](super::memory_repository::delete_all) ile
+/// ayni desen: silme sonrasi `VACUUM` denenir (serbest sayfalar dosyada
+/// kalmasin — bu bir gizlilik aksiyonu), basarisiz olursa islem yine basarili
+/// sayilir ve hata yerel log'a duser.
+pub fn delete_all(db: &AsunaDb) -> Result<u32, StoreError> {
+    let deleted = db
+        .with_connection(|connection| connection.execute("DELETE FROM sessions", []))
+        .map_err(|error| StoreError::storage(error, "session_clear_all"))?;
+
+    if let Err(error) = db.with_connection(|connection| connection.execute_batch("VACUUM")) {
+        eprintln!("[asuna] Oturum temizligi sonrasi VACUUM basarisiz: {error}");
+    }
+
+    Ok(u32::try_from(deleted).unwrap_or(u32::MAX))
+}
+
 /// Tek oturumu kimligiyle okur.
 pub fn get_by_id(db: &AsunaDb, id: i64) -> Result<Option<SessionRecord>, StoreError> {
     db.with_connection(|connection| load(connection, id))
@@ -601,6 +838,160 @@ pub fn session_finalize<R: tauri::Runtime>(
     Ok(SessionWriteResult::Recorded {
         session: Box::new(session),
     })
+}
+
+/// Toplu oturum temizligini onaylayan ifade — kullanicinin **birebir** yazmasi
+/// gerekir (ASU-065).
+///
+/// `memory_repository::DELETE_ALL_CONFIRMATION` ile **bilerek farkli**: iki
+/// aksiyonun kapsami farkli ve ayni cumleyi paylasmalari, birini yazip
+/// digerini calistirma hatasini mumkun kilardi. Turkce karakter yok —
+/// kullanicinin klavye duzeninden bagimsiz yazilabilmeli.
+///
+/// TypeScript aynasi: `src/shared/session.ts` → `SESSION_CLEAR_ALL_CONFIRMATION`.
+pub const CLEAR_ALL_CONFIRMATION: &str = "KONUSMA GECMISINI SIL";
+
+/// Oturum kayitlarini listeler (salt okuma, ASU-065).
+///
+/// Hafiza kapaliyken **bos sayfa** doner (hata degil) — `memory_list` ile ayni
+/// sozlesme. Renderer siralamayi ya da alanlari secemez; yalnizca kac satir
+/// istedigini soyleyebilir ve bu istek tavana kirpilir.
+#[tauri::command]
+pub fn session_list(
+    state: State<'_, DbState>,
+    query: Option<SessionListQuery>,
+) -> Result<SessionPage, StoreError> {
+    let limit = query
+        .and_then(|query| query.limit)
+        .unwrap_or(DEFAULT_SESSION_LIST_LIMIT)
+        .clamp(1, MAX_SESSION_LIST_LIMIT);
+
+    let Some(db) = database(&state)? else {
+        return Ok(SessionPage {
+            sessions: Vec::new(),
+            limit,
+            limit_max: MAX_SESSION_LIST_LIMIT,
+            total: 0,
+        });
+    };
+    list_recent(db, limit)
+}
+
+/// Tek oturumu siler: `sessions` satiri + varsa diskteki dokum dosyasi.
+///
+/// # Neden bu komut var (M3 blokaji)
+///
+/// M3 kabul testinde kullanici hafiza kayitlarini sildi ama Asuna hatirlamaya
+/// devam etti: Stage A her oturum acilisinda **son oturum ozetini** enjekte
+/// ediyor ([`latest_completed_summary`]) ve `sessions.summary` silinemiyordu.
+/// Bu komut o boslugu kapatir — silinen ozet bir sonraki baglama giremez, cunku
+/// baglam onbelleklenmiyor ve her `connect()` oncesi depodan yeniden okunuyor.
+///
+/// # Gizlilik
+///
+/// Calisma zamani hafiza anahtarina **bakmaz** (`memory_delete` ile ayni
+/// gerekce): kullanici hafizayi kapattiktan sonra da kendi verisini
+/// temizleyebilmeli. Anahtar "daha az hatirla" yonunu kapatmaz.
+///
+/// Dosya yolu renderer'dan gelmez ve renderer'a donmez: `transcript_path`
+/// DB'den okunur ve `app_data_dir()/transcripts` altinda oldugu dogrulanir
+/// (bkz. [`transcript::delete_recorded_file`]).
+#[tauri::command]
+pub fn session_delete<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: State<'_, DbState>,
+    session_id: i64,
+) -> Result<SessionDeleteResult, StoreError> {
+    let Some(db) = database(&state)? else {
+        return Ok(SessionDeleteResult::Skipped {
+            reason: StoreSkipReason::MemoryDisabled,
+        });
+    };
+
+    let recorded = delete(db, session_id)?;
+    Ok(SessionDeleteResult::Deleted {
+        id: session_id,
+        transcript_file: remove_transcript_file(&app, session_id, recorded.as_deref()),
+    })
+}
+
+/// **Tum** oturum kayitlarini ve dokum dosyalarini siler (ASU-065).
+///
+/// Iki kapi vardir ve ikisi de gecilmelidir: UI'daki iki asamali onay ve
+/// buradaki [`CLEAR_ALL_CONFIRMATION`] ifadesi. Ifade tutmazsa ne DB'ye ne
+/// diske dokunulur.
+///
+/// # Kapsam — ve neden `memory_delete_all`'dan ayri
+///
+/// Bu komut `sessions` tablosunu (ozetler dahil) ve `transcripts/` dizinini
+/// temizler; `memories` tablosuna **dokunmaz**. Iki aksiyon ayri, cunku
+/// kapsamlari ayri: kullanici konusma gecmisini silip cikarilmis hafizalari
+/// tutmak isteyebilir (ya da tersi). "Hepsini sildim" deyip bir seyi birakmak
+/// en kotu sonuc — bu yuzden her iki ekran da neyin **kapsam disi** oldugunu
+/// yaziyor (Gate 3 / MEDIUM-6 karari, M3 testiyle revize edildi).
+///
+/// Hafiza acilista kapaliysa DB dosyasi hic acilmamistir; o durumda `0` oturum
+/// silinir ama **dokum dosyalari yine temizlenir** — onceki bir calismadan
+/// kalan dosyalarin silinemez olmasi, anahtari bir tuzaga cevirirdi.
+#[tauri::command]
+pub fn session_clear_all<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: State<'_, DbState>,
+    confirmation_phrase: String,
+) -> Result<SessionPurgeResult, StoreError> {
+    if confirmation_phrase != CLEAR_ALL_CONFIRMATION {
+        // Mesaj kullanicinin yazdigi metni **tekrarlamaz**.
+        return Err(StoreError::invalid(format!(
+            "`confirmationPhrase` birebir `{CLEAR_ALL_CONFIRMATION}` olmali"
+        )));
+    }
+
+    // Ariza (`Unavailable`) burada hata olarak cikar: bozuk bir DB uzerinde
+    // "temizledim" demek yanlis olurdu.
+    let deleted_sessions = match database(&state)? {
+        Some(db) => delete_all(db)?,
+        None => 0,
+    };
+
+    let purge = match transcript::transcript_dir(&app) {
+        Ok(directory) => transcript::purge_directory(&directory),
+        Err(error) => {
+            eprintln!(
+                "[asuna] Dokum dizini cozulemedi: {}",
+                super::describe_error_chain(&error)
+            );
+            transcript::TranscriptPurge::default()
+        }
+    };
+
+    Ok(SessionPurgeResult::Purged {
+        deleted_sessions,
+        deleted_files: purge.deleted,
+        remaining_files: purge.remaining,
+    })
+}
+
+/// Dokum dosyasini siler; dizin cozulemezse `Failed` doner ve log'lar.
+fn remove_transcript_file<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    session_id: i64,
+    recorded_path: Option<&str>,
+) -> TranscriptFileOutcome {
+    if recorded_path.is_none() {
+        // GIZLILIK: kayitta dosya yoksa dizin yolu bile cozulmez.
+        return TranscriptFileOutcome::NotRecorded;
+    }
+
+    match transcript::transcript_dir(app) {
+        Ok(directory) => transcript::delete_recorded_file(&directory, session_id, recorded_path),
+        Err(error) => {
+            eprintln!(
+                "[asuna] Dokum dizini cozulemedi: {}",
+                super::describe_error_chain(&error)
+            );
+            TranscriptFileOutcome::Failed
+        }
+    }
 }
 
 /// Transcript'i (ayar aciksa) diske yazar; hata halinde `None` doner ve log'lar.
@@ -1139,6 +1530,305 @@ mod tests {
             parsed.usage.expect("usage").total_tokens,
             Some(15),
             "camelCase alanlar okunmali"
+        );
+    }
+
+    // --- listeleme + silme (ASU-065) --------------------------------------
+
+    /// Ozeti yazilmis, temiz kapanmis bir oturum kurar.
+    fn completed_session(db: &AsunaDb, summary: &str, transcript_path: Option<&str>) -> i64 {
+        let session = start(db, MODEL, None, START).expect("oturum");
+        finalize(
+            db,
+            session.id,
+            &SessionFinalizeInput::default(),
+            transcript_path,
+            END,
+        )
+        .expect("kapanis");
+        attach_summary(db, session.id, summary, None).expect("ozet");
+        session.id
+    }
+
+    #[test]
+    fn lists_the_newest_sessions_with_an_audit_row() {
+        let db = fresh_db();
+        let first = completed_session(&db, "Ilk oturum: wake word.", None);
+        let second = completed_session(
+            &db,
+            "Ikinci oturum: retrieval.",
+            Some("/tmp/asuna/transcripts/session-2.jsonl"),
+        );
+        let open = start(&db, MODEL, None, START).expect("acik oturum");
+
+        let page = list_recent(&db, DEFAULT_SESSION_LIST_LIMIT).expect("liste");
+
+        assert_eq!(page.total, 3);
+        assert_eq!(page.limit, DEFAULT_SESSION_LIST_LIMIT);
+        assert_eq!(page.limit_max, MAX_SESSION_LIST_LIMIT);
+        // En yeni once; ayni saniyede acilanlarin sirasi `id` ile cozulur.
+        assert_eq!(
+            page.sessions
+                .iter()
+                .map(|item| item.id)
+                .collect::<Vec<i64>>(),
+            [open.id, second, first]
+        );
+
+        let listed = &page.sessions[2];
+        assert_eq!(
+            listed.summary_preview.as_deref(),
+            Some("Ilk oturum: wake word.")
+        );
+        assert!(!listed.summary_truncated);
+        assert_eq!(listed.ended_at.as_deref(), Some(END));
+        assert_eq!(listed.end_reason, Some(SessionEndReason::Completed));
+        assert!(!listed.has_transcript_file);
+
+        assert!(
+            page.sessions[1].has_transcript_file,
+            "dokum dosyasi olan oturum isaretlenmeli"
+        );
+        // Acik oturum da gorunur: konusulan oturum kullanicidan gizlenmez.
+        assert_eq!(page.sessions[0].ended_at, None);
+        assert_eq!(page.sessions[0].summary_preview, None);
+    }
+
+    /// Liste **yol tasimaz**: kullanicinin dizin yapisi webview'e gitmez.
+    #[test]
+    fn the_list_never_carries_the_transcript_path() {
+        let db = fresh_db();
+        completed_session(
+            &db,
+            "ozet",
+            Some("/Users/kurban/Library/Application Support/asuna/transcripts/session-1.jsonl"),
+        );
+
+        let page = list_recent(&db, 10).expect("liste");
+        let json = serde_json::to_string(&page).expect("serialize");
+
+        assert!(json.contains("\"hasTranscriptFile\":true"), "yanit: {json}");
+        assert!(!json.contains("/Users/kurban"), "yol sizdi: {json}");
+        assert!(!json.contains("transcriptPath"), "yanit: {json}");
+    }
+
+    #[test]
+    fn the_list_limit_is_clamped_and_the_ceiling_is_visible() {
+        let db = fresh_db();
+        for _ in 0..3 {
+            start(&db, MODEL, None, START).expect("oturum");
+        }
+
+        let page = list_recent(&db, 2).expect("liste");
+        assert_eq!(page.sessions.len(), 2);
+        assert_eq!(page.limit, 2);
+        assert_eq!(page.total, 3, "tavan asilsa da toplam gorunur");
+
+        // Tavani asan istek reddedilmez, kirpilir — ve kirpildigi gorunur.
+        let page = list_recent(&db, 10_000).expect("liste");
+        assert_eq!(page.limit, MAX_SESSION_LIST_LIMIT);
+        assert_eq!(page.limit_max, MAX_SESSION_LIST_LIMIT);
+    }
+
+    #[test]
+    fn long_summaries_are_previewed_and_marked_as_truncated() {
+        let (preview, truncated) = clamp_summary(Some("kisa ozet"));
+        assert_eq!(preview.as_deref(), Some("kisa ozet"));
+        assert!(!truncated);
+
+        let long = "a".repeat(SUMMARY_PREVIEW_CHARS + 10);
+        let (preview, truncated) = clamp_summary(Some(&long));
+        let preview = preview.expect("on izleme");
+        assert!(truncated);
+        assert_eq!(
+            preview.chars().count(),
+            SUMMARY_PREVIEW_CHARS + 1,
+            "kirpma isareti dahil"
+        );
+
+        assert_eq!(clamp_summary(None), (None, false));
+        assert_eq!(clamp_summary(Some("   ")), (None, false));
+    }
+
+    /// **ASU-065 kabul kriteri**: silinen oturumun ozeti gercekten gider ve
+    /// kayitli dokum yolu cagirana doner (dosyayi komut katmani siler).
+    #[test]
+    fn deleting_a_session_removes_the_row_and_returns_the_recorded_path() {
+        let db = fresh_db();
+        let path = "/tmp/asuna/transcripts/session-1.jsonl";
+        let id = completed_session(&db, "Ozet: wake word yerel kalir.", Some(path));
+
+        let recorded = delete(&db, id).expect("silinmeli");
+
+        assert_eq!(recorded.as_deref(), Some(path));
+        assert!(get_by_id(&db, id).expect("okuma").is_none());
+        assert_eq!(
+            delete(&db, id).expect_err("ikinci silme").code(),
+            StoreErrorCode::NotFound
+        );
+    }
+
+    #[test]
+    fn deleting_a_session_without_a_transcript_reports_no_path() {
+        let db = fresh_db();
+        let id = completed_session(&db, "ozet", None);
+        assert_eq!(delete(&db, id).expect("silinmeli"), None);
+    }
+
+    #[test]
+    fn delete_rejects_non_positive_ids_before_touching_the_database() {
+        let db = fresh_db();
+        for id in [0_i64, -1] {
+            assert_eq!(
+                delete(&db, id).expect_err("gecersiz id").code(),
+                StoreErrorCode::Invalid
+            );
+        }
+    }
+
+    /// Oturum silmek **hafizayi silmez**: FK `ON DELETE SET NULL`. Kayit durur,
+    /// kaynagi "bilinmiyor"a doner — hafizayi silmek ayri bir aksiyondur.
+    #[test]
+    fn deleting_a_session_keeps_the_memories_it_produced() {
+        use crate::db::memory_repository::{self, MemoryDraft};
+
+        let db = fresh_db();
+        let id = completed_session(&db, "ozet", None);
+        let memory = memory_repository::create(
+            &db,
+            &MemoryDraft {
+                kind: crate::db::MemoryKind::Decision,
+                title: "Wake word yerel".to_owned(),
+                content: "Cihazda calisir.".to_owned(),
+                summary: None,
+                project_id: None,
+                importance: 0.9,
+                confidence: 1.0,
+                source_session_id: Some(id),
+                expires_at: None,
+                metadata_json: None,
+            },
+            START,
+        )
+        .expect("hafiza");
+
+        delete(&db, id).expect("oturum silinmeli");
+
+        let kept = memory_repository::get_by_id(&db, memory.id, START, false)
+            .expect("okuma")
+            .expect("hafiza durmali");
+        assert_eq!(kept.source_session_id, None, "kaynak bilinmiyora donmeli");
+    }
+
+    #[test]
+    fn clearing_all_sessions_empties_the_table_and_reports_the_count() {
+        let db = fresh_db();
+        completed_session(&db, "bir", None);
+        completed_session(&db, "iki", Some("/tmp/asuna/transcripts/session-2.jsonl"));
+        start(&db, MODEL, None, START).expect("acik oturum");
+
+        assert_eq!(delete_all(&db).expect("temizlik"), 3);
+        assert_eq!(
+            list_recent(&db, DEFAULT_SESSION_LIST_LIMIT)
+                .expect("liste")
+                .total,
+            0
+        );
+
+        // Bos depoda tekrar cagirmak hata degil, yalnizca 0.
+        assert_eq!(delete_all(&db).expect("bos depo"), 0);
+    }
+
+    /// **ASU-065 / M3 blokaji**: silinen oturumun ozeti Stage A'ya bir daha
+    /// girmez — `latest_completed_summary` bir **onceki** kalan ozete duser.
+    #[test]
+    fn the_deleted_session_summary_never_comes_back_to_stage_a() {
+        let db = fresh_db();
+        let older = completed_session(&db, "Eski oturum: sema kararlari.", None);
+        let newest = completed_session(&db, "Son oturum: wake word yerel kalir.", None);
+
+        let latest = latest_completed_summary(&db)
+            .expect("okuma")
+            .expect("ozet olmali");
+        assert_eq!(latest.id, newest);
+
+        delete(&db, newest).expect("silinmeli");
+
+        let fallback = latest_completed_summary(&db)
+            .expect("okuma")
+            .expect("bir onceki ozet kalmali");
+        assert_eq!(fallback.id, older);
+        assert_eq!(
+            fallback.summary.as_deref(),
+            Some("Eski oturum: sema kararlari.")
+        );
+
+        delete(&db, older).expect("silinmeli");
+        assert_eq!(
+            latest_completed_summary(&db).expect("okuma"),
+            None,
+            "hepsi silindiginde tasinacak ozet kalmamali"
+        );
+    }
+
+    #[test]
+    fn the_clear_all_confirmation_phrase_is_exact_and_distinct() {
+        assert_eq!(CLEAR_ALL_CONFIRMATION, "KONUSMA GECMISINI SIL");
+        // Iki toplu silme aksiyonunun ifadesi ayni olmamali: biri yazilip
+        // digeri calistirilamasin.
+        assert_ne!(
+            CLEAR_ALL_CONFIRMATION,
+            crate::db::memory_repository::DELETE_ALL_CONFIRMATION
+        );
+    }
+
+    #[test]
+    fn delete_and_purge_results_serialize_with_an_explicit_status() {
+        let json = serde_json::to_value(SessionDeleteResult::Deleted {
+            id: 7,
+            transcript_file: TranscriptFileOutcome::Deleted,
+        })
+        .expect("serialize");
+        assert_eq!(json["status"], "deleted");
+        assert_eq!(json["id"], 7);
+        assert_eq!(json["transcriptFile"], "deleted");
+
+        let json = serde_json::to_value(SessionPurgeResult::Purged {
+            deleted_sessions: 4,
+            deleted_files: 2,
+            remaining_files: 1,
+        })
+        .expect("serialize");
+        assert_eq!(json["status"], "purged");
+        assert_eq!(json["deletedSessions"], 4);
+        assert_eq!(json["deletedFiles"], 2);
+        assert_eq!(json["remainingFiles"], 1);
+
+        let json = serde_json::to_value(SessionDeleteResult::Skipped {
+            reason: StoreSkipReason::MemoryDisabled,
+        })
+        .expect("serialize");
+        assert_eq!(json["status"], "skipped");
+        assert_eq!(json["reason"], "memory-disabled");
+    }
+
+    /// Renderer liste sorgusuna kendi alanlarini ekleyemez (siralama, proje,
+    /// yol...): sozlesme kapali.
+    #[test]
+    fn unknown_list_query_fields_are_rejected_at_the_ipc_boundary() {
+        assert!(serde_json::from_str::<SessionListQuery>(r#"{"orderBy":"summary"}"#).is_err());
+        assert!(
+            serde_json::from_str::<SessionListQuery>(r#"{"transcriptPath":"/etc/passwd"}"#)
+                .is_err()
+        );
+
+        let parsed: SessionListQuery = serde_json::from_str(r#"{"limit":10}"#).expect("gecerli");
+        assert_eq!(parsed.limit, Some(10));
+        assert_eq!(
+            serde_json::from_str::<SessionListQuery>("{}")
+                .expect("gecerli")
+                .limit,
+            None
         );
     }
 }

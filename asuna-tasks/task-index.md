@@ -11,20 +11,24 @@
 | 0 | Arastirma + Scaffold | 11 | 11 | 0 | 0 | 0 | 0 |
 | 1 | Realtime Voice (dikey dilim) | 11 | 11 | 0 | 0 | 0 | 0 |
 | 2 | Wake Word | 8 | 1 | 0 | 0 | 7 | 0 |
-| 3 | Memory | 11 | 9 | 0 | 0 | 2 | 0 |
+| 3 | Memory | 11 | 10 | 0 | 0 | 1 | 0 |
 | 4 | Project Context | 8 | 0 | 0 | 0 | 8 | 0 |
 | 5 | One Useful Action (Tools) | 9 | 0 | 0 | 0 | 9 | 0 |
 | 6 | Focus Recovery (MVP) | 8 | 0 | 0 | 0 | 8 | 0 |
-| **Total** | | **66** | **32** | **0** | **0** | **34** | **0** |
+| **Total** | | **66** | **33** | **0** | **0** | **33** | **0** |
 
-**Progress**: 32/66 (48%)
+**Progress**: 33/66 (50%)
 
 > Phase 3 implementasyonu ASU-035 ile kapandi (2026-08-25): ASU-029..ASU-037 DONE.
 > Gate 3 review bulgulari duzeltildi (2026-08-25): calisma zamani gizlilik kapisi oturum
 > yoluna da eklendi, saklanan metinde secret redaksiyonu, dedup esigi yukseltildi
 > (`asuna-docs/DECISIONS.md` → "Phase 3 kararlari").
-> Acik maddeler: **ASU-038** — M3 manuel kabul testi (gercek mikrofon + uygulama restart'i)
-> ve **ASU-065** — oturum/dokum temizligi (M3 blokeri degil).
+> Acik madde: **ASU-038** — M3 manuel kabul testi (gercek mikrofon + uygulama restart'i).
+> **ASU-065 one cekildi ve tamamlandi (2026-08-25)**: M3 kabul testi gercek bir acik yakaladi —
+> kullanici hafiza kayitlarini sildi ama Asuna hatirlamaya devam etti, cunku Stage A son oturum
+> ozetini enjekte ediyor ve `sessions.summary` urun icinden silinemiyordu. Artik silinebiliyor
+> (`Hafiza > Oturumlar` ve `Ayarlar > Konusma gecmisini sil`), yani ASU-038'in "silindikten
+> sonra uydurmuyor" kriteri gercekten olculebilir.
 
 > ASU-008b spike tamamlandi (2026-08-24): motor/lisans/CPU/bundle dogrulandi, ADR-004 accepted
 > (kapsami daraltilmis). ACIK: model+ifade secimi — gigaspeech-3.3M "Hey Asuna"yi tasimiyor (R2).
@@ -128,7 +132,7 @@
 | ASU-062 | **M5 / MVP kabul checklist** — PROJECT.md Bolum 33 | 6 | L | test | PENDING |
 | ASU-063 | README + RUNBOOK + v0.1.0 release | 6 | M | docs | PENDING |
 | ASU-064 | Realtime gecikme ayari — turn detection konfigurasyonu + olcum | 1 | S | backend | COMPLETED |
-| ASU-065 | Oturum/dokum temizligi — ozet + transcript dosyalarini silme aksiyonu | 3+ | S | backend | PENDING |
+| ASU-065 | Oturum ozeti + transcript temizligi — silme aksiyonu (M3 blokaji, one cekildi) | 3 | M | full-stack | COMPLETED |
 
 ---
 

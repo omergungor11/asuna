@@ -18,6 +18,8 @@ import { describe, expect, it, vi, type Mock } from 'vitest';
 
 import { MEMORY_DELETE_ALL_CONFIRMATION, type MemoryPurgeResult } from '../shared/memory';
 import { AsunaPrivacyError, type PrivacyPatch, type PrivacySettings } from '../shared/privacy';
+import { SESSION_CLEAR_ALL_CONFIRMATION, type SessionPurgeResult } from '../shared/session';
+import { AsunaStoreError } from '../shared/store-error';
 
 import { SettingsView, type SettingsViewPort } from './settings-view';
 
@@ -25,6 +27,7 @@ interface TestPort extends SettingsViewPort {
   readonly fetchPrivacy: Mock<() => Promise<PrivacySettings>>;
   readonly updatePrivacy: Mock<(patch: PrivacyPatch) => Promise<PrivacySettings>>;
   readonly purgeMemories: Mock<(phrase: string) => Promise<MemoryPurgeResult>>;
+  readonly clearSessions: Mock<(phrase: string) => Promise<SessionPurgeResult>>;
 }
 
 function createPort(initial: Partial<PrivacySettings> = {}): TestPort {
@@ -47,7 +50,16 @@ function createPort(initial: Partial<PrivacySettings> = {}): TestPort {
     Promise.resolve({ status: 'purged', deleted: 3 }),
   );
 
-  return { fetchPrivacy, updatePrivacy, purgeMemories };
+  const clearSessions = vi.fn((): Promise<SessionPurgeResult> =>
+    Promise.resolve({
+      status: 'purged',
+      deletedSessions: 4,
+      deletedFiles: 2,
+      remainingFiles: 0,
+    }),
+  );
+
+  return { fetchPrivacy, updatePrivacy, purgeMemories, clearSessions };
 }
 
 const memorySwitch = (): HTMLElement => screen.getByRole('switch', { name: 'Kalıcı hafıza' });
@@ -193,12 +205,18 @@ describe('SettingsView — tum hafizayi sil', () => {
     expect(screen.getByRole('textbox')).toHaveValue('');
   });
 
-  it('neyin silinmedigini de yazar', async () => {
+  /**
+   * **ASU-065**: kapsam disi olan sey artik "yapilamaz" degil, **baska bir
+   * yerde yapilir**. Metin nereye bakilacagini soylemeli.
+   */
+  it('neyin silinmedigini ve nerede silinecegini yazar', async () => {
     render(<SettingsView port={createPort()} />);
 
-    expect(await screen.findByText(/Geri alınamaz/)).toHaveTextContent(
+    const explanation = await screen.findByText(/Oturum kayıtları\/özetleri/);
+    expect(explanation).toHaveTextContent(
       'Oturum kayıtları/özetleri ve diskteki konuşma dökümü dosyaları bu işlemle silinmez',
     );
+    expect(explanation).toHaveTextContent('Konuşma geçmişini sil');
   });
 
   it('hafiza kapaliyken "sildim" demez', async () => {
@@ -233,6 +251,154 @@ describe('SettingsView — tum hafizayi sil', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('disk dolu');
     expect(screen.getByRole('button', { name: 'Kalıcı olarak sil' })).toBeInTheDocument();
+  });
+});
+
+/**
+ * ASU-065 — "Konuşma geçmişini sil".
+ *
+ * Kanitlanan seyler:
+ * 1. Aksiyon **ayri**: kendi basligi, kendi ifadesi, kendi komutu.
+ * 2. Hafiza silmenin ifadesi burada calismaz (ve tersi).
+ * 3. Sonuc cumlesi olculen sayilardan kurulur; "temizlendi" demekle yetinmez.
+ * 4. Metin kapsam sinirini yaziyor: cikarilmis hafizalar bu islemle gitmez.
+ */
+describe('SettingsView — konusma gecmisini sil', () => {
+  const openClear = async (): Promise<HTMLElement> => {
+    fireEvent.click(await screen.findByRole('button', { name: 'Konuşma geçmişini sil' }));
+    return screen.getByRole('textbox');
+  };
+
+  it('cift onay ister ve silinen sayilari yazar', async () => {
+    const port = createPort();
+    render(<SettingsView port={port} />);
+
+    const input = await openClear();
+    expect(port.clearSessions).not.toHaveBeenCalled();
+
+    const confirmButton = screen.getByRole('button', {
+      name: 'Konuşma geçmişini kalıcı olarak sil',
+    });
+    expect(confirmButton).toBeDisabled();
+
+    // Hafiza silmenin ifadesi bu aksiyonu acmaz: kapsamlar ayri.
+    fireEvent.change(input, { target: { value: MEMORY_DELETE_ALL_CONFIRMATION } });
+    expect(confirmButton).toBeDisabled();
+
+    fireEvent.change(input, { target: { value: SESSION_CLEAR_ALL_CONFIRMATION } });
+    expect(confirmButton).toBeEnabled();
+    fireEvent.click(confirmButton);
+
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      '4 oturum kaydı (özetleriyle birlikte) ve 2 döküm dosyası kalıcı olarak silindi.',
+    );
+    expect(port.clearSessions).toHaveBeenCalledExactlyOnceWith(SESSION_CLEAR_ALL_CONFIRMATION);
+    // Hafiza silme komutu **cagrilmadi**: iki aksiyon birbirini tetiklemez.
+    expect(port.purgeMemories).not.toHaveBeenCalled();
+  });
+
+  it('ozetlerin bir daha hatirlanmayacagini ve kapsam disini yazar', async () => {
+    render(<SettingsView port={createPort()} />);
+
+    // Not: `findByText` yalnizca dogrudan metin dugumlerine bakar; "Bütün"
+    // <strong> icinde oldugu icin desen sonrasindan baslar.
+    const explanation = await screen.findByText(/oturum kayıtları \(oturum özetleri dahil\)/);
+    expect(explanation).toHaveTextContent('Bütün');
+    expect(explanation).toHaveTextContent('bir daha hatırlanmaz');
+    expect(explanation).toHaveTextContent('Çıkarılmış hafıza kayıtları bu işlemle silinmez');
+  });
+
+  it('silinecek bir sey yoktu diyebilir', async () => {
+    const port = createPort();
+    port.clearSessions.mockResolvedValueOnce({
+      status: 'purged',
+      deletedSessions: 0,
+      deletedFiles: 0,
+      remainingFiles: 0,
+    });
+    render(<SettingsView port={port} />);
+
+    const input = await openClear();
+    fireEvent.change(input, { target: { value: SESSION_CLEAR_ALL_CONFIRMATION } });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Konuşma geçmişini kalıcı olarak sil' }),
+    );
+
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'Silinecek oturum kaydı ya da döküm dosyası yoktu.',
+    );
+  });
+
+  /** Asuna'nin yazmadigi dosyalar silinmez — ve bu gizlenmez. */
+  it('dokum klasorunde birakilan dosyalari soyler', async () => {
+    const port = createPort();
+    port.clearSessions.mockResolvedValueOnce({
+      status: 'purged',
+      deletedSessions: 1,
+      deletedFiles: 1,
+      remainingFiles: 2,
+    });
+    render(<SettingsView port={port} />);
+
+    const input = await openClear();
+    fireEvent.change(input, { target: { value: SESSION_CLEAR_ALL_CONFIRMATION } });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Konuşma geçmişini kalıcı olarak sil' }),
+    );
+
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'Döküm klasöründe 2 dosya bırakıldı',
+    );
+  });
+
+  it('hafiza kapaliyken "sildim" demez', async () => {
+    const port = createPort();
+    port.clearSessions.mockResolvedValueOnce({ status: 'skipped', reason: 'memory-disabled' });
+    render(<SettingsView port={port} />);
+
+    const input = await openClear();
+    fireEvent.change(input, { target: { value: SESSION_CLEAR_ALL_CONFIRMATION } });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Konuşma geçmişini kalıcı olarak sil' }),
+    );
+
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'Hafıza kapalı olduğu için silinecek bir oturum kaydı yok.',
+    );
+  });
+
+  it('reddedilen ifadeyi yutmaz ve onay ekraninda kalir', async () => {
+    const port = createPort();
+    port.clearSessions.mockRejectedValueOnce(
+      new AsunaStoreError(
+        'invalid',
+        '`confirmationPhrase` birebir `KONUSMA GECMISINI SIL` olmali',
+      ),
+    );
+    render(<SettingsView port={port} />);
+
+    const input = await openClear();
+    fireEvent.change(input, { target: { value: SESSION_CLEAR_ALL_CONFIRMATION } });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Konuşma geçmişini kalıcı olarak sil' }),
+    );
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('İstek reddedildi');
+    expect(
+      screen.getByRole('button', { name: 'Konuşma geçmişini kalıcı olarak sil' }),
+    ).toBeInTheDocument();
+  });
+
+  it('vazgecince hicbir sey silinmez', async () => {
+    const port = createPort();
+    render(<SettingsView port={port} />);
+
+    const input = await openClear();
+    fireEvent.change(input, { target: { value: SESSION_CLEAR_ALL_CONFIRMATION } });
+    fireEvent.click(screen.getByRole('button', { name: 'Vazgeç' }));
+
+    expect(port.clearSessions).not.toHaveBeenCalled();
+    expect(input).not.toBeInTheDocument();
   });
 });
 

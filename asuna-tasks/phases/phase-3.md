@@ -19,6 +19,12 @@
 > mikrofon, gercek Realtime oturumu ve gercek uygulama yeniden baslatmasi gerektirir, otomatik
 > testle karsilanamaz. Yazma yolu (oturum → ozet → cikarim) ve okuma yolu (Stage A retrieval →
 > prompt enjeksiyonu) artik uctan uca bagli.
+>
+> **Guncelleme (2026-08-25):** M3 kabul testi calisirken **gercek bir acik** yakalandi —
+> kullanici hafiza kayitlarini sildi ama Asuna hatirlamaya devam etti. Sebep: Stage A her
+> oturum acilisinda **son oturum ozetini** enjekte ediyor ve `sessions.summary` urun icinden
+> silinemiyordu. Backlog'daki **ASU-065** bu yuzden Phase 3'e cekildi ve tamamlandi; M3 kabul
+> testi artik "silinen sey gercekten unutuluyor mu?" sorusunu tam olarak sorabilir.
 
 ---
 
@@ -523,8 +529,11 @@ checklist maddesi — opsiyonel degil.
   kayitlari/ozetleri ve diskteki transcript dosyalari silinmez — "hepsini sildim" deyip bir
   seyi birakmak en kotu sonuc. Bu kapsam Gate 3'te (MEDIUM-6) yeniden degerlendirildi ve
   **bilincli olarak dar birakildi**; oturum ozetleri + dokum dosyalarinin temizligi ayri bir
-  task: **ASU-065** (backlog). Silme sonrasi `VACUUM` denenir (serbest sayfalar dosyada
+  task: **ASU-065**. Silme sonrasi `VACUUM` denenir (serbest sayfalar dosyada
   kalmasin); `VACUUM` basarisiz olursa islem yine basarili sayilir, hata log'lanir.
+  → **ASU-065 tamamlandi (2026-08-25)**: temizlik artik urun icinde, **ayri ve gorunur** bir
+  aksiyon olarak (`Ayarlar > Konusma gecmisini sil` + `Hafiza > Oturumlar`). Kapsam ayrimi
+  degismedi; her iki ekran da digerinin kapsam disi oldugunu yaziyor.
 - **Onay bekleyenler UI'i** (`src/components/pending-approvals.tsx`): ASU-034'un
   `metadata_json.pendingApproval` bayragini gorunur kilar. Onayla = bayragi `false` yapan
   `memory_update` (diger metadata korunur), Reddet = `memory_delete`. Filtre **UI tarafinda**:
@@ -571,6 +580,10 @@ dogrulamak. Testi kosarken bakilacak yerler:
   "hatirliyorum" demesi bu asamada **bug**'dir, ASU-035 kriteri.
 - **Silme sonrasi** yeni oturum acmak yeterli: baglam onbelleklenmiyor, her `connect()`
   yeniden okuyor. Ayni uygulama calisirken bile ikinci oturum guncel hafizayi gorur.
+- **"Sildim ama hatirladi" ise iki yer birden temizlenmeli** (ASU-065): hafiza kaydi
+  `Hafiza` listesinden, o konusmanin **ozeti** ise ayni sekmedeki `Oturumlar` bolumunden
+  (ya da toptan: `Ayarlar > Konusma gecmisini sil`). Stage A ikisini de enjekte eder;
+  yalnizca birini silmek "hala hatiriyor" gorunumu uretir ve bu **beklenen** davranistir.
 - **Ilk oturumda hafiza olusmasi** ASU-033/034'e bagli: ozet yazilmadan cikarim calismaz ve
   ozet icin konusmanin yeterince uzun olmasi gerekir (`summary` skip kurallari). Kisa bir
   "merhaba" oturumundan hafiza cikmamasi beklenen davranistir.
@@ -579,3 +592,108 @@ dogrulamak. Testi kosarken bakilacak yerler:
 - Hassas turlerden (`profile`, `relationship`) cikan hafizalar `pendingApproval` ile gelir ve
   **onaylanana kadar** baglama girmez — "kaydettim ama hatirlamiyor" gorunumu bu ise beklenen
   davranistir; Ayarlar > onay bekleyenler ekranindan onaylanmali.
+
+---
+
+## ASU-065: Oturum Ozeti + Transcript Temizligi
+
+**Scope**: full-stack | **Boyut**: M | **Durum**: DONE (2026-08-25) | **Bagimlilik**: ASU-032, ASU-035, ASU-037
+
+### Neden one cekildi (M3 blokaji)
+
+Bu task Gate 3'te (MEDIUM-6) backlog'a alinmisti. **M3 kabul testi onu blokere cevirdi**:
+kullanici Memory UI'dan hafiza kayitlarini sildi, yeni oturum acti ve Asuna ayni seyi
+hatirlamaya devam etti. Sebep bir hata degil, **eksik bir yuzeydi**: Stage A her oturum
+acilisinda son oturum ozetini de enjekte ediyor (`sessions.summary`, ASU-035) ve o ozet urun
+icinden silinemiyordu — `memory_delete_all` bile kapsam disi birakiyordu.
+
+"Hafizami sildim" diyen bir kullanicinin hatirlanmaya devam etmesi, PROJECT.md Bolum 20'nin
+("storage is inspectable, user can delete memories") kagit uzerinde kalmasi demektir. Bu
+yuzden ASU-038 kabul kriterlerinin ("silindikten sonra ayni soru sorulunca uydurmuyor")
+gecmesi ASU-065'e bagli hale geldi.
+
+### Acceptance Criteria
+
+- [x] `session_list` — oturum gecmisi okunabiliyor (kimlik, acilis/kapanis, `end_reason`,
+      ozet on izlemesi, diskte dokum dosyasi var mi)
+      — `src-tauri/src/db/session_repository.rs::list_recent`; varsayilan limit 50, tavan 200.
+        **Tavan gorunur**: yanit `limit` / `limitMax` / `total` tasir, UI "hepsi bu kadar" diye
+        tahmin yurutmez (ASU-036'daki `SERVER_LIST_CAP` tahmininin tersi)
+- [x] `session_delete` — tek oturum: `sessions` satiri + varsa transcript dosyasi diskten
+      — donen sonuc dosyaya ne oldugunu **ayri** bir alanda soyler
+        (`transcriptFile: not-recorded | deleted | already-gone | refused | failed`).
+        Satir ve dosya ayri ayri basarisiz olabilir; "sildim" demek ikisi de bilindiginde dogru
+- [x] `session_clear_all` — tum oturum kayitlari + `transcripts/` dizini,
+      `confirmationPhrase: "KONUSMA GECMISINI SIL"` birebir (`memory_delete_all` deseni)
+      — ifade `memory_delete_all`'inkinden **farkli**: birini yazip digerini calistirmak
+        mumkun olmamali. Ifade tutmazsa ne DB'ye ne diske dokunulur
+- [x] Silme yolunda path uretimi yalnizca DB'deki `transcript_path`'ten ve `app_data_dir()`
+      altinda oldugu dogrulanarak — traversal guard
+      — `transcript::delete_recorded_file`: yol lexical normalize edilir (`canonicalize`
+        degil, dosya zaten silinmis olabilir), `transcripts/` altinda olmasi **ve** dosya
+        adinin o oturuma ait olmasi aranir; symlink takip edilmez. Reddedilen yol
+        `Refused` doner ve UI bunu **yazar**
+- [x] Stage A etkisi: `retrieval.rs` **degismedi**; test eklendi
+      — `db::retrieval::tests::a_deleted_session_summary_never_reaches_the_next_session_context`
+        (silinince bir onceki ozete duser, hepsi silinince `None`) +
+        `acl_regression::a_deleted_session_summary_leaves_the_next_bootstrap_context`
+- [x] ACL 3 adim + `EXPOSED_COMMANDS` + senkron/regresyon testleri
+      — yeni `capabilities/asuna-session-read.json` (yalnizca `session_list`); silme komutlari
+        mevcut `asuna-session.json`'a eklendi (bkz. Notlar). `build.rs` manifest,
+        `tauri.conf.json` capability listesi, `lib.rs` handler ve `EXPOSED_COMMANDS` (14 → 17)
+        guncellendi; `commands::session_reads_and_writes_are_separate_permissions` ayrimi
+        dosya duzeyinde olcuyor
+- [x] UI: Hafiza sekmesinde "Oturumlar" bolumu (ozet on izleme, tarih, satir ici onayli sil)
+      — `src/components/session-list.tsx` (+ `session-text.ts`), `memory-view.tsx` icine
+        gomulu. `window.confirm` yok (ASU-036 ile ayni gerekce)
+- [x] UI: Ayarlar'da "Konusma gecmisini sil" (cift onay + ifade), `memory_delete_all`'in
+      yaninda; iki aksiyonun kapsam farki **metinle** net
+      — `settings-view.tsx`; iki aksiyon ayni `DangerAction` kabugunu paylasir ama farkli
+        baslik/ifade/komut kullanir. "Ozetler silinmez" metni guncellendi: artik silinebilir
+        ve **nereden** yapilacagi yazili
+- [x] Testler — Rust: dosya gercekten diskten gidiyor (gecici dizin), `clear_all` sonrasi
+      tablo ve dizin bos, ifade reddi, ACL (yabanci pencere), silinen ozetin baglama girmemesi.
+      TS: oturum listesi render, silme akisi, clear-all cift onay
+      — 12 yeni Rust testi + 30 yeni TS testi; toplam 336 Rust / 576 TS yesil
+
+### Notlar
+
+- **ACL ayrimi: okuma ayri, silme kayitla birlikte.** `session_list` yeni bir
+  `asuna-session-read` capability'sindedir; `session_delete` / `session_clear_all` ise
+  **mevcut** `asuna-session.json`'a (kayit yuzeyi) eklendi. Gerekce `memory_delete_all` ile
+  ayni (ASU-037): ayri bir "temizlik" capability'si acmak, kayit yetkisi kaldirilmis bir
+  kurulumda toplu silmeyi acik birakirdi. Somut karsiligi: `asuna-session`'i
+  `tauri.conf.json`'dan cikarmak kaydi **ve** silmeyi kapatir, gecmisi gorunur birakir.
+  Hafiza okuma capability'sine konmadi cunku oturum kaydi ile durable memory farkli
+  katmanlar (PROJECT.md Bolum 14) — ASU-032'deki ayrimin devami.
+- **Dosya yolu renderer'a hic gitmiyor.** Liste satiri `transcriptPath` degil
+  `hasTranscriptFile: boolean` tasir; sozlesme fazladan alani **reddeder**
+  (`parseSessionListItem` testi). Kullanicinin dizin yapisi webview'e tasinacak bir bilgi
+  degil ve silme zaten host tarafinda yapiliyor.
+- **Once satir, sonra dosya.** Kullanicinin sikayetini ureten sey `sessions.summary` idi;
+  bir `EACCES` hatasinin ozetin silinmesini engellemesi kabul edilemez. Dosya silinemezse
+  satir yine gider ve sonuc `failed` olarak **gorunur** — sessiz basari yok.
+- **Oturum silmek hafizayi silmez.** `memories.source_session_id` FK'si `ON DELETE SET NULL`
+  (migration 001): kayit durur, kaynagi "bilinmiyor"a doner ve Memory UI bunu zaten yaziyor
+  (ASU-036). Hafizayi silmek kullanicinin **ayri** bir karari; iki aksiyonun metni de bunu
+  soyluyor. Silme sonrasi hafiza listesi tazelenir (kaynak satiri guncel kalsin).
+- **Hafiza acilista kapaliyken de dokum temizlenir.** `ASUNA_MEMORY_ENABLED=false` iken DB
+  hic acilmaz, dolayisiyla `deletedSessions = 0`; ama `transcripts/` dizini onceki bir
+  calismadan kalmis olabilir ve temizlenir. Aksi halde anahtar, kullanicinin kendi dosyalarini
+  silmesini engelleyen bir tuzaga donusurdu (ASU-037'deki ayni ilke).
+- **Asuna'nin yazmadigi dosya silinmez.** Toplu temizlik yalnizca `session-<id>.jsonl`
+  desenine uyan dosyalari siler; dizindeki baska bir sey `remainingFiles` olarak sayilir,
+  birakilir ve kullaniciya **soylenir**. Dizin ancak tamamen bosaldiginda kaldirilir.
+- **ACL testinde `session_clear_all`'in basarili yolu bilerek kosulmuyor.** Mock uygulama
+  gercek `app_data_dir()`'i cozer (identifier `tauri.conf.json`'dan gelir); komutun mutlu
+  yolunu orada calistirmak **kullanicinin gercek dokumlerini** silerdi. ACL testi kapinin
+  acildigini ve yanlis ifadenin reddedildigini olcer; diskteki davranis `db::transcript`
+  testlerinde gecici dizinle, DB tarafi `db::session_repository` testlerinde olculur.
+- **Ikinci bulgu — kod degisikligi YOK.** M3 testinde ikinci bir gozlem daha vardi: bir
+  hafiza silindikten sonra kullanici ayni konuyu yeniden konusursa Asuna onu **yeniden
+  ogreniyor**. Bu bir regresyon degil, dogru davranis: silinen hafizanin "hortlamasi" degil,
+  **yeni konusmanin kaydi**. Kayit yolu her oturumda ayni (ozet → cikarim → kalici hafiza) ve
+  kullanicinin sildigi sey gecmis konusmadan turetilen kayitti, gelecekteki konusmalar degil.
+  Bunu engellemek "bu konuyu bir daha ogrenme" gibi bir kara liste gerektirirdi — MVP kapsami
+  disi ve muhtemelen istenmeyen bir davranis (kullanici fikrini degistirebilir).
+

@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "asuna-session-read",
+  "description": "Oturum gecmisi OKUMA yuzeyi (ASU-065). Tek komut acar: `session_list` — en yeni oturumlarin denetim satirlarini dondurur (kimlik, acilis/kapanis zamani, kapanis nedeni, ozet ON IZLEMESI ve diskte dokum dosyasi olup olmadigi). Dokum DOSYA YOLU renderer'a GITMEZ: kullanicinin dizin yapisi webview'e tasinacak bir bilgi degil ve silme zaten host tarafinda yapiliyor. Renderer siralamayi, alanlari ya da filtreyi secemez; yalnizca kac satir istedigini soyleyebilir ve bu istek sunucu tavanina kirpilir (kirpma yanitta gorunur). Silme bu dosyada YOKTUR (asuna-session). Ayrim bilincli: oturum gecmisini gorunur kilmak ile silebilmek ayri yetkilerdir. Kapsam ana pencere ile sinirlidir; wildcard izin yoktur.",
+  "platforms": ["macOS"],
+  "windows": ["main"],
+  "permissions": ["allow-session-list"]
+}

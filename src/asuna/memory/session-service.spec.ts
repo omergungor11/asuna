@@ -4,9 +4,13 @@ import { SessionContractError, type SessionRecord } from '../../shared/session';
 import { AsunaStoreError } from '../../shared/store-error';
 import {
   SESSION_COMMANDS,
+  SESSION_READ_COMMANDS,
   SessionRecorder,
+  clearSessionHistory,
+  deleteSession,
   describeSessionOutcome,
   finalizeSessionRecord,
+  listSessions,
   startSessionRecord,
 } from './session-service';
 
@@ -289,5 +293,103 @@ describe('describeSessionOutcome', () => {
 
   it('kapanmis oturum yoksa tire gosterir', () => {
     expect(describeSessionOutcome(null)).toBe('—');
+  });
+});
+
+/**
+ * ASU-065 — oturum gecmisi: listeleme + silme.
+ *
+ * Kanitlanan seyler: komut adlari ACL ile birebir, istek yuku dar (renderer yol
+ * ya da siralama gonderemez), yanit sema dogrulamasindan geciyor ve onay
+ * ifadesi servis tarafindan **uydurulmuyor**.
+ */
+describe('session-service — oturum gecmisi (ASU-065)', () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+  });
+
+  const LIST_ITEM = {
+    id: 7,
+    startedAt: '2026-08-25T10:00:00Z',
+    endedAt: '2026-08-25T10:04:00Z',
+    endReason: 'completed',
+    summaryPreview: 'Wake word kararini konustuk.',
+    summaryTruncated: false,
+    hasTranscriptFile: false,
+  };
+
+  const PAGE = { sessions: [LIST_ITEM], limit: 50, limitMax: 200, total: 1 };
+
+  it('ACL"de kayitli adlarla birebir ayni', () => {
+    expect(SESSION_READ_COMMANDS.list).toBe('session_list');
+    expect(SESSION_COMMANDS.delete).toBe('session_delete');
+    expect(SESSION_COMMANDS.clearAll).toBe('session_clear_all');
+  });
+
+  it('listSessions limiti gonderir ve yaniti dogrular', async () => {
+    invokeMock.mockResolvedValue(PAGE);
+
+    const page = await listSessions(10);
+
+    expect(invokeMock).toHaveBeenCalledExactlyOnceWith('session_list', {
+      query: { limit: 10 },
+    });
+    expect(page.total).toBe(1);
+    expect(page.sessions[0]?.summaryPreview).toBe('Wake word kararini konustuk.');
+  });
+
+  it('limit verilmezse sunucu varsayilanina birakir', async () => {
+    invokeMock.mockResolvedValue(PAGE);
+
+    await listSessions();
+
+    expect(invokeMock).toHaveBeenCalledExactlyOnceWith('session_list', { query: null });
+  });
+
+  it('bozuk liste yanitini yutmaz', async () => {
+    invokeMock.mockResolvedValue({ sessions: [LIST_ITEM], limit: 50, total: 1 });
+
+    await expect(listSessions()).rejects.toBeInstanceOf(SessionContractError);
+  });
+
+  it('deleteSession yalnizca kimlik gonderir ve dosya sonucunu dondurur', async () => {
+    invokeMock.mockResolvedValue({ status: 'deleted', id: 7, transcriptFile: 'deleted' });
+
+    const result = await deleteSession(7);
+
+    expect(invokeMock).toHaveBeenCalledExactlyOnceWith('session_delete', { sessionId: 7 });
+    // Renderer yol vermez, yol geri de gelmez.
+    expect(JSON.stringify(invokeMock.mock.calls[0]?.[1])).not.toContain('transcriptPath');
+    expect(result).toEqual({ status: 'deleted', id: 7, transcriptFile: 'deleted' });
+  });
+
+  it('clearSessionHistory ifadeyi uydurmaz, cagirandan alir', async () => {
+    invokeMock.mockResolvedValue({
+      status: 'purged',
+      deletedSessions: 2,
+      deletedFiles: 1,
+      remainingFiles: 0,
+    });
+
+    const result = await clearSessionHistory('KONUSMA GECMISINI SIL');
+
+    expect(invokeMock).toHaveBeenCalledExactlyOnceWith('session_clear_all', {
+      confirmationPhrase: 'KONUSMA GECMISINI SIL',
+    });
+    expect(result).toEqual({
+      status: 'purged',
+      deletedSessions: 2,
+      deletedFiles: 1,
+      remainingFiles: 0,
+    });
+  });
+
+  it('yanlis ifadenin tipli hatasini cagirana tasir', async () => {
+    invokeMock.mockRejectedValue({
+      code: 'invalid',
+      message: '`confirmationPhrase` birebir `KONUSMA GECMISINI SIL` olmali',
+    });
+
+    await expect(clearSessionHistory('yanlis')).rejects.toBeInstanceOf(AsunaStoreError);
   });
 });

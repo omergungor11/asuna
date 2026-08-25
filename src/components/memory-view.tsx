@@ -22,7 +22,7 @@
  *   ayni ekrana dusmez (PROJECT.md Bolum 30).
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { fetchDbStatus } from '../asuna/memory/db-status-service';
 import {
@@ -31,6 +31,7 @@ import {
   listMemories,
   updateMemory,
 } from '../asuna/memory/memory-service';
+import { deleteSession, listSessions } from '../asuna/memory/session-service';
 import type { DbStatus } from '../shared/db-status';
 import {
   wasMemoryStored,
@@ -40,11 +41,13 @@ import {
   type MemoryRecord,
   type MemoryWriteResult,
 } from '../shared/memory';
+import type { SessionDeleteResult, SessionPage } from '../shared/session';
 
 import { ALL_KINDS, MemoryFilters, type KindFilterValue } from './memory-filters';
 import { MemoryItem } from './memory-item';
 import { describeMemoryError } from './memory-text';
 import { PendingApprovals } from './pending-approvals';
+import { SessionList } from './session-list';
 
 /** Bir sayfada istenen kayit sayisi. */
 export const MEMORY_PAGE_SIZE = 25;
@@ -63,6 +66,13 @@ export interface MemoryViewPort {
   readonly remove: (id: number) => Promise<MemoryWriteResult>;
   /** Onay bekleyen kaydin bayragini kaldirmak icin (ASU-037). */
   readonly update: (id: number, patch: MemoryPatch) => Promise<MemoryWriteResult>;
+  /**
+   * Oturum gecmisi (ASU-065) — **ayri** bir IPC yuzeyi
+   * (`asuna-session-read` / `asuna-session`), ayni ekranda gorunuyor olmasi
+   * onlari ayni yetki yapmaz.
+   */
+  readonly listSessions: (limit?: number) => Promise<SessionPage>;
+  readonly removeSession: (sessionId: number) => Promise<SessionDeleteResult>;
 }
 
 /** Uretim portu: dogrudan servis katmani. */
@@ -72,6 +82,8 @@ const DEFAULT_MEMORY_PORT: MemoryViewPort = {
   archive: archiveMemory,
   remove: deleteMemory,
   update: updateMemory,
+  listSessions,
+  removeSession: deleteSession,
 };
 
 type StatusState =
@@ -262,6 +274,21 @@ export function MemoryView({
     setReloadToken((token) => token + 1);
   }, []);
 
+  /**
+   * Bir oturum silinince hafiza listesi de tazelenir: o oturumdan cikan
+   * kayitlarin `sourceSessionId` degeri artik `null` (FK `ON DELETE SET NULL`)
+   * ve satirda "Kaynak oturum bilinmiyor" yazmasi gerekir.
+   */
+  const handleSessionsChanged = useCallback((): void => {
+    setReloadToken((token) => token + 1);
+  }, []);
+
+  // Referans sabit kalsin: `SessionList`'in yukleme effect'i porta bagli.
+  const sessionPort = useMemo(
+    () => ({ list: port.listSessions, remove: port.removeSession }),
+    [port],
+  );
+
   if (status.phase === 'checking') {
     return (
       <section className="asuna-memory" aria-label="Hafıza">
@@ -406,6 +433,11 @@ export function MemoryView({
           filtre kullanın.
         </p>
       )}
+
+      {/* Oturum ozetleri: hatirlamanin ikinci kaynagi (ASU-065). Hafiza
+          listesinin altinda cunku once kayitlar, sonra onlarin geldigi
+          konusmalar gelir. */}
+      <SessionList port={sessionPort} onChanged={handleSessionsChanged} />
     </section>
   );
 }

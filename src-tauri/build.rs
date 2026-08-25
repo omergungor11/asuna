@@ -36,6 +36,15 @@ fn main() {
             // renderer ikisini de veremez.
             "session_start",
             "session_finalize",
+            // ASU-065: oturum gecmisi okuma (capabilities/asuna-session-read.json).
+            // Salt okuma; dokum dosya yolu renderer'a donmez.
+            "session_list",
+            // ASU-065: oturum ozeti + dokum temizligi
+            // (capabilities/asuna-session.json). Toplu silme birebir bir onay
+            // ifadesi ister; dosya yolu Rust tarafinda cozulur ve sandbox
+            // disina cikmasi reddedilir.
+            "session_delete",
+            "session_clear_all",
             // ASU-037: calisma zamani gizlilik anahtarlari
             // (capabilities/asuna-privacy.json). Secret icermez; yalnizca
             // kullanicinin kendi ayarlari okunur/yazilir.

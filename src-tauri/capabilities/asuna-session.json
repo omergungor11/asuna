@@ -1,8 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "asuna-session",
-  "description": "Oturum kaydi yuzeyi (ASU-032): `session_start` ve `session_finalize`. Ikisi de yazma komutudur ve hafiza yazma izinlerinden ayri tutulur — oturum kaydi ile hafiza kayitlari farkli katmanlardir (PROJECT.md Bolum 14). Renderer oturumun modelini SECEMEZ: `model` her zaman `ASUNA_REALTIME_MODEL` config degerinden gelir. Renderer transcript DOSYA YOLU da veremez: yol Rust tarafinda uygulama veri dizininden turetilir ve dosya yalnizca `ASUNA_TRANSCRIPT_STORAGE=true` iken yazilir; kapaliyken diske hicbir sey dusmez. `ASUNA_MEMORY_ENABLED=false` iken oturum kaydi hic olusmaz. Kapsam ana pencere ile sinirlidir; wildcard izin yoktur.",
+  "description": "Oturum kaydini DEGISTIREN yuzey (ASU-032, ASU-065): `session_start`, `session_finalize`, `session_delete`, `session_clear_all`. Hepsi hafiza yazma izinlerinden ayri tutulur — oturum kaydi ile hafiza kayitlari farkli katmanlardir (PROJECT.md Bolum 14). Renderer oturumun modelini SECEMEZ: `model` her zaman `ASUNA_REALTIME_MODEL` config degerinden gelir. Renderer transcript DOSYA YOLU da veremez: yol Rust tarafinda uygulama veri dizininden turetilir ve dosya yalnizca `ASUNA_TRANSCRIPT_STORAGE=true` iken yazilir; kapaliyken diske hicbir sey dusmez. `ASUNA_MEMORY_ENABLED=false` iken oturum kaydi hic olusmaz. Silme bilerek gercek DELETE'tir: `session_delete` bir oturumun satirini (ozeti dahil) ve varsa dokum dosyasini siler; `session_clear_all` tum oturum kayitlarini ve `transcripts/` dizinini temizler ve birebir bir onay ifadesi ister — ifade tutmazsa ne DB'ye ne diske dokunulur. Silinecek dokum yolu yalnizca veritabanindan okunur ve `app_data_dir()/transcripts` altinda oldugu dogrulanir; disari cikan bir yol reddedilir. Silme, hafiza yazma izinleriyle degil bu dosyayla birlikte kapanir: kaydi acan yetki kaldirildiginda temizleme yetkisi de kalkar. Okuma bu dosyada YOKTUR (asuna-session-read). Kapsam ana pencere ile sinirlidir; wildcard izin yoktur.",
   "platforms": ["macOS"],
   "windows": ["main"],
-  "permissions": ["allow-session-start", "allow-session-finalize"]
+  "permissions": [
+    "allow-session-start",
+    "allow-session-finalize",
+    "allow-session-delete",
+    "allow-session-clear-all"
+  ]
 }
