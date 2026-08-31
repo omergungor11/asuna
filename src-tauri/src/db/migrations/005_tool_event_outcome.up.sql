@@ -1,0 +1,67 @@
+-- ASU-051 — `tool_events.outcome` (cagri calisti mi, calistiysa basardi mi?)
+--
+-- BU DOSYA YAYINLANMISTIR VE BIR DAHA DEGISTIRILMEZ. Duzeltme yeni bir
+-- migration ekler (ADR-005 "Migration Karari").
+--
+-- ===========================================================================
+-- Neden bu kolon (orchestrator karari, DECISIONS.md "Phase 5 kararlari")
+-- ===========================================================================
+--
+-- PROJECT.md Bolum 12.2'nin kolon listesinde yapisal bir basari/hata alani
+-- yok: `result_summary` metni ikisini de tasiyor. `approval_state` ise
+-- "calisti mi" sorusunu cevaplar, "calisti ve basarili miydi"yi degil.
+--
+-- Iki eksen ayri kalmali cunku denetim defterinde birbirine karisan iki soru
+-- var ve cevaplari bagimsiz:
+--
+--   approval_state = approved  + outcome = failed    → kullanici izin verdi,
+--                                                       is calisti ve patladi
+--   approval_state = denied    + outcome = not_run   → kullanici izin vermedi
+--   approval_state = not_required + outcome = failed  → risk 0 bir cagri
+--                                                       sandbox'a takildi
+--
+-- Bunu `result_summary` metninden cikarmak, bir gun metin degistiginde sessizce
+-- yanlislasacak bir ayristirma demekti. ASU-054'un "basari/hata + kisa ozet"
+-- gostergesi ve ASU-055'in kabul testleri bu kolonu okur.
+--
+-- ===========================================================================
+-- Neden NULL'a izin var
+-- ===========================================================================
+--
+-- 004 doneminde yazilmis satirlarda bu bilgi YOKTU ve geriye donuk olarak
+-- **uydurulamaz**: `approval_state = approved` bir satirin basarili bittigini
+-- soylemez. Sessiz bir `'succeeded'` geriye donuk doldurmasi, denetim
+-- defterine olcmedigimiz bir iddiayi yazmak olurdu (002'nin `end_reason`
+-- doldurmasindan farki tam da bu: orada durum kaydin kendisinden CIKARILABILIR
+-- durumdaydi, burada degil).
+--
+-- NULL'in anlami net ve tek: "bu satir yazildiginda sonuc ekseni tutulmuyordu".
+-- Yeni yazilan her satirda deger dolu gelir (Rust `ToolEventInput.outcome`).
+--
+-- ===========================================================================
+-- Deger kumesi
+-- ===========================================================================
+--
+--   succeeded : tool calisti ve isini yapti.
+--   failed    : tool CALISTI ama isini yapamadi — implementasyon hatasi,
+--               sandbox reddi, timeout. "Calisti mi?" sorusunun cevabi EVET
+--               oldugu icin `not_run` degil: yan etkisi olabilecek bir cagri
+--               "hic olmadi" diye kaydedilmemeli.
+--   not_run   : tool HIC calismadi — sema reddi, onay reddi/zaman asimi,
+--               cagri baslamadan iptal. Yan etki ihtimali yok.
+--
+-- Kume `IN (...)` olarak yazili (BETWEEN/serbest metin degil): Rust
+-- `ToolOutcome` ve TypeScript `TOOL_OUTCOMES` bu satira testlerle baglanir
+-- (`migrations::outcomes_declared_in_schema`, `schema-mirror.spec.ts`).
+--
+-- SQLite `ALTER TABLE ... ADD COLUMN` bir CHECK kisiti tasiyabilir ve
+-- STRICT tabloda da calisir; 002 ayni deseni `sessions.end_reason` icin
+-- kullandi. Kolon tablonun **sonuna** eklenir — `TOOL_EVENT_COLUMNS` ve
+-- `TOOL_EVENT_RECORD_KEYS` siralari buna gore.
+
+ALTER TABLE tool_events ADD COLUMN outcome TEXT
+    CHECK (outcome IS NULL OR outcome IN ('succeeded', 'failed', 'not_run'));
+
+-- Index YOK. Erisim ekseni degil bir gosterge kolonu: Tools sekmesi zaten
+-- `created_at DESC` ile tavanli okuyor ve satirlari bellekte filtreliyor.
+-- Kullanilmayan bir index her INSERT'i yavaslatir, hicbir sorguyu hizlandirmaz.

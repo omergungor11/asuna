@@ -42,6 +42,10 @@ pub const V3_DOWN: &str = include_str!("003_projects.down.sql");
 pub const V4_UP: &str = include_str!("004_tool_events.up.sql");
 pub const V4_DOWN: &str = include_str!("004_tool_events.down.sql");
 
+/// Migration 5 — `tool_events.outcome` (ASU-051).
+pub const V5_UP: &str = include_str!("005_tool_event_outcome.up.sql");
+pub const V5_DOWN: &str = include_str!("005_tool_event_outcome.down.sql");
+
 /// Sirali migration tanimlari.
 ///
 /// **Bu vektore yalnizca sona ekleme yapilir.** Araya ekleme ya da silme, daha
@@ -52,11 +56,12 @@ fn definitions() -> Vec<M<'static>> {
         M::up(V2_UP).down(V2_DOWN),
         M::up(V3_UP).down(V3_DOWN),
         M::up(V4_UP).down(V4_DOWN),
+        M::up(V5_UP).down(V5_DOWN),
     ]
 }
 
 /// Bu kod surumunun bekledigi sema surumu (`PRAGMA user_version`).
-pub const EXPECTED_SCHEMA_VERSION: u32 = 4;
+pub const EXPECTED_SCHEMA_VERSION: u32 = 5;
 
 /// Migration kumesi. Testler `validate()` icin bunu kullanir.
 pub fn migrations() -> Migrations<'static> {
@@ -112,6 +117,16 @@ pub fn approval_states_declared_in_schema() -> Vec<String> {
 /// sema arasindaki bag yalnizca yoruma dayanirdi.
 pub fn risk_levels_declared_in_schema() -> Vec<String> {
     values_in_check(V4_UP, "risk_level IN (")
+}
+
+/// `tool_events.outcome` CHECK kisitindaki degerleri **sema metninden** okur
+/// (ASU-051). Rust `ToolOutcome` ve TypeScript `TOOL_OUTCOMES` bu listeye
+/// testlerle baglidir.
+///
+/// Kaynak `V5_UP`: kolon `ALTER TABLE ... ADD COLUMN` ile geldi, yani gecerli
+/// CHECK kisiti 004'te degil 005'te.
+pub fn outcomes_declared_in_schema() -> Vec<String> {
+    values_in_check(V5_UP, "outcome IN (")
 }
 
 /// `... IN ('a', 'b')` listesini ayristirir.
@@ -1063,6 +1078,133 @@ mod tests {
             )
             .expect("sqlite_master okunmali");
         assert_eq!(remaining, 0, "down migration tabloyu birakmis");
+
+        apply(&mut connection).expect("yeniden ileri sarilmali");
+        let version: u32 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("user_version okunmali");
+        assert_eq!(version, EXPECTED_SCHEMA_VERSION);
+    }
+
+    // -----------------------------------------------------------------------
+    // Migration 5 — `tool_events.outcome` (ASU-051)
+    // -----------------------------------------------------------------------
+
+    /// Sema 4 doneminde yazilmis satirlar kolonu NULL ile karsilar ve
+    /// **oldugu gibi** kalir. Geriye donuk doldurma yok: `approved` bir satirin
+    /// basarili bittigini soylemez, uydurmuyoruz.
+    #[test]
+    fn migration_five_leaves_older_audit_rows_untouched_with_a_null_outcome() {
+        let mut connection = Connection::open_in_memory().expect("bellek ici DB");
+        migrations()
+            .to_version(&mut connection, 4)
+            .expect("sema 4 uygulanmali");
+
+        connection
+            .execute(
+                "INSERT INTO tool_events (tool_name, risk_level, approval_state, result_summary, created_at)
+                 VALUES ('get_current_project', 0, 'not_required', 'Proje: Asuna', '2026-08-25T10:00:00Z')",
+                [],
+            )
+            .expect("sema 4 audit satiri yazilmali");
+
+        apply(&mut connection).expect("sema 5'e yukseltilmeli");
+
+        let (count, outcome, summary): (i64, Option<String>, Option<String>) = connection
+            .query_row(
+                "SELECT (SELECT count(*) FROM tool_events), outcome, result_summary
+                   FROM tool_events WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("satir okunmali");
+
+        assert_eq!(count, 1, "migration 5 audit satirini dusurdu");
+        assert_eq!(outcome, None, "eski satira olculmemis bir sonuc yazilmis");
+        assert_eq!(summary.as_deref(), Some("Proje: Asuna"));
+    }
+
+    /// Kume semada zorlaniyor: uydurma bir sonuc etiketi INSERT aninda duser.
+    #[test]
+    fn the_outcome_check_constraint_rejects_unknown_values() {
+        let mut connection = Connection::open_in_memory().expect("bellek ici DB");
+        apply(&mut connection).expect("migration uygulanmali");
+
+        for value in ["basarili", "SUCCEEDED", "skipped", ""] {
+            let error = connection.execute(
+                "INSERT INTO tool_events (tool_name, risk_level, approval_state, outcome, created_at)
+                 VALUES ('read_project_file', 0, 'not_required', ?1, '2026-08-25T10:00:00Z')",
+                rusqlite::params![value],
+            );
+            assert!(
+                error.is_err(),
+                "`{value}` semadan gecti — CHECK kisiti kume disi degeri kabul ediyor"
+            );
+        }
+
+        for value in outcomes_declared_in_schema() {
+            connection
+                .execute(
+                    "INSERT INTO tool_events (tool_name, risk_level, approval_state, outcome, created_at)
+                     VALUES ('read_project_file', 0, 'not_required', ?1, '2026-08-25T10:00:00Z')",
+                    rusqlite::params![value],
+                )
+                .unwrap_or_else(|error| panic!("`{value}` semadan gecmeliydi: {error}"));
+        }
+    }
+
+    /// Kume sema metninden okunabiliyor — Rust enum'u ve TypeScript sabiti bu
+    /// listeye baglanacak.
+    #[test]
+    fn the_outcome_set_is_readable_from_the_schema_text() {
+        assert_eq!(
+            outcomes_declared_in_schema(),
+            vec![
+                "succeeded".to_owned(),
+                "failed".to_owned(),
+                "not_run".to_owned()
+            ]
+        );
+    }
+
+    /// Geri alma yalnizca kolonu dusurur: audit satirlari, onay durumlari ve
+    /// sonuc ozetleri yerinde kalir. Ileri sarim kolonu yeniden kurar.
+    #[test]
+    fn migration_five_can_be_rolled_back_without_losing_audit_rows() {
+        let mut connection = Connection::open_in_memory().expect("bellek ici DB");
+        apply(&mut connection).expect("migration uygulanmali");
+        connection
+            .execute(
+                "INSERT INTO tool_events (tool_name, risk_level, approval_state, result_summary, outcome, created_at)
+                 VALUES ('open_project', 1, 'approved', 'Proje editorde acildi.', 'succeeded', '2026-08-25T10:00:00Z')",
+                [],
+            )
+            .expect("audit satiri yazilmali");
+
+        migrations()
+            .to_version(&mut connection, 4)
+            .expect("sema 4'e donulebilmeli");
+
+        let (count, summary, approval): (i64, Option<String>, String) = connection
+            .query_row(
+                "SELECT (SELECT count(*) FROM tool_events), result_summary, approval_state
+                   FROM tool_events WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("satir okunmali");
+        assert_eq!(count, 1, "geri alma audit satirini sildi");
+        assert_eq!(summary.as_deref(), Some("Proje editorde acildi."));
+        assert_eq!(approval, "approved");
+
+        let has_outcome: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('tool_events') WHERE name = 'outcome'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("table_info okunmali");
+        assert_eq!(has_outcome, 0, "down migration kolonu birakmis");
 
         apply(&mut connection).expect("yeniden ileri sarilmali");
         let version: u32 = connection

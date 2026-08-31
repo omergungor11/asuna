@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "asuna-project-open",
+  "description": "Guncel projeyi EDITORDE ACMA yuzeyi (ASU-052). Tek komut acar: `open_project` — Asuna'nin `open_project` tool'u (risk 1, `safe` modda ACIK ONAY ister) bunu cagirir. Kendi capability dosyasinda ve okuma/yazma yuzeylerinden AYRI: bu komut bir ALT PROCESS baslatir, yani ne proje listesi okumak ne de proje kaydi degistirmek ile ayni yetki eksenidir. Dosyayi `tauri.conf.json` listesinden cikarmak Asuna'nin herhangi bir program calistirma yolunu tamamen kapatir; proje listesi, proje ozeti ve dosya okuma etkilenmez. SINIRSIZ KOMUT CALISTIRMA DEGILDIR (PROJECT.md Bolum 18 — `run_any_shell_command` asla acilmaz): renderer ne calistirilacak komutu, ne argumanlari, ne de acilacak yolu secebilir. Komut argument ALMAZ. Hedef registry'deki GUNCEL projedir ve yalnizca `active` durumdaki, kayitli bir kok acilabilir — keyfi bir dizin acmanin yolu yoktur. Calistirilacak program `ASUNA_EDITOR_COMMAND` ile kullanicinin kendi `.env` dosyasinda tanimlanir (varsayilan `code`), acilista dogrulanir ve bosluk/kabuk metakarakteri iceremez. SHELL YOKTUR: alt process `Command::new(editor).arg(path)` ile, arguman vektoru olarak baslatilir; komut metni string birlestirmeyle kurulmaz, dolayisiyla dizin adindaki `;` `&&` `$()` gibi diziler yorumlanmaz. Cocuk process'in stdio'su null'dir ve `OPENAI_API_KEY` acikca ortamdan silinir — kalici anahtar editore miras kalmaz. Basari da hata da `tool_events` defterine yazilir; editor bulunamazsa cikti 'actim' degil tipli bir hatadir. Kapsam ana pencere ile sinirlidir; wildcard izin yoktur.",
+  "platforms": ["macOS"],
+  "windows": ["main"],
+  "permissions": ["allow-open-project"]
+}

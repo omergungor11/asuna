@@ -126,6 +126,11 @@ pub fn run() {
             projects::registry::project_remove,
             projects::registry::project_set_current,
             projects::view::project_context,
+            // ASU-051/052: tool yuzeyleri. Ikisi de guncel projeyi hedefler;
+            // renderer ne projeyi ne mutlak yolu ne de calistirilacak komutu
+            // secebilir.
+            projects::files::read_project_file,
+            projects::editor::open_project,
             privacy::get_privacy_settings,
             privacy::set_privacy_settings
         ])

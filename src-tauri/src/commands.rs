@@ -25,7 +25,7 @@ pub fn get_frontend_config(config: State<'_, AsunaConfig>) -> FrontendConfig {
 /// etkinlestirme) ve `lib.rs` (`generate_handler!`) ile karsilastirir. Yeni bir
 /// `#[tauri::command]` eklerken dort yerin hepsi guncellenmeli.
 #[cfg(test)]
-pub const EXPOSED_COMMANDS: [&str; 24] = [
+pub const EXPOSED_COMMANDS: [&str; 26] = [
     "get_frontend_config",
     "mint_realtime_token",
     "db_status",
@@ -48,6 +48,8 @@ pub const EXPOSED_COMMANDS: [&str; 24] = [
     "project_add",
     "project_remove",
     "project_set_current",
+    "read_project_file",
+    "open_project",
     "get_privacy_settings",
     "set_privacy_settings",
 ];
@@ -143,6 +145,29 @@ pub const PROJECT_READ_COMMANDS: [&str; 2] = ["project_list", "project_context"]
 #[cfg(test)]
 pub const PROJECT_WRITE_COMMANDS: [&str; 3] =
     ["project_add", "project_remove", "project_set_current"];
+
+/// Kayitli kok icinde **dosya okuyan** komutlar (ASU-051).
+///
+/// `PROJECT_READ_COMMANDS`ten ayri bir liste ve ayri bir capability: iki
+/// yuzeyin genisligi ayni degil. `project_context` kokun altindaki **sabit** bir
+/// allowlist'i okur (PROJECT.md, README.md, manifest'ler); `read_project_file`
+/// ise kok icindeki herhangi bir metin dosyasini okuyabilir. Ayni izin
+/// dosyasina konsaydi "proje ozetini gorebil ama dosya okuyamasin" diye bir
+/// kurulum mumkun olmazdi.
+#[cfg(test)]
+pub const PROJECT_FILE_READ_COMMANDS: [&str; 1] = ["read_project_file"];
+
+/// **Alt process baslatan** komutlar (ASU-052).
+///
+/// Bu liste bilerek tek elemanli ve genisletilmesi bir mimari karardir:
+/// PROJECT.md Bolum 18 sinirsiz komut calistirmayi (`run_any_shell_command`)
+/// yasaklar. Buraya eklenen her komut, dar kapsamli ve kayitli bir kok ile
+/// sinirli olmak zorunda. Ayri capability olmasinin somut karsiligi:
+/// `asuna-project-open`'i `tauri.conf.json` listesinden cikarmak Asuna'nin
+/// herhangi bir program calistirma yolunu tamamen kapatir, geri kalan her sey
+/// calismaya devam eder.
+#[cfg(test)]
+pub const PROCESS_LAUNCH_COMMANDS: [&str; 1] = ["open_project"];
 
 #[cfg(test)]
 mod tests {
@@ -654,6 +679,93 @@ mod tests {
                     ^ TOOL_AUDIT_WRITE_COMMANDS.contains(command),
                 "`{command}` ya okuma ya yazma listesinde olmali (ikisinde birden degil)"
             );
+        }
+    }
+
+    /// **ASU-051 kabul kaniti**: dosya okuma kendi capability'sinde durur ve
+    /// proje okuma/yazma yuzeylerine karismaz.
+    ///
+    /// Ayrimin somut karsiligi: `asuna-project-file-read`'i `tauri.conf.json`
+    /// listesinden cikarmak Asuna'nin dosya okumasini kapatir ama proje
+    /// listesini ve proje ozetini gorunur birakir.
+    #[test]
+    fn project_file_reads_have_their_own_capability() {
+        assert_eq!(
+            permissions_of("asuna-project-file-read.json"),
+            vec![permission_name("read_project_file")]
+        );
+
+        for file in [
+            "asuna-projects-read.json",
+            "asuna-projects-write.json",
+            "asuna-project-open.json",
+        ] {
+            let permissions = permissions_of(file);
+            for command in PROJECT_FILE_READ_COMMANDS {
+                assert!(
+                    !permissions.contains(&permission_name(command)),
+                    "`{command}` `{file}` icinde de aciliyor"
+                );
+            }
+        }
+    }
+
+    /// **ASU-052 kabul kaniti + PROJECT.md Bolum 18 kilidi**: alt process
+    /// baslatan yuzey tektir, adiyla bellidir ve kendi capability'sindedir.
+    ///
+    /// Sinirsiz komut calistirma (`run_any_shell_command` ve akrabalari) hicbir
+    /// zaman acilmaz. Bu test onu bir politika olmaktan cikarip **yuzey
+    /// eksikligi** haline getirir: boyle bir komut eklenirse burada duser.
+    #[test]
+    fn the_process_launch_surface_is_a_single_named_command() {
+        assert_eq!(
+            permissions_of("asuna-project-open.json"),
+            vec![permission_name("open_project")]
+        );
+
+        for forbidden in [
+            "run_any_shell_command",
+            "run_shell_command",
+            "execute_command",
+            "run_command",
+            "spawn_process",
+            "open_path",
+            "open_url",
+        ] {
+            assert!(
+                !EXPOSED_COMMANDS.contains(&forbidden),
+                "`{forbidden}` acilmis — sinirsiz/keyfi calistirma yuzeyi olustu"
+            );
+            let permission = format!("allow-{}", forbidden.replace('_', "-"));
+            for (file_name, content) in all_capability_files() {
+                assert!(
+                    !content.contains(&permission),
+                    "`{file_name}` `{permission}` izni tasiyor"
+                );
+            }
+        }
+
+        // `shell` plugin'i hic yuklu degil: acilis yolu Tauri tarafinda da yok.
+        for (file_name, content) in all_capability_files() {
+            assert!(
+                !content.contains("\"shell:"),
+                "`{file_name}` shell plugin izni tasiyor"
+            );
+        }
+
+        // Proje okuma/yazma yuzeyleri process baslatamaz.
+        for file in [
+            "asuna-projects-read.json",
+            "asuna-projects-write.json",
+            "asuna-project-file-read.json",
+        ] {
+            let permissions = permissions_of(file);
+            for command in PROCESS_LAUNCH_COMMANDS {
+                assert!(
+                    !permissions.contains(&permission_name(command)),
+                    "`{command}` `{file}` icinde de aciliyor"
+                );
+            }
         }
     }
 

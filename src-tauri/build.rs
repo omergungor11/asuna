@@ -67,6 +67,16 @@ fn main() {
             "project_add",
             "project_remove",
             "project_set_current",
+            // ASU-051: guncel proje koku icinde TEK dosya okuma
+            // (capabilities/asuna-project-file-read.json). Renderer yalnizca
+            // kok'e gore gorece bir yol verebilir; projeyi secemez, mutlak yol
+            // veremez. Cozum, blok listesi ve kirpma Rust tarafinda.
+            "read_project_file",
+            // ASU-052: guncel projeyi konfigure edilmis editorde acar
+            // (capabilities/asuna-project-open.json). Renderer ne yolu ne
+            // editor komutunu secebilir; alt process arguman vektoruyle
+            // baslatilir, shell yoktur.
+            "open_project",
             // ASU-037: calisma zamani gizlilik anahtarlari
             // (capabilities/asuna-privacy.json). Secret icermez; yalnizca
             // kullanicinin kendi ayarlari okunur/yazilir.

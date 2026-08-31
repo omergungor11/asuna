@@ -62,6 +62,9 @@ fn test_config() -> config::AsunaConfig {
         ("ASUNA_TURN_DETECTION", "semantic_vad"),
         ("ASUNA_VAD_EAGERNESS", "high"),
         ("ASUNA_VAD_SILENCE_MS", "400"),
+        // ASU-052: testlerde gercek bir editor calistirilmaz; buradaki deger
+        // yalnizca config sozlesmesini doldurur.
+        ("ASUNA_EDITOR_COMMAND", "asuna-test-editor-yok"),
     ];
     let map: EnvMap = pairs
         .into_iter()
@@ -120,6 +123,8 @@ fn build_test_app_with_privacy(db_state: DbState, privacy: PrivacyState) -> App<
             crate::projects::registry::project_remove,
             crate::projects::registry::project_set_current,
             crate::projects::view::project_context,
+            crate::projects::files::read_project_file,
+            crate::projects::editor::open_project,
             crate::privacy::get_privacy_settings,
             crate::privacy::set_privacy_settings
         ])
@@ -1933,5 +1938,304 @@ fn project_context_surfaces_typed_errors_instead_of_claiming_no_project() {
         let error = invoke(&webview, "project_context").expect_err("hata donmeli");
         assert!(!is_acl_denial(&error), "hata: {error}");
         assert!(error.contains(expected), "hata: {error}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ASU-051 / ASU-052 — dosya okuma ve editorde acma, gercek ACL uzerinde
+// ---------------------------------------------------------------------------
+
+/// Testlerde kullanilan izole gecici dizin.
+struct ToolTempDir(std::path::PathBuf);
+
+impl ToolTempDir {
+    fn new(label: &str) -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "asuna-acl-{label}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("gecici dizin");
+        Self(path)
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for ToolTempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Gercek ACL uzerinden bir proje kaydeder ve guncel proje yapar.
+fn register_project_over_ipc(
+    webview: &tauri::WebviewWindow<MockRuntime>,
+    root: &std::path::Path,
+) -> String {
+    let response = invoke_with(
+        webview,
+        "project_add",
+        serde_json::json!({ "path": root.to_string_lossy(), "name": "Deneme" }),
+    )
+    .expect("project_add calismali");
+
+    let value: serde_json::Value = serde_json::from_str(&response).expect("JSON");
+    let project_id = value["project"]["id"]
+        .as_str()
+        .expect("proje kimligi")
+        .to_owned();
+
+    invoke_with(
+        webview,
+        "project_set_current",
+        serde_json::json!({ "projectId": project_id }),
+    )
+    .expect("project_set_current calismali");
+
+    project_id
+}
+
+/// **ASU-051 kabul kaniti**: tool gercek ACL uzerinden kok icindeki bir dosyayi
+/// okuyor ve donen yol **gorece** kaliyor.
+#[test]
+fn a_project_file_can_be_read_over_the_real_acl() {
+    let temp = ToolTempDir::new("read");
+    std::fs::write(temp.path().join("README.md"), "# Asuna\nSesli companion.\n")
+        .expect("README yazilmali");
+
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+    register_project_over_ipc(&webview, temp.path());
+
+    let response = invoke_with(
+        &webview,
+        "read_project_file",
+        serde_json::json!({ "path": "README.md" }),
+    )
+    .expect("read_project_file calismali");
+
+    let value: serde_json::Value = serde_json::from_str(&response).expect("JSON");
+    assert_eq!(value["path"], "README.md");
+    assert_eq!(value["content"], "# Asuna\nSesli companion.\n");
+    assert_eq!(value["truncated"], false);
+    assert_eq!(value["redacted"], false);
+
+    let canonical = std::fs::canonicalize(temp.path())
+        .expect("canonicalize")
+        .to_string_lossy()
+        .into_owned();
+    assert!(
+        !response.contains(&canonical),
+        "mutlak yol renderer'a sizdi: {response}"
+    );
+}
+
+/// **ASU-055 kabul kriteri**: `~/.ssh/id_ed25519` ve `.env` istekleri gercek
+/// ACL uzerinden de reddediliyor ve icerik sizmiyor.
+#[test]
+fn secrets_cannot_be_read_over_the_real_acl() {
+    let temp = ToolTempDir::new("secrets");
+    std::fs::write(
+        temp.path().join(".env"),
+        "OPENAI_API_KEY=sk-proj-BU-DEGER-SIZMAMALI\n",
+    )
+    .expect(".env yazilmali");
+
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+    register_project_over_ipc(&webview, temp.path());
+
+    for (path, code, escape) in [
+        (".env", "blocklisted", false),
+        ("../../.ssh/id_ed25519", "traversal", true),
+        ("~/.ssh/id_ed25519", "tilde", true),
+        ("/etc/passwd", "absolute", true),
+    ] {
+        let error = invoke_with(
+            &webview,
+            "read_project_file",
+            serde_json::json!({ "path": path }),
+        )
+        .expect_err("reddedilmeli");
+
+        // Red **tool** tarafindan geliyor, ACL'den degil: komut acik ama
+        // sandbox kapatiyor. Ayrim onemli — ACL reddi olsaydi test sandbox
+        // hakkinda hicbir sey kanitlamazdi.
+        assert!(!is_acl_denial(&error), "beklenmedik ACL reddi: {error}");
+        assert!(error.contains(code), "yol `{path}` icin hata: {error}");
+        assert!(
+            error.contains(&format!("\"escapeAttempt\":{escape}")),
+            "yol `{path}` icin kacis etiketi yanlis: {error}"
+        );
+        assert!(
+            !error.contains("BU-DEGER-SIZMAMALI"),
+            "icerik sizdi: {error}"
+        );
+    }
+}
+
+/// **Uydurma yok**: var olmayan dosya `not_found` ile doner ve bu bir kacis
+/// denemesi olarak etiketlenmez — model "dosya yok" ile "erisim reddedildi"yi
+/// ayirt edebilsin.
+#[test]
+fn a_missing_file_is_distinguishable_from_a_refusal_over_ipc() {
+    let temp = ToolTempDir::new("notfound");
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+    register_project_over_ipc(&webview, temp.path());
+
+    let error = invoke_with(
+        &webview,
+        "read_project_file",
+        serde_json::json!({ "path": "YOK.md" }),
+    )
+    .expect_err("hata donmeli");
+
+    assert!(!is_acl_denial(&error), "hata: {error}");
+    assert!(error.contains("not_found"), "hata: {error}");
+    assert!(error.contains("\"escapeAttempt\":false"), "hata: {error}");
+}
+
+/// Renderer **projeyi secemez**: komutun imzasinda `path` disinda bir alan
+/// yoktur, dolayisiyla gonderilen fazladan alanlarin hicbir etkisi olmaz.
+///
+/// Olculen sey "fazladan alan reddediliyor mu" degil — Tauri komut argumanlari
+/// bir `deny_unknown_fields` sozlesmesi degildir ve olmasi da gerekmiyor.
+/// Olculen sey daha guclu olan: renderer ne yazarsa yazsin okuma **guncel
+/// projeden** yapiliyor ve baska bir kok'e gecilemiyor.
+#[test]
+fn the_renderer_cannot_choose_which_project_to_read_from() {
+    let temp = ToolTempDir::new("noproject");
+    std::fs::write(temp.path().join("README.md"), "guncel projenin icerigi").expect("README");
+
+    // Ikinci, kayitli ama **guncel olmayan** bir proje.
+    let other = ToolTempDir::new("other");
+    std::fs::write(other.path().join("README.md"), "GIZLI-DIGER-PROJE").expect("README");
+
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+    let other_id = register_project_over_ipc(&webview, other.path());
+    // Son `project_set_current` kazanir: guncel proje artik `temp`.
+    register_project_over_ipc(&webview, temp.path());
+
+    for args in [
+        serde_json::json!({ "path": "README.md", "projectId": other_id.clone() }),
+        serde_json::json!({ "path": "README.md", "project_id": other_id.clone() }),
+        serde_json::json!({ "path": "README.md", "root": other.path().to_string_lossy() }),
+    ] {
+        let response =
+            invoke_with(&webview, "read_project_file", args.clone()).expect("okuma calismali");
+        assert!(
+            response.contains("guncel projenin icerigi"),
+            "args {args}: guncel proje disindan okundu: {response}"
+        );
+        assert!(
+            !response.contains("GIZLI-DIGER-PROJE"),
+            "args {args}: renderer projeyi degistirebildi: {response}"
+        );
+    }
+}
+
+/// Hafiza kapaliyken kayitli kok listesi yok, dolayisiyla hicbir dosya
+/// okunamaz — ve cevap "dosya yok" degil, tipli bir durum.
+#[test]
+fn reading_a_project_file_is_refused_when_memory_is_disabled() {
+    let app = build_test_app_with(DbState::Disabled);
+    let webview = main_webview(&app);
+
+    let error = invoke_with(
+        &webview,
+        "read_project_file",
+        serde_json::json!({ "path": "README.md" }),
+    )
+    .expect_err("hata donmeli");
+
+    assert!(!is_acl_denial(&error), "hata: {error}");
+    assert!(error.contains("disabled"), "hata: {error}");
+}
+
+/// **ASU-052 kabul kaniti**: editor komutu bulunamadiginda cikti "actim" degil,
+/// hangi komutun aranip bulunamadigini soyleyen tipli bir hata.
+///
+/// Test config'i bilerek var olmayan bir komut tasiyor: ACL testleri gercek bir
+/// editor **acmaz**.
+#[test]
+fn opening_a_project_reports_a_missing_editor_honestly_over_ipc() {
+    let temp = ToolTempDir::new("open");
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+    register_project_over_ipc(&webview, temp.path());
+
+    let error = invoke(&webview, "open_project").expect_err("hata donmeli");
+
+    assert!(!is_acl_denial(&error), "hata: {error}");
+    assert!(error.contains("editor_not_found"), "hata: {error}");
+    assert!(
+        error.contains("asuna-test-editor-yok"),
+        "mesaj hangi komutun bulunamadigini soylemiyor: {error}"
+    );
+}
+
+/// Renderer **ne yolu ne komutu** secebilir: `open_project` argument almaz.
+#[test]
+fn the_renderer_cannot_choose_what_to_open_or_which_program_to_run() {
+    let temp = ToolTempDir::new("openargs");
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+    register_project_over_ipc(&webview, temp.path());
+
+    for args in [
+        serde_json::json!({ "path": "/etc" }),
+        serde_json::json!({ "editor": "/bin/sh" }),
+        serde_json::json!({ "command": "rm -rf /" }),
+        serde_json::json!({ "projectId": "baska-proje" }),
+    ] {
+        let error = invoke_with(&webview, "open_project", args.clone()).expect_err("hata donmeli");
+        assert!(!is_acl_denial(&error), "args {args}: {error}");
+        // Fazladan alanlar yok sayilir ve komut yine **kendi** hedefini acmaya
+        // calisir; onemli olan renderer'in verdigi degerin hicbir etkisi
+        // olmamasi. Editor zaten yok, yani hata her zaman ayni yerden gelir.
+        assert!(
+            error.contains("editor_not_found"),
+            "args {args}: renderer girdisi davranisi degistirdi: {error}"
+        );
+    }
+}
+
+/// Proje secilmemisken "actim" denmez.
+#[test]
+fn opening_without_a_current_project_is_refused_over_ipc() {
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+
+    let error = invoke(&webview, "open_project").expect_err("hata donmeli");
+
+    assert!(!is_acl_denial(&error), "hata: {error}");
+    assert!(error.contains("no_current_project"), "hata: {error}");
+}
+
+/// Iki komut da ACL kapsami disindaki bir pencereden **cagirilamaz**.
+#[test]
+fn the_tool_commands_are_denied_outside_the_permitted_window() {
+    let app = build_test_app_with_memory();
+    let foreign = WebviewWindowBuilder::new(&app, FOREIGN_WINDOW, Default::default())
+        .build()
+        .expect("ikinci pencere kurulmali");
+
+    for command in ["read_project_file", "open_project"] {
+        let error = invoke_with(
+            &foreign,
+            command,
+            serde_json::json!({ "path": "README.md" }),
+        )
+        .expect_err("kapsam disi pencere reddedilmeli");
+        assert!(
+            is_acl_denial(&error),
+            "`{command}` kapsam disi pencereden calisti: {error}"
+        );
     }
 }

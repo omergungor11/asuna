@@ -25,6 +25,7 @@ const EVENT: ToolEventRecord = {
   approvalState: 'approved',
   resultSummary: 'Proje VS Code ile acildi.',
   createdAt: '2026-08-25T10:01:00Z',
+  outcome: 'succeeded',
 };
 
 describe('audit komut adlari', () => {

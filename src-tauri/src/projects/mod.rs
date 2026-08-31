@@ -11,6 +11,8 @@
 //! | [`git_metadata`] | Salt okuma git durumu: branch, kirli/temiz, son commit'ler (ASU-042) |
 //! | [`handoff`] | `.asuna/context.json` devir teslim artefakti (ASU-043) |
 //! | [`view`] | Yukaridakilerin tek kod yolunda birlestigi `project_context` komutu (ASU-044) |
+//! | [`files`] | Kok icinde tek dosya okuma: `read_project_file` (ASU-051) |
+//! | [`editor`] | Projeyi konfigure edilmis editorde acma: `open_project` (ASU-052) |
 //!
 //! # Cakisma kurali
 //!
@@ -18,6 +20,8 @@
 //! teslim artefaktidir, tek gercek kaynak degil (PROJECT.md Bolum 16).
 
 pub mod context;
+pub mod editor;
+pub mod files;
 pub mod git_metadata;
 pub mod handoff;
 pub mod registry;

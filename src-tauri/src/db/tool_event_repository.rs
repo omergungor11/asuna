@@ -58,7 +58,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use super::clock;
-use super::model::{ToolApprovalState, ToolEventRecord, ToolRiskLevel};
+use super::model::{ToolApprovalState, ToolEventRecord, ToolOutcome, ToolRiskLevel};
 use super::store_error::{database, StoreError, StoreSkipReason};
 use super::{AsunaDb, DbState};
 use crate::privacy::PrivacyState;
@@ -122,8 +122,20 @@ pub struct ToolEventInput {
     pub arguments: Option<serde_json::Value>,
     pub approval_state: ToolApprovalState,
     /// Kisa sonuc ozeti — basari da hata da. `None` = soylenecek sonuc yok.
+    ///
+    /// DIKKAT (ASU-051): burasi **modele giden metin degildir**. Icerik donduren
+    /// bir tool (`read_project_file`) modele dosyanin kendisini verir ama deftere
+    /// tek satirlik bir ozet yazar; renderer tarafinda ayrimi `ToolResult.auditSummary`
+    /// tasir. Yine de tek savunma bu degil: ozet host tarafinda tek satira
+    /// indirilir, redaksiyondan gecer ve 512 karakterde kirpilir.
     #[serde(default)]
     pub result_summary: Option<String>,
+    /// Cagri calisti mi, calistiysa basardi mi? (ASU-051).
+    ///
+    /// `None` = cagiran bu ekseni bildirmedi. Sessiz bir `succeeded` varsayimi
+    /// yok: olculmemis bir basari iddiasi denetim defterine yazilmaz.
+    #[serde(default)]
+    pub outcome: Option<ToolOutcome>,
 }
 
 /// Audit yazma sonucu. `Skipped` = kalici hafiza kapali (hata degil).
@@ -349,8 +361,8 @@ pub fn record(
             transaction.execute(
                 "INSERT INTO tool_events
                    (session_id, tool_name, risk_level, arguments_redacted,
-                    approval_state, result_summary, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    approval_state, result_summary, created_at, outcome)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     session_id,
                     tool_name,
@@ -359,6 +371,7 @@ pub fn record(
                     input.approval_state,
                     result_summary,
                     now,
+                    input.outcome,
                 ],
             )?;
             let id = transaction.last_insert_rowid();
@@ -387,13 +400,13 @@ pub fn list_recent(
     // hilesi tek sorguya indirirdi ama `idx_tool_events_session_id`'yi
     // kullanilamaz hale getirirdi.
     const SELECT_ALL: &str = "SELECT id, session_id, tool_name, risk_level, arguments_redacted,
-                                     approval_state, result_summary, created_at
+                                     approval_state, result_summary, created_at, outcome
                                 FROM tool_events
                                ORDER BY created_at DESC, id DESC
                                LIMIT ?1";
     const SELECT_FOR_SESSION: &str =
         "SELECT id, session_id, tool_name, risk_level, arguments_redacted,
-                                             approval_state, result_summary, created_at
+                                             approval_state, result_summary, created_at, outcome
                                         FROM tool_events
                                        WHERE session_id = ?2
                                        ORDER BY created_at DESC, id DESC
@@ -561,6 +574,7 @@ mod tests {
             arguments: None,
             approval_state,
             result_summary: None,
+            outcome: None,
         }
     }
 
@@ -790,6 +804,129 @@ mod tests {
             Some("Proje VS Code ile acildi.")
         );
         assert_eq!(event.created_at, NOW);
+    }
+
+    // --- `outcome` ekseni (ASU-051) -----------------------------------------
+
+    /// Onay durumu ile sonuc **birlikte** yazilir ve birbirinden bagimsizdir.
+    /// Kritik kombinasyon: kullanici izin verdi, is calisti ve **patladi**.
+    #[test]
+    fn an_approved_call_can_still_be_recorded_as_failed() {
+        let db = fresh_db();
+
+        let event = record(
+            &db,
+            &ToolEventInput {
+                result_summary: Some("Editor komutu bulunamadi.".to_owned()),
+                outcome: Some(ToolOutcome::Failed),
+                ..input(
+                    "open_project",
+                    ToolRiskLevel::LowRisk,
+                    ToolApprovalState::Approved,
+                )
+            },
+            NOW,
+        )
+        .expect("yazilmali");
+
+        assert_eq!(event.approval_state, ToolApprovalState::Approved);
+        assert_eq!(event.outcome, Some(ToolOutcome::Failed));
+    }
+
+    /// Reddedilen bir cagri `not_run` ile deftere gecer: yan etki ihtimali yok.
+    #[test]
+    fn a_denied_call_is_recorded_as_not_run() {
+        let db = fresh_db();
+
+        let event = record(
+            &db,
+            &ToolEventInput {
+                outcome: Some(ToolOutcome::NotRun),
+                ..input(
+                    "open_project",
+                    ToolRiskLevel::LowRisk,
+                    ToolApprovalState::Denied,
+                )
+            },
+            NOW,
+        )
+        .expect("reddedilen cagri da yazilmali");
+
+        assert_eq!(event.outcome, Some(ToolOutcome::NotRun));
+    }
+
+    /// Cagiran sonucu bildirmezse `NULL` yazilir — sessiz bir `succeeded`
+    /// varsayimi denetim defterine olculmemis bir iddia yazardi.
+    #[test]
+    fn an_unreported_outcome_stays_null_instead_of_defaulting_to_success() {
+        let db = fresh_db();
+
+        let event = record(
+            &db,
+            &input(
+                "get_current_project",
+                ToolRiskLevel::ReadOnly,
+                ToolApprovalState::NotRequired,
+            ),
+            NOW,
+        )
+        .expect("yazilmali");
+
+        assert_eq!(event.outcome, None);
+    }
+
+    /// Renderer sozlesmesi: `outcome` opsiyonel ama kume disi bir deger serde
+    /// sinirinde duser — DB'ye hic dokunulmaz.
+    #[test]
+    fn an_unknown_outcome_is_rejected_at_the_serde_boundary() {
+        let accepted: ToolEventInput = serde_json::from_value(serde_json::json!({
+            "toolName": "read_project_file",
+            "riskLevel": 0,
+            "approvalState": "not_required",
+            "outcome": "succeeded",
+        }))
+        .expect("gecerli girdi kabul edilmeli");
+        assert_eq!(accepted.outcome, Some(ToolOutcome::Succeeded));
+
+        for bad in ["basarili", "SUCCEEDED", "skipped", "denied"] {
+            assert!(
+                serde_json::from_value::<ToolEventInput>(serde_json::json!({
+                    "toolName": "read_project_file",
+                    "riskLevel": 0,
+                    "approvalState": "not_required",
+                    "outcome": bad,
+                }))
+                .is_err(),
+                "`{bad}` serde sinirindan gecti"
+            );
+        }
+    }
+
+    /// Sonuc listeleme yolundan da geri geliyor; kolon SELECT listesinden
+    /// dusmus olsaydi bu test yakalardi.
+    #[test]
+    fn the_outcome_survives_the_listing_path() {
+        let db = fresh_db();
+        record(
+            &db,
+            &ToolEventInput {
+                outcome: Some(ToolOutcome::Succeeded),
+                ..input(
+                    "read_project_file",
+                    ToolRiskLevel::ReadOnly,
+                    ToolApprovalState::NotRequired,
+                )
+            },
+            NOW,
+        )
+        .expect("yazilmali");
+
+        let page = list_recent(&db, None, 10).expect("listelenmeli");
+        assert_eq!(page.events.len(), 1);
+        assert_eq!(page.events[0].outcome, Some(ToolOutcome::Succeeded));
+
+        let json = serde_json::to_value(&page.events[0]).expect("serialize");
+        assert_eq!(json["outcome"], "succeeded");
     }
 
     /// Oturum kaydi bu arada silinmisse audit satiri **yine yazilir**; yalnizca

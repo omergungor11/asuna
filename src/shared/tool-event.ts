@@ -65,6 +65,35 @@ export const TOOL_RISK_LEVELS = [0, 1, 2, 3] as const;
 export type ToolRiskLevel = (typeof TOOL_RISK_LEVELS)[number];
 
 /**
+ * Bir tool cagrisinin **sonucu** (ASU-051, migration 005).
+ *
+ * [`ToolApprovalState`] ile karistirilmamali ve kumeleri bilerek kesismiyor:
+ * onay durumu "calismasina izin verildi mi", bu ise "calisti mi ve isini
+ * yapabildi mi" sorusunu cevaplar. `approved` + `failed` gecerli ve sik bir
+ * kombinasyon — kullanici izin verdi, is patladi.
+ *
+ * Degerler semadaki CHECK kisitindan gelir (`005_tool_event_outcome.up.sql`);
+ * `schema-mirror.spec.ts` ikisini birbirine baglar. Sira da bagli.
+ */
+export const TOOL_OUTCOMES = [
+  /** Tool calisti ve isini yapti. */
+  'succeeded',
+  /**
+   * Tool **calisti** ama isini yapamadi: implementasyon hatasi, sandbox reddi,
+   * timeout. `not_run` degil — yan etkisi olabilecek bir cagri "hic olmadi"
+   * diye kaydedilmemeli.
+   */
+  'failed',
+  /**
+   * Tool **hic** calismadi: sema reddi, onay reddi/zaman asimi, cagri
+   * baslamadan iptal, kapatilmis tool. Yan etki ihtimali yok.
+   */
+  'not_run',
+] as const;
+
+export type ToolOutcome = (typeof TOOL_OUTCOMES)[number];
+
+/**
  * Tool audit defterinin bir satiri.
  *
  * Salt okunur bir gecmis kaydi: UI bunu gosterir, degistirmez.
@@ -95,9 +124,22 @@ export interface ToolEventRecord {
    */
   readonly resultSummary: string | null;
   readonly createdAt: string;
+  /**
+   * Cagri calisti mi, calistiysa basardi mi? (ASU-051).
+   *
+   * `null` = satir migration 005 oncesinde yazildi ve bu eksen o zaman
+   * tutulmuyordu. Geriye donuk **uydurulmadi**: `approvalState: 'approved'` bir
+   * cagrinin basarili bittigini soylemez.
+   */
+  readonly outcome: ToolOutcome | null;
 }
 
-/** Sozlesmedeki alanlarin tam listesi — sema kolon sirasiyla ayni. */
+/**
+ * Sozlesmedeki alanlarin tam listesi — sema kolon sirasiyla ayni.
+ *
+ * `outcome` **sonda**: SQLite `ALTER TABLE ... ADD COLUMN` kolonu tablonun
+ * sonuna koyar ve `PRAGMA table_info` sirasi budur.
+ */
 export const TOOL_EVENT_RECORD_KEYS = [
   'id',
   'sessionId',
@@ -107,6 +149,7 @@ export const TOOL_EVENT_RECORD_KEYS = [
   'approvalState',
   'resultSummary',
   'createdAt',
+  'outcome',
 ] as const;
 
 export class ToolEventContractError extends ContractError {
@@ -146,6 +189,9 @@ export function parseToolEventRecord(value: unknown): ToolEventRecord {
     approvalState: read.enumeration('approvalState', TOOL_APPROVAL_STATES),
     resultSummary: read.nullableText('resultSummary'),
     createdAt: read.timestamp('createdAt'),
+    // Nullable enum: `readers` icinde karsiligi yok ve tek kullanim icin
+    // oraya bir yardimci eklemek sozlesme katmanini genisletirdi.
+    outcome: value['outcome'] === null ? null : read.enumeration('outcome', TOOL_OUTCOMES),
   };
 }
 
@@ -212,8 +258,23 @@ export interface ToolAuditInput {
   /** Ham argumanlar; saklanmaz, yalnizca ozetlenir. */
   readonly arguments?: unknown;
   readonly approvalState: ToolApprovalState;
-  /** Kisa sonuc ozeti — basari da hata da. */
+  /**
+   * Kisa sonuc ozeti — basari da hata da.
+   *
+   * DIKKAT: bu **modele giden metin degildir**. Icerik donduren bir tool
+   * (`read_project_file`) modele dosyanin kendisini verir ama deftere tek
+   * satirlik bir ozet yazar; ayrimi `ToolResult.auditSummary` tasir. Host
+   * tarafi ayrica tek satira indirir, redaksiyondan gecirir ve 512 karakterde
+   * kirpar.
+   */
   readonly resultSummary?: string;
+  /**
+   * Cagri calisti mi, calistiysa basardi mi? (ASU-051).
+   *
+   * Verilmezse satira `NULL` yazilir: sessiz bir `succeeded` varsayimi
+   * denetim defterine olculmemis bir iddia yazardi.
+   */
+  readonly outcome?: ToolOutcome;
 }
 
 /**

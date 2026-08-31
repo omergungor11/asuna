@@ -73,10 +73,37 @@ export interface ToolContext {
  * tool hata verdiyse `ok: false` doner ve model bunu oldugu gibi gorur.
  *
  * `summary` modele/kullaniciya gidebilecek kisa metindir ve **secret degeri tasimaz**.
+ *
+ * # `summary` ile `auditSummary` neden ayri (ASU-051)
+ *
+ * `summary` **modele** gider. Cogu tool icin bu zaten kisa bir cumledir ve
+ * denetim defterine de aynen yazilabilir — bu yuzden `auditSummary`
+ * opsiyoneldir ve verilmezse `summary` kullanilir.
+ *
+ * Ama **icerik donduren** bir tool (`read_project_file`) modele dosyanin
+ * kendisini vermek zorunda. O metnin `tool_events.result_summary` alanina
+ * dusmesi, migration 004'un acikca yasakladigi seydir ("dosya icerigi audit'e
+ * girmez"): host tarafi 512 karakterde kirptigi icin *sizinti* kucuk olurdu ama
+ * yine de bir sizintiydi. `auditSummary` bu ayrimi tip duzeyinde acar —
+ * deftere ne yazilacagi tool'un bilincli karari olur, uzunluk tavaninin yan
+ * etkisi degil.
+ *
+ * Ayni deger transcript satirinda da kullanilir (ASU-054): kullanici "README.md
+ * okundu (2.1 KB)" gorur, dosyanin tamamini degil.
  */
 export type ToolResult =
-  | { readonly ok: true; readonly summary: string; readonly data?: unknown }
-  | { readonly ok: false; readonly summary: string; readonly errorKind: string };
+  | {
+      readonly ok: true;
+      readonly summary: string;
+      readonly auditSummary?: string;
+      readonly data?: unknown;
+    }
+  | {
+      readonly ok: false;
+      readonly summary: string;
+      readonly errorKind: string;
+      readonly auditSummary?: string;
+    };
 
 /** Registry'ye kaydedilen tool tanimi. */
 export interface AsunaToolDefinition {

@@ -32,9 +32,14 @@ import {
   resolveApproval,
   type ApprovalOutcome,
 } from './approval-policy';
-import type { AsunaToolDefinition, ToolContext, ToolResult } from './types';
+import type { AsunaToolDefinition, ToolContext, ToolResult, ToolRisk } from './types';
 import type { ToolApprovalMode } from '../config/frontend-config';
-import type { ToolApprovalState, ToolAuditInput, ToolRiskLevel } from '../../shared/tool-event';
+import type {
+  ToolApprovalState,
+  ToolAuditInput,
+  ToolOutcome,
+  ToolRiskLevel,
+} from '../../shared/tool-event';
 
 /**
  * `snake_case`, fiil_nesne (`conventions.md`). Model tool adini duyar gibi
@@ -78,6 +83,15 @@ export const TOOL_ERROR_KINDS = {
   denied: 'denied',
   /** Tool implementasyonu hata firlatti (kendi `ok: false`'unu uretemedi). */
   failed: 'tool_failed',
+  /**
+   * Tool kullanici tarafindan **kapatilmis** (ASU-054).
+   *
+   * Kapali bir tool modele verilen listede zaten yoktur; bu kapi o listenin
+   * eskidigi durumlar icin (acik bir oturumun ortasinda kapatma). Gizli bir
+   * calisma yolu birakmamak icin `execute` **hic** cagrilmaz ve cagri
+   * `not_run` olarak deftere gecer.
+   */
+  disabled: 'disabled',
 } as const;
 
 export type ToolRegistryErrorCode =
@@ -232,6 +246,36 @@ export interface ToolExecutionOptions {
    * doner ve log'lar).
    */
   readonly onAudit?: (input: ToolAuditInput) => void;
+  /**
+   * Tool bu oturumda **acik mi** (ASU-054)?
+   *
+   * Verilmezse tum tool'lar acik sayilir (varsayilan davranis degismez).
+   * `false` donerse `execute` hic cagrilmaz: kapatma bir gorsel tercih degil,
+   * gercek bir kapidir. Kapali bir tool modele verilen listeden de dusurulur;
+   * bu kontrol o listenin eskidigi ani (acik oturumda kapatma) yakalar —
+   * yani "gizli/gorunmez calistirma yolu yok" iki katmanda birden saglanir.
+   */
+  readonly isEnabled?: (toolName: string) => boolean;
+  /**
+   * Tool cagrisinin sonucunu (calistiysa) bildiren kanca (ASU-054).
+   *
+   * Audit'ten **ayri**: audit kalici deftere yazar ve hafiza kapaliyken hic
+   * yazilmaz; bu kanca canli UI icin (transcript satiri) her zaman calisir.
+   */
+  readonly onResult?: (report: ToolResultReport) => void;
+}
+
+/** Bir cagrinin bittigi andaki gorunur ozeti (ASU-054 transcript satiri). */
+export interface ToolResultReport {
+  readonly toolName: string;
+  readonly risk: ToolRisk;
+  readonly outcome: ToolOutcome;
+  readonly approvalState: ToolApprovalState;
+  /**
+   * Kisa, **icerik tasimayan** ozet: `ToolResult.auditSummary` varsa o,
+   * yoksa `summary`. Dosya icerigi transcript'e girmez.
+   */
+  readonly summary: string;
 }
 
 /** Sema hatalarindan modele giden ozetin karakter tavani. */
@@ -310,10 +354,18 @@ async function awaitApproval(
   }
 }
 
-/** [`executeTool`]'un ic sonucu: modele giden cevap + audit'e giden etiket. */
+/** [`executeTool`]'un ic sonucu: modele giden cevap + deftere giden etiketler. */
 interface ToolRun {
   readonly result: ToolResult;
   readonly approvalState: ToolApprovalState;
+  /**
+   * Cagri calisti mi, calistiysa basardi mi? (ASU-051).
+   *
+   * `approvalState`ten **turetilmiyor**, her cikis yolunda acikca yaziliyor:
+   * ikisi bagimsiz eksenler ve tureten bir kural `aborted`in iki farkli
+   * anlamini (baslamadan iptal / calisirken iptal) kaybederdi.
+   */
+  readonly outcome: ToolOutcome;
 }
 
 /**
@@ -349,6 +401,13 @@ export async function executeTool(
 ): Promise<ToolResult> {
   const run = await runTool(definition, args, context, options);
   reportAudit(definition, args, context, options, run);
+  options.onResult?.({
+    toolName: definition.name,
+    risk: definition.risk,
+    outcome: run.outcome,
+    approvalState: run.approvalState,
+    summary: auditSummaryOf(run.result),
+  });
   return run.result;
 }
 
@@ -373,8 +432,16 @@ function reportAudit(
     ...(context.sessionId === null ? {} : { sessionId: context.sessionId }),
     ...(args === undefined ? {} : { arguments: args }),
     approvalState: run.approvalState,
-    resultSummary: run.result.summary,
+    // `auditSummary` varsa **o** yazilir: icerik donduren bir tool'un modele
+    // verdigi metin deftere girmemeli (ASU-051, `types.ts`).
+    resultSummary: auditSummaryOf(run.result),
+    outcome: run.outcome,
   });
+}
+
+/** Deftere/transcript'e giden kisa ozet — modele giden metin degil. */
+function auditSummaryOf(result: ToolResult): string {
+  return result.auditSummary ?? result.summary;
 }
 
 async function runTool(
@@ -383,11 +450,28 @@ async function runTool(
   context: ToolContext,
   options: ToolExecutionOptions,
 ): Promise<ToolRun> {
+  // ASU-054: kapatilmis tool **hicbir** yoldan calismaz. Kontrol en basta:
+  // sema dogrulamasi bile calismasin, cunku "kapali" kararinin argumanlarla
+  // ilgisi yok ve kapali bir tool'un adinin defterde gorunmesi yeterli.
+  if (options.isEnabled?.(definition.name) === false) {
+    return {
+      approvalState: 'not_requested',
+      outcome: 'not_run',
+      result: failure(
+        `\`${definition.name}\` bu oturumda kullanici tarafindan kapatilmis; ` +
+          'calistirmadim. Kullaniciya bunu durustce soyle, baska bir yoldan ' +
+          'yapmis gibi anlatma.',
+        TOOL_ERROR_KINDS.disabled,
+      ),
+    };
+  }
+
   const parsed = definition.parameters.safeParse(args);
   if (!parsed.success) {
     return {
       // Onay asamasina hic gelinmedi: cagri daha once dustu.
       approvalState: 'not_requested',
+      outcome: 'not_run',
       result: failure(
         `\`${definition.name}\` cagrisi gecersiz argumanlar yuzunden calistirilmadi — ` +
           `${describeIssues(parsed.error.issues)}. Dogru parametrelerle tekrar dene; ` +
@@ -401,6 +485,8 @@ async function runTool(
   if (external?.aborted === true) {
     return {
       approvalState: 'not_requested',
+      // Baslamadan iptal: yan etki ihtimali yok.
+      outcome: 'not_run',
       result: failure(
         `\`${definition.name}\` calistirilmadi: cagri baslamadan iptal edildi.`,
         TOOL_ERROR_KINDS.aborted,
@@ -418,7 +504,12 @@ async function runTool(
     // baslangici microtask'lara yayilmaz (iptal sinyali de gecikmez).
     const approval = await gateApproval(definition, parsed.data, options, decision);
     if (approval.result !== null) {
-      return { approvalState: approval.approvalState, result: approval.result };
+      // Onay alinamadi: `execute` hic cagrilmadi.
+      return {
+        approvalState: approval.approvalState,
+        outcome: 'not_run',
+        result: approval.result,
+      };
     }
     approvalState = approval.approvalState;
 
@@ -428,6 +519,7 @@ async function runTool(
       // Onay beklenirken oturum kapandi: onay alinmis olsa bile calistirmiyoruz.
       return {
         approvalState,
+        outcome: 'not_run',
         result: failure(
           `\`${definition.name}\` onaylandi ama cagri bu arada iptal edildi; calistirmadim.`,
           TOOL_ERROR_KINDS.aborted,
@@ -483,7 +575,12 @@ async function runTool(
   };
 
   try {
-    return { approvalState, result: await Promise.race([run(), interrupted]) };
+    const result = await Promise.race([run(), interrupted]);
+    // Buradan sonrasinda `execute` **cagrildi**. Basarisiz biten her yol
+    // (timeout, calisirken iptal, firlatan tool, `ok: false`) `failed`:
+    // yan etkisi olabilecek bir cagriyi "hic olmadi" diye kaydetmek denetim
+    // defterine yalan yazmak olurdu (migration 005 gerekcesi).
+    return { approvalState, outcome: result.ok ? 'succeeded' : 'failed', result };
   } finally {
     clearTimeout(timer);
     external?.removeEventListener('abort', onExternalAbort);

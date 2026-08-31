@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { ToolRisk } from '../asuna/tools/types';
 import {
   TOOL_APPROVAL_STATES,
+  TOOL_OUTCOMES,
   TOOL_RISK_LEVELS,
   ToolEventContractError,
   parseToolEventPage,
@@ -24,6 +25,7 @@ const RECORD: ToolEventRecord = {
   approvalState: 'approved',
   resultSummary: 'Proje VS Code ile acildi.',
   createdAt: '2026-08-25T10:01:00Z',
+  outcome: 'succeeded',
 };
 
 /** `ToolRisk` (tool tanimi) ile `ToolRiskLevel` (sema aynasi) ayni kume olmali. */
@@ -45,6 +47,37 @@ describe('parseToolEventRecord', () => {
     expect(parsed.resultSummary).toBeNull();
     // Oturum bilinmiyorsa uydurulmaz.
     expect(parsed.sessionId).toBeNull();
+  });
+
+  /**
+   * ASU-051: `outcome` migration 005 oncesi satirlarda **yok**. `null`
+   * "olculmedi" demek; sessizce `succeeded`e cevrilmez.
+   */
+  it('eski satirlarda outcome null kalir, basariya cevrilmez', () => {
+    const parsed = parseToolEventRecord({ ...RECORD, outcome: null });
+    expect(parsed.outcome).toBeNull();
+  });
+
+  it('bilinmeyen sonucu reddeder', () => {
+    for (const outcome of ['basarili', 'SUCCEEDED', 'denied', '', 1]) {
+      expect(() => parseToolEventRecord({ ...RECORD, outcome })).toThrow(
+        ToolEventContractError,
+      );
+    }
+  });
+
+  /**
+   * Onay durumu ile sonuc **ayri** eksenler ve birlikte anlamli: kullanici
+   * izin verdi, is calisti ve patladi.
+   */
+  it('onaylanmis bir cagriyi basarisiz olarak okuyabilir', () => {
+    const parsed = parseToolEventRecord({
+      ...RECORD,
+      approvalState: 'approved',
+      outcome: 'failed',
+    });
+    expect(parsed.approvalState).toBe('approved');
+    expect(parsed.outcome).toBe('failed');
   });
 
   it('bilinmeyen onay durumunu reddeder', () => {
@@ -113,6 +146,17 @@ describe('parseToolEventPage', () => {
     expect(() =>
       parseToolEventPage({ events: {}, limit: 50, limitMax: 200, total: 0 }),
     ).toThrow(ToolEventContractError);
+  });
+});
+
+describe('TOOL_OUTCOMES', () => {
+  /** Kumeler kesisirse bir satiri okurken hangi sorunun cevabini gordugumuz
+   * belirsiz olurdu. */
+  it('onay durumu kumesiyle kesismiyor', () => {
+    const shared = TOOL_OUTCOMES.filter((outcome) =>
+      (TOOL_APPROVAL_STATES as readonly string[]).includes(outcome),
+    );
+    expect(shared).toEqual([]);
   });
 });
 

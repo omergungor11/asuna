@@ -40,10 +40,12 @@ pub const KEY_WAKE_WORD_THRESHOLD: &str = "ASUNA_WAKE_WORD_THRESHOLD";
 pub const KEY_TURN_DETECTION: &str = "ASUNA_TURN_DETECTION";
 pub const KEY_VAD_EAGERNESS: &str = "ASUNA_VAD_EAGERNESS";
 pub const KEY_VAD_SILENCE_MS: &str = "ASUNA_VAD_SILENCE_MS";
+/// ASU-052: `open_project` tool'unun calistiracagi editor komutu.
+pub const KEY_EDITOR_COMMAND: &str = "ASUNA_EDITOR_COMMAND";
 
 /// Konfigurasyonu olusturan tum anahtarlar. Process environment sadece bu
 /// listedeki anahtarlar icin okunur — alakasiz degiskenler config'e sizmaz.
-pub const ALL_KEYS: [&str; 16] = [
+pub const ALL_KEYS: [&str; 17] = [
     KEY_OPENAI_API_KEY,
     KEY_REALTIME_MODEL,
     KEY_SUMMARY_MODEL,
@@ -60,6 +62,32 @@ pub const ALL_KEYS: [&str; 16] = [
     KEY_TURN_DETECTION,
     KEY_VAD_EAGERNESS,
     KEY_VAD_SILENCE_MS,
+    KEY_EDITOR_COMMAND,
+];
+
+/// `ASUNA_EDITOR_COMMAND` bos birakildiginda kullanilan komut.
+///
+/// Model ID'lerinin aksine bir varsayilan **kabul edilebilir**: burada
+/// "sessiz default" bir maliyet ya da gizlilik karari uretmiyor (ASU-033
+/// LOW-11 gerekcesi bu anahtar icin gecerli degil), ve degerin ne oldugu
+/// `open_project` ciktisinda + audit satirinda gorunur. Anahtarin **tanimli**
+/// olmasi yine de sart: `.env.example` icinde durur ve kullanici hangi
+/// programin acilacagini gorur.
+pub const DEFAULT_EDITOR_COMMAND: &str = "code";
+
+/// `ASUNA_EDITOR_COMMAND` icin karakter tavani. Bir program adi; yol da olsa
+/// `PATH_MAX` sinifinin altinda kalir.
+const MAX_EDITOR_COMMAND_CHARS: usize = 256;
+
+/// Editor komutunda **yasak** karakterler.
+///
+/// Komut hicbir zaman bir kabuga verilmiyor (`projects::editor` arguman
+/// vektoru kullanir), yani bunlar calistirilamaz. Yasak olmalarinin sebebi
+/// baska: `code --wait` gibi bir deger yazan kullanici, sessizce "code --wait"
+/// **adinda** bir dosya aranmasini degil, net bir hata gormeli. Bosluk ve
+/// metakarakterleri acilista reddetmek bu belirsizligi kapatir.
+const FORBIDDEN_EDITOR_CHARS: [char; 15] = [
+    ' ', '\t', '\n', '\r', ';', '&', '|', '`', '$', '(', ')', '<', '>', '"', '\'',
 ];
 
 /// `ASUNA_IDLE_TIMEOUT_SECONDS` icin kabul edilen aralik.
@@ -328,6 +356,13 @@ pub struct AsunaConfig {
     /// Yalnizca `turn_detection == ServerVad` iken anlamli; deger her durumda
     /// dogrulanir ki mod degistirmek yeniden yapilandirma gerektirmesin.
     pub vad_silence_ms: u32,
+    /// `open_project` tool'unun calistiracagi editor komutu (ASU-052).
+    ///
+    /// Renderer'a **gitmez**: alt process'i bu taraf baslatir, webview'in hangi
+    /// programin calistigini bilmesine gerek yok ve bilmesi ona bir secim hakki
+    /// oneririr gibi gorunurdu. Komut adi kullaniciya `open_project` ciktisinda
+    /// ve audit satirinda gorunur.
+    pub editor_command: String,
 }
 
 impl AsunaConfig {
@@ -432,6 +467,29 @@ pub fn load_from_map(map: &EnvMap) -> Result<AsunaConfig, ConfigError> {
     };
 
     let wake_word = required_non_empty(map, KEY_WAKE_WORD)?;
+
+    // Bos = varsayilan (`code`). Anahtar yine de tanimli olmali: hangi
+    // programin acilacagi `.env`'de gorunur kalsin.
+    let editor_command = match optional(map, KEY_EDITOR_COMMAND)? {
+        None => DEFAULT_EDITOR_COMMAND.to_owned(),
+        Some(command) => {
+            if command.chars().count() > MAX_EDITOR_COMMAND_CHARS {
+                return Err(ConfigError::Invalid {
+                    key: KEY_EDITOR_COMMAND,
+                    expected: format!("en fazla {MAX_EDITOR_COMMAND_CHARS} karakter"),
+                });
+            }
+            if command.contains(FORBIDDEN_EDITOR_CHARS) || command.contains('\0') {
+                return Err(ConfigError::Invalid {
+                    key: KEY_EDITOR_COMMAND,
+                    expected: "argumansiz tek bir komut adi ya da tam yol (orn. `code`); \
+                               bosluk ve kabuk karakterleri kabul edilmiyor"
+                        .to_owned(),
+                });
+            }
+            command
+        }
+    };
 
     let memory_enabled = required_bool(map, KEY_MEMORY_ENABLED)?;
     let transcript_storage = required_bool(map, KEY_TRANSCRIPT_STORAGE)?;
@@ -551,6 +609,7 @@ pub fn load_from_map(map: &EnvMap) -> Result<AsunaConfig, ConfigError> {
         turn_detection,
         vad_eagerness,
         vad_silence_ms,
+        editor_command,
     })
 }
 
@@ -627,6 +686,7 @@ mod tests {
             (KEY_TURN_DETECTION, "semantic_vad"),
             (KEY_VAD_EAGERNESS, "high"),
             (KEY_VAD_SILENCE_MS, "400"),
+            (KEY_EDITOR_COMMAND, "code"),
         ];
         pairs
             .into_iter()
@@ -705,6 +765,86 @@ mod tests {
         let config = load_from_map(&map).expect("bos opsiyonel degerler kabul edilmeli");
         assert_eq!(config.realtime_voice, None);
         assert_eq!(config.wake_word_model_dir, None);
+    }
+
+    /// ASU-052: bos deger "belirtilmedi" demek ve varsayilana duser. Anahtarin
+    /// **tanimli** olmasi yine sart (`every_key_is_required` ayrica olcuyor).
+    #[test]
+    fn an_empty_editor_command_falls_back_to_the_default() {
+        let config =
+            load_from_map(&map_with(KEY_EDITOR_COMMAND, "   ")).expect("bos deger kabul edilmeli");
+        assert_eq!(config.editor_command, DEFAULT_EDITOR_COMMAND);
+        assert_eq!(config.editor_command, "code");
+    }
+
+    #[test]
+    fn an_absolute_editor_path_is_accepted() {
+        let config = load_from_map(&map_with(KEY_EDITOR_COMMAND, "/usr/local/bin/code"))
+            .expect("tam yol kabul edilmeli");
+        assert_eq!(config.editor_command, "/usr/local/bin/code");
+    }
+
+    /// **ASU-052 guvenlik kilidi**: komut hicbir zaman bir kabuga verilmiyor,
+    /// bu yuzden metakarakterler calisamaz — ama sessizce "boyle bir dosya yok"
+    /// hatasina donusmemeleri icin acilista reddediliyor. Argumanli bir editor
+    /// komutu (`code --wait`) da bu kurala takilir ve kullanici net bir mesaj
+    /// gorur.
+    #[test]
+    fn an_editor_command_with_shell_characters_is_refused_at_startup() {
+        for value in [
+            "code --wait",
+            "code; rm -rf ~",
+            "code && open .",
+            "code | tee /tmp/x",
+            "`whoami`",
+            "$(id)",
+            "code > /tmp/out",
+            "\"code\"",
+        ] {
+            let Err(error) = load_from_map(&map_with(KEY_EDITOR_COMMAND, value)) else {
+                panic!("`{value}` reddedilmeliydi");
+            };
+            assert!(
+                matches!(
+                    error,
+                    ConfigError::Invalid {
+                        key: KEY_EDITOR_COMMAND,
+                        ..
+                    }
+                ),
+                "`{value}` icin Invalid bekleniyordu, gelen: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_over_long_editor_command_is_refused() {
+        let error = load_from_map(&map_with(KEY_EDITOR_COMMAND, &"c".repeat(300)))
+            .expect_err("hata bekleniyordu");
+        assert!(matches!(
+            error,
+            ConfigError::Invalid {
+                key: KEY_EDITOR_COMMAND,
+                ..
+            }
+        ));
+    }
+
+    /// Editor komutu renderer'a **gitmez**: `FrontendConfig` whitelist'i onu
+    /// tasimaz. Webview'in hangi programin acildigini bilmesine gerek yok.
+    #[test]
+    fn the_editor_command_is_not_exposed_to_the_renderer() {
+        let config = load_from_map(&map_with(KEY_EDITOR_COMMAND, "cursor"))
+            .expect("gecerli config yuklenmeli");
+        let json = serde_json::to_string(&config.to_frontend()).expect("serialize");
+        assert!(
+            !json.contains("cursor"),
+            "editor komutu renderer'a sizdi: {json}"
+        );
+        assert!(
+            !json.contains("editorCommand"),
+            "alan renderer'a sizdi: {json}"
+        );
     }
 
     #[test]

@@ -30,7 +30,12 @@ import { toCamelCase } from './contract';
 import { MEMORY_COLUMNS_NOT_MIRRORED, MEMORY_KINDS, MEMORY_RECORD_KEYS } from './memory';
 import { PROJECT_RECORD_KEYS, PROJECT_STATUSES } from './project';
 import { SESSION_END_REASONS, SESSION_RECORD_KEYS } from './session';
-import { TOOL_APPROVAL_STATES, TOOL_EVENT_RECORD_KEYS, TOOL_RISK_LEVELS } from './tool-event';
+import {
+  TOOL_APPROVAL_STATES,
+  TOOL_EVENT_RECORD_KEYS,
+  TOOL_OUTCOMES,
+  TOOL_RISK_LEVELS,
+} from './tool-event';
 
 const MIGRATIONS_DIR = 'src-tauri/src/db/migrations';
 
@@ -47,6 +52,7 @@ const MIGRATION_FILES = [
   '002_session_end_reason.up.sql',
   '003_projects.up.sql',
   '004_tool_events.up.sql',
+  '005_tool_event_outcome.up.sql',
 ] as const;
 
 function readMigration(name: string): string {
@@ -251,7 +257,14 @@ describe('tool_events tablosu <-> src/shared/tool-event.ts', () => {
     expect([...TOOL_RISK_LEVELS]).toEqual([0, 1, 2, 3]);
   });
 
-  /** PROJECT.md Bolum 12.2 alan listesi — kaynak spec ile de bagli kalsin. */
+  /**
+   * PROJECT.md Bolum 12.2 alan listesi — kaynak spec ile de bagli kalsin.
+   *
+   * `outcome` 12.2'de **yok** ve bilerek listenin sonunda duruyor: ASU-051
+   * kapsaminda migration 005 ile eklendi (orchestrator karari, DECISIONS.md
+   * "Phase 5 kararlari"). Spec alanlarinin tamami hala burada; kolon spec'in
+   * uzerine eklenmis bir eksen.
+   */
   it('PROJECT.md Bolum 12.2 alanlarinin tamamini tasiyor', () => {
     expect(columnsOf('tool_events')).toEqual([
       'id',
@@ -262,7 +275,33 @@ describe('tool_events tablosu <-> src/shared/tool-event.ts', () => {
       'approval_state',
       'result_summary',
       'created_at',
+      'outcome',
     ]);
+  });
+
+  /**
+   * ASU-051: sonuc ekseni de sema metnine bagli. Bir deger eklenip TypeScript
+   * sabiti unutulursa (ya da tersi) bu test duser.
+   */
+  it('outcome degerleri semadaki CHECK kisitiyla birebir', () => {
+    expect(valuesInCheck('outcome IN (')).toEqual([...TOOL_OUTCOMES]);
+  });
+
+  /**
+   * Onay durumu ile sonuc **ayri** eksenler: kumeler kesismemeli. Kesisseydi
+   * bir denetim satirini okurken hangi sorunun cevabini gordugumuz belirsiz
+   * olurdu.
+   */
+  it('approvalState ve outcome kumeleri kesismiyor', () => {
+    const shared = TOOL_OUTCOMES.filter((outcome) =>
+      (TOOL_APPROVAL_STATES as readonly string[]).includes(outcome),
+    );
+    expect(shared).toEqual([]);
+  });
+
+  /** Eski satirlar NULL kalabilmeli — geriye donuk uydurma yok. */
+  it('outcome NULL kabul ediyor (005 oncesi satirlar)', () => {
+    expect(schema).toContain('CHECK (outcome IS NULL OR outcome IN (');
   });
 
   /**

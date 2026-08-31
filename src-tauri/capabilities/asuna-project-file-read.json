@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "asuna-project-file-read",
+  "description": "Guncel proje koku icinde TEK DOSYA OKUMA yuzeyi (ASU-051). Tek komut acar: `read_project_file` — Asuna'nin `read_project_file` tool'u (risk 0, salt okuma) bunu cagirir. `asuna-projects-read`'ten AYRI TUTULUYOR ve bu bilincli: `project_context` kokun altindaki SABIT bir allowlist'i okur (PROJECT.md, README.md, manifest'ler), burasi ise kok icindeki HERHANGI bir metin dosyasini okuyabilir — yani cok daha genis bir yuzey ve ayri bir yetki ekseni. Bu dosyayi `tauri.conf.json` listesinden cikarmak dosya okumayi kapatir ama proje listesini ve proje ozetini gorunur birakir. Renderer NE PROJEYI NE DE MUTLAK YOLU SECEBILIR: komut `project_id` almaz (hedef her zaman registry'deki guncel projedir) ve yalnizca kok'e gore gorece bir metin kabul eder. Cozum ASU-049 path sandbox'indan gecer: `..` leksik olarak cozulur, symlink canonicalize edilir, kok disina cikan yol tipli olarak reddedilir (`traversal` / `symlink_escape` / `absolute` / `tilde`); `.env` ve turevleri, `.pem` / `.key` uzantilari, `id_rsa` / `id_ed25519` ile baslayan dosyalar, `.ssh/` altindaki her sey, keychain, credential dosyalari ve `.git/config` blok listesindedir. 256 KiB ustu dosya reddedilir, ikili icerik reddedilir. Donen metin 6 000 karakterde kirpilir (kirpma SESSIZ DEGIL, ciktida bildirilir), `redact_sensitive_text` suzgecinden gecer ve donen yol KOK'E GOREDIR — mutlak yol renderer'a, modele ve audit satirina girmez. YAZMA YOKTUR ve olmayacaktir: dosya olusturma, degistirme ve silme komutu bu projede tanimli degil. Kapsam ana pencere ile sinirlidir; wildcard izin yoktur.",
+  "platforms": ["macOS"],
+  "windows": ["main"],
+  "permissions": ["allow-read-project-file"]
+}

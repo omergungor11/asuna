@@ -606,7 +606,60 @@ impl FromSql for ToolApprovalState {
     }
 }
 
-/// `tool_events` satiri (PROJECT.md Bolum 12.2).
+/// Bir tool cagrisinin **sonucu** (ASU-051, migration 005).
+///
+/// [`ToolApprovalState`] ile ayni sey degil ve karistirilmamali: onay durumu
+/// "calismasina izin verildi mi", bu ise "calisti mi ve isini yapabildi mi"
+/// sorusunu cevaplar. Ikisi bagimsiz eksenler —
+/// `approved` + `Failed` gecerli ve sik bir kombinasyon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolOutcome {
+    /// Tool calisti ve isini yapti.
+    Succeeded,
+    /// Tool **calisti** ama isini yapamadi: implementasyon hatasi, sandbox
+    /// reddi, timeout. [`Self::NotRun`] degil — yan etkisi olabilecek bir cagri
+    /// "hic olmadi" diye kaydedilmemeli.
+    Failed,
+    /// Tool **hic** calismadi: sema reddi, onay reddi/zaman asimi, cagri
+    /// baslamadan iptal. Yan etki ihtimali yok.
+    NotRun,
+}
+
+impl ToolOutcome {
+    /// Tum degerler — sira semadaki CHECK kisiti ile ayni (test ile baglidir).
+    pub const ALL: [Self; 3] = [Self::Succeeded, Self::Failed, Self::NotRun];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+            Self::NotRun => "not_run",
+        }
+    }
+
+    /// Sessiz default **yok**: bilinmeyen deger `None` doner.
+    pub fn parse(raw: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|outcome| outcome.as_str() == raw)
+    }
+}
+
+impl ToSql for ToolOutcome {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(ToSqlOutput::from(self.as_str()))
+    }
+}
+
+impl FromSql for ToolOutcome {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        let raw = value.as_str()?;
+        Self::parse(raw).ok_or_else(|| FromSqlError::Other("bilinmeyen tool_events.outcome".into()))
+    }
+}
+
+/// `tool_events` satiri (PROJECT.md Bolum 12.2 + ASU-051 `outcome`).
 ///
 /// Salt yazilir bir denetim satiridir: repository katmaninda `UPDATE` ya da
 /// `DELETE` yolu yoktur ve renderer'a acilan komut kumesinde de yoktur.
@@ -630,10 +683,19 @@ pub struct ToolEventRecord {
     /// bir sonuc yok; tipik olarak cagri hic calismadi.
     pub result_summary: Option<String>,
     pub created_at: String,
+    /// Cagri calisti mi, calistiysa basardi mi? (ASU-051, migration 005).
+    ///
+    /// `None` = satir 005 oncesinde yazildi ve bu eksen o zaman tutulmuyordu.
+    /// Geriye donuk **uydurulmaz**: `approval_state = approved` bir cagrinin
+    /// basarili bittigini soylemez.
+    pub outcome: Option<ToolOutcome>,
 }
 
 /// `ToolEventRecord`'un okudugu kolonlar — sema kolon sirasiyla ayni.
-pub const TOOL_EVENT_COLUMNS: [&str; 8] = [
+///
+/// `outcome` **sonda**: `ALTER TABLE ... ADD COLUMN` kolonu tablonun sonuna
+/// koyar ve `PRAGMA table_info` sirasi budur (`sessions.end_reason` ile ayni).
+pub const TOOL_EVENT_COLUMNS: [&str; 9] = [
     "id",
     "session_id",
     "tool_name",
@@ -642,6 +704,7 @@ pub const TOOL_EVENT_COLUMNS: [&str; 8] = [
     "approval_state",
     "result_summary",
     "created_at",
+    "outcome",
 ];
 
 impl ToolEventRecord {
@@ -655,6 +718,7 @@ impl ToolEventRecord {
             approval_state: row.get("approval_state")?,
             result_summary: row.get("result_summary")?,
             created_at: row.get("created_at")?,
+            outcome: row.get("outcome")?,
         })
     }
 
@@ -947,6 +1011,53 @@ mod tests {
             .map(|level| level.as_i64().to_string())
             .collect();
         assert_eq!(from_enum, from_schema);
+    }
+
+    /// ASU-051: sonuc kumesi de sema metnine baglidir; bir deger eklenip enum
+    /// unutulursa (ya da tersi) bu test duser.
+    #[test]
+    fn tool_outcome_matches_the_schema_check_constraint() {
+        let from_schema = migrations::outcomes_declared_in_schema();
+        let from_enum: Vec<String> = ToolOutcome::ALL
+            .iter()
+            .map(|outcome| outcome.as_str().to_owned())
+            .collect();
+        assert_eq!(from_enum, from_schema);
+    }
+
+    /// Onay durumu ile sonuc **ayri** eksenler: kumeler kesismemeli, aksi halde
+    /// bir denetim satirini okurken hangi sorunun cevabini gordugumuz belirsiz
+    /// olurdu.
+    #[test]
+    fn approval_state_and_outcome_are_disjoint_vocabularies() {
+        for outcome in ToolOutcome::ALL {
+            assert_eq!(
+                ToolApprovalState::parse(outcome.as_str()),
+                None,
+                "`{}` hem onay durumu hem sonuc olarak okunabiliyor",
+                outcome.as_str()
+            );
+        }
+        for state in ToolApprovalState::ALL {
+            assert_eq!(ToolOutcome::parse(state.as_str()), None, "{state:?}");
+        }
+    }
+
+    #[test]
+    fn unknown_outcome_is_rejected() {
+        assert_eq!(ToolOutcome::parse("basarili"), None);
+        assert_eq!(ToolOutcome::parse("Succeeded"), None);
+        assert_eq!(ToolOutcome::parse(""), None);
+        assert!(serde_json::from_str::<ToolOutcome>("\"skipped\"").is_err());
+
+        for outcome in ToolOutcome::ALL {
+            let json = serde_json::to_string(&outcome).expect("serialize");
+            assert_eq!(json, format!("\"{}\"", outcome.as_str()));
+            assert_eq!(
+                serde_json::from_str::<ToolOutcome>(&json).expect("deserialize"),
+                outcome
+            );
+        }
     }
 
     #[test]

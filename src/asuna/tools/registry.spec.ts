@@ -595,7 +595,35 @@ describe('varsayilan registry — `get_current_project`', () => {
     expect(tool).not.toBeNull();
     expect(tool?.risk).toBe(0);
     expect(tool?.requiresApproval).toBe(false);
-    expect(registry.list()).toHaveLength(1);
+  });
+
+  /**
+   * Varsayilan set **acikca** yazili: yeni bir yetenegin registry'ye sessizce
+   * eklenmesi (ve modele acilmasi) bir liste karsilastirmasiyla goruluyor.
+   * PROJECT.md Bolum 17 "once salt okuma": risk 2+ bir tool bu listeye
+   * orchestrator karari olmadan giremez.
+   */
+  it('varsayilan set uc tool: iki salt okuma, bir onayli aksiyon', () => {
+    const registry = createAsunaToolRegistry();
+
+    expect(registry.list().map((tool) => tool.name)).toEqual([
+      'get_current_project',
+      'read_project_file',
+      'open_project',
+    ]);
+
+    // ASU-051: dosya okuma salt okuma ve onaysiz.
+    expect(registry.resolve('read_project_file')?.risk).toBe(0);
+    expect(registry.resolve('read_project_file')?.requiresApproval).toBe(false);
+
+    // ASU-052: editorde acma risk 1 ve tanimin kendisi onay istiyor —
+    // ileride risk 1'i otomatik geciren bir mod eklense bile sorulmaya
+    // devam eder (`resolveApproval` bir tanimi gevsetemez).
+    expect(registry.resolve('open_project')?.risk).toBe(1);
+    expect(registry.resolve('open_project')?.requiresApproval).toBe(true);
+
+    // Risk 2+ hicbir tool acik degil.
+    expect(registry.list().filter((tool) => tool.risk >= 2)).toEqual([]);
   });
 
   /** ASU-044 davranisi tasinmada bozulmadi: ayni ozet, ayni yapisal veri. */
@@ -622,5 +650,227 @@ describe('varsayilan registry — `get_current_project`', () => {
       expect(result.data).toEqual({ status: 'unknown', reason: 'no-current-selection' });
       expect(result.summary).toContain('Guncel proje bilinmiyor.');
     }
+  });
+});
+
+describe('executeTool — sonuc ekseni (ASU-051 `outcome`)', () => {
+  function collect(): {
+    readonly audits: ToolAuditInput[];
+    readonly onAudit: (i: ToolAuditInput) => void;
+  } {
+    const audits: ToolAuditInput[] = [];
+    return { audits, onAudit: (input): void => void audits.push(input) };
+  }
+
+  it('basarili cagri `succeeded` yaziyor', async () => {
+    const { audits, onAudit } = collect();
+    await executeTool(defineTool(), {}, CONTEXT, { onAudit });
+    expect(audits[0]?.outcome).toBe('succeeded');
+  });
+
+  /**
+   * `execute` CALISTI ve isini yapamadi: `not_run` degil `failed`. Yan etkisi
+   * olabilecek bir cagriyi "hic olmadi" diye kaydetmek denetim defterine yalan
+   * yazmak olurdu (migration 005 gerekcesi).
+   */
+  it('calisip basarisiz olan cagri `failed` yaziyor', async () => {
+    const { audits, onAudit } = collect();
+    const tool = defineTool({
+      execute: (): Promise<ToolResult> =>
+        Promise.resolve({ ok: false, summary: 'olmadi', errorKind: 'x' }),
+    });
+
+    await executeTool(tool, {}, CONTEXT, { onAudit });
+
+    expect(audits[0]?.outcome).toBe('failed');
+  });
+
+  it('firlatan tool da `failed` — hata yutulmuyor', async () => {
+    const { audits, onAudit } = collect();
+    const tool = defineTool({
+      execute: (): Promise<ToolResult> => Promise.reject(new Error('patladi')),
+    });
+
+    await executeTool(tool, {}, CONTEXT, { onAudit });
+
+    expect(audits[0]?.outcome).toBe('failed');
+  });
+
+  /** Sema reddi: `execute` hic cagrilmadi. */
+  it('gecersiz argumanda `not_run` yaziyor', async () => {
+    const { audits, onAudit } = collect();
+
+    await executeTool(defineTool(), { uydurma: 1 }, CONTEXT, { onAudit });
+
+    expect(audits[0]?.outcome).toBe('not_run');
+    expect(audits[0]?.approvalState).toBe('not_requested');
+  });
+
+  /** Onay reddi: yine `execute` cagrilmadi. */
+  it('onaylanmayan cagri `not_run` yaziyor', async () => {
+    const { audits, onAudit } = collect();
+    const tool = defineTool({ risk: 2, requiresApproval: true });
+
+    await executeTool(tool, {}, CONTEXT, {
+      approvalGate: () => Promise.resolve('denied'),
+      onAudit,
+    });
+
+    expect(audits[0]?.approvalState).toBe('denied');
+    expect(audits[0]?.outcome).toBe('not_run');
+  });
+
+  /**
+   * Iki eksen bagimsiz ve **birlikte** anlamli: kullanici izin verdi, is
+   * calisti ve patladi.
+   */
+  it('onaylanmis bir cagri `failed` olabilir', async () => {
+    const { audits, onAudit } = collect();
+    const tool = defineTool({
+      risk: 2,
+      requiresApproval: true,
+      execute: (): Promise<ToolResult> =>
+        Promise.resolve({ ok: false, summary: 'olmadi', errorKind: 'x' }),
+    });
+
+    await executeTool(tool, {}, CONTEXT, {
+      approvalGate: () => Promise.resolve('approved'),
+      onAudit,
+    });
+
+    expect(audits[0]?.approvalState).toBe('approved');
+    expect(audits[0]?.outcome).toBe('failed');
+  });
+
+  /**
+   * **ASU-051 gizlilik kilidi**: icerik donduren bir tool'un modele verdigi
+   * metin deftere girmez. `auditSummary` varsa **o** yazilir.
+   */
+  it('auditSummary varsa deftere o yaziliyor, modele giden metin degil', async () => {
+    const { audits, onAudit } = collect();
+    const tool = defineTool({
+      execute: (): Promise<ToolResult> =>
+        Promise.resolve({
+          ok: true,
+          summary: 'OPENAI_API_KEY=cok-gizli-dosya-icerigi\nsatir 2\nsatir 3',
+          auditSummary: 'README.md okundu (2.1 KB)',
+        }),
+    });
+
+    await executeTool(tool, {}, CONTEXT, { onAudit });
+
+    expect(audits[0]?.resultSummary).toBe('README.md okundu (2.1 KB)');
+    expect(audits[0]?.resultSummary).not.toContain('cok-gizli-dosya-icerigi');
+  });
+
+  it('auditSummary yoksa summary yaziliyor (mevcut davranis)', async () => {
+    const { audits, onAudit } = collect();
+    await executeTool(defineTool(), {}, CONTEXT, { onAudit });
+    expect(audits[0]?.resultSummary).toBe('oldu');
+  });
+});
+
+describe('executeTool — kapatilmis tool (ASU-054)', () => {
+  /**
+   * **Kabul kriteri**: "Gizli/gorunmez tool calistirma yolu yok". Kapali bir
+   * tool modele verilen listede zaten yok; bu kapi acik bir oturumun ortasinda
+   * kapatilan tool icin.
+   */
+  it('kapali tool calismiyor ve `execute` hic cagrilmiyor', async () => {
+    const execute = vi.fn<Execute>(() => Promise.resolve(OK));
+    const tool = defineTool({ execute });
+
+    const result = await executeTool(tool, {}, CONTEXT, {
+      isEnabled: () => false,
+    });
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.errorKind).toBe(TOOL_ERROR_KINDS.disabled);
+  });
+
+  /** Reddedilen cagri **deftere gecer**: sessizce dusmez. */
+  it('kapali tool cagrisi audit"e `not_run` olarak yaziliyor', async () => {
+    const audits: ToolAuditInput[] = [];
+
+    await executeTool(defineTool(), {}, CONTEXT, {
+      isEnabled: () => false,
+      onAudit: (input): void => void audits.push(input),
+    });
+
+    expect(audits).toHaveLength(1);
+    expect(audits[0]?.outcome).toBe('not_run');
+    expect(audits[0]?.approvalState).toBe('not_requested');
+    expect(audits[0]?.toolName).toBe('read_project_file');
+  });
+
+  /**
+   * Kapatma onay kapisinin **onunde**: onay gerektiren bir tool icin kullaniciya
+   * kart bile cikmaz. Aksi halde kapali bir tool icin onay istenir, kullanici
+   * onaylar ve sonra reddedilirdi — anlamsiz bir dongu.
+   */
+  it('kapali tool icin onay bile istenmiyor', async () => {
+    const approvalGate = vi.fn<ToolApprovalGate>(() => Promise.resolve('approved' as const));
+    const tool = defineTool({ risk: 2, requiresApproval: true });
+
+    await executeTool(tool, {}, CONTEXT, { isEnabled: () => false, approvalGate });
+
+    expect(approvalGate).not.toHaveBeenCalled();
+  });
+
+  it('acik tool etkilenmiyor', async () => {
+    const execute = vi.fn<Execute>(() => Promise.resolve(OK));
+
+    const result = await executeTool(defineTool({ execute }), {}, CONTEXT, {
+      isEnabled: () => true,
+    });
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe('executeTool — sonuc bildirimi (ASU-054 transcript)', () => {
+  it('her cikis yolunda tam bir kez cagriliyor', async () => {
+    const reports: string[] = [];
+    const onResult = (report: { outcome: string }): void => void reports.push(report.outcome);
+
+    await executeTool(defineTool(), {}, CONTEXT, { onResult });
+    await executeTool(defineTool(), { uydurma: 1 }, CONTEXT, { onResult });
+    await executeTool(defineTool(), {}, CONTEXT, { isEnabled: () => false, onResult });
+
+    expect(reports).toEqual(['succeeded', 'not_run', 'not_run']);
+  });
+
+  /** Transcript satiri da icerik gormez. */
+  it('ozet olarak auditSummary kullaniliyor', async () => {
+    const summaries: string[] = [];
+    const tool = defineTool({
+      execute: (): Promise<ToolResult> =>
+        Promise.resolve({
+          ok: true,
+          summary: 'dosyanin tamami burada, cok uzun bir metin',
+          auditSummary: 'README.md okundu (2.1 KB)',
+        }),
+    });
+
+    await executeTool(tool, {}, CONTEXT, {
+      onResult: (report): void => void summaries.push(report.summary),
+    });
+
+    expect(summaries).toEqual(['README.md okundu (2.1 KB)']);
+  });
+
+  it('risk ve onay durumu raporda tasiniyor', async () => {
+    const reports: { risk: number; approvalState: string }[] = [];
+    const tool = defineTool({ risk: 1, requiresApproval: true });
+
+    await executeTool(tool, {}, CONTEXT, {
+      approvalGate: () => Promise.resolve('approved'),
+      onResult: (report): void =>
+        void reports.push({ risk: report.risk, approvalState: report.approvalState }),
+    });
+
+    expect(reports).toEqual([{ risk: 1, approvalState: 'approved' }]);
   });
 });
