@@ -11,6 +11,7 @@ use tauri::Manager;
 
 #[cfg(test)]
 mod acl_regression;
+pub mod chat;
 pub mod commands;
 pub mod config;
 pub mod db;
@@ -130,6 +131,7 @@ pub fn run() {
             // renderer ne projeyi ne mutlak yolu ne de calistirilacak komutu
             // secebilir.
             projects::files::read_project_file,
+            projects::listing::list_project_dir,
             projects::editor::open_project,
             privacy::get_privacy_settings,
             privacy::set_privacy_settings

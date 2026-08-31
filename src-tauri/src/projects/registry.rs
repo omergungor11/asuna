@@ -40,6 +40,7 @@ use tauri::State;
 use crate::db::model::{ProjectRecord, ProjectStatus};
 use crate::db::project_repository as repository;
 use crate::db::{clock, AsunaDb, DbError, DbState};
+use crate::security::blocklist;
 
 /// Proje adinin ust siniri. Ad UI'da ve ses oturumunda gecer; bir dizin adinin
 /// makul uzunlugunu asani kabul etmek baglami sisirir.
@@ -57,6 +58,65 @@ const MAX_SLUG_ATTEMPTS: u32 = 50;
 
 /// Slug uretilemeyen bir dizin adi icin son care.
 const FALLBACK_SLUG: &str = "proje";
+
+/// Proje koku olarak **kabul edilmeyen** sistem agaclari — **on ek** eslesmesi
+/// (ASU-069 / Gate 3 C1).
+///
+/// # Neden bir liste var
+///
+/// ASU-069'dan once kok kaydinin tek musterisi UI'daki dizin secicisiydi:
+/// kullanici bir pencerede tikliyordu. Artik `register_project` tool'u ile
+/// **model** de bir yol onerebiliyor ve kayitli kok = Asuna'nin okuyabildigi
+/// alan demek. Yani her kayit sandbox'in yuzeyini genisletiyor; "var olan bir
+/// dizin" olmak yeterli bir olcut degil.
+///
+/// # Neden bunlar **on ek**
+///
+/// Bu agaclarin **hicbir** alt dizini kullanicinin projesi degil. Ilk turda
+/// tam eslesme yazilmisti ve Gate 3 bunun bir bypass oldugunu gosterdi:
+/// `/System/Volumes/Data/...` (macOS firmlink) tam eslesmeye takilmadigi icin
+/// tum kullanici agaci ikinci bir kanonik yoldan aciliyordu. `/System` on ek
+/// olunca o kapi kapanıyor.
+///
+/// `/Volumes` bilerek **burada degil**: harici disktki bir proje
+/// (`/Volumes/Yedek/isler/proje`) mesru bir kok. Yalnizca dizinin **kendisi**
+/// reddediliyor ([`REFUSED_SYSTEM_DIRECTORIES`]).
+const REFUSED_SYSTEM_SUBTREES: [&str; 4] = ["/System", "/Library", "/Applications", "/Network"];
+
+/// Proje koku olamayan tekil dizinler — **tam** eslesme.
+///
+/// Bunlarin alt agaci acik kalmali: `/usr/local/src/deneme` mesru bir proje
+/// olabilir, `/Volumes/Disk/proje` de. En onemlisi `/private/var/folders/...`:
+/// macOS'ta gecici dizinler orada yasiyor ve bu repo'nun testlerinin tamami
+/// oraya gercek proje kokleri kaydediyor. `/private`i on ek yapmak testleri
+/// degil, **gercek kullanimi** de kirardi.
+///
+/// Listede hem kisayol hem `canonicalize` sonrasi hali var (`/etc` ve
+/// `/private/etc`): kullanicidan hangisinin gelecegi bilinmez.
+const REFUSED_SYSTEM_DIRECTORIES: [&str; 14] = [
+    "/Volumes",
+    "/private",
+    "/etc",
+    "/private/etc",
+    "/var",
+    "/private/var",
+    "/tmp",
+    "/private/tmp",
+    "/usr",
+    "/bin",
+    "/sbin",
+    "/opt",
+    "/Users",
+    "/home",
+];
+
+/// macOS firmlink oneki: **ayni** dizin iki kanonik yoldan gorunebilir
+/// (`/Users/ad` ve `/System/Volumes/Data/Users/ad`).
+///
+/// Gate 3 C1'in ikinci yarisi buydu: `~/Library` korumasi `home.join("Library")`
+/// on ekine bakiyordu ve firmlink yolundan gelen bir istek o oneki tasimadigi
+/// icin geciyordu. Karsilastirmadan **once** soyuluyor.
+const DATA_VOLUME_PREFIX: &str = "/System/Volumes/Data";
 
 // ---------------------------------------------------------------------------
 // Hata
@@ -197,12 +257,130 @@ pub struct RegisteredRoot {
     text: String,
 }
 
+/// Kullanicinin ev dizini — `canonicalize` edilmis.
+///
+/// `None` = `HOME` tanimli degil ya da cozulemedi. O durumda ev dizini tabanli
+/// kurallar **atlanir**; uydurulmus bir home yolu ile karsilastirma yapmak,
+/// olmayan bir korumayi var gibi gostermek olurdu. Kalan kurallar (sistem
+/// dizinleri, blok listesi) yine kosar.
+fn home_directory() -> Option<PathBuf> {
+    let raw = std::env::var_os("HOME")?;
+    if raw.is_empty() {
+        return None;
+    }
+    std::fs::canonicalize(raw).ok()
+}
+
+/// Bu dizin bir proje koku olabilir mi? (ASU-069)
+///
+/// Kayitli kok = Asuna'nin okuyabildigi alan. `register_project` tool'undan
+/// beri bu alani genisletmeyi **model** de onerebiliyor, dolayisiyla "var olan
+/// bir dizin" olmak yeterli degil. Dort ret:
+///
+/// 1. **Filesystem koku** (`/`) — bir sandbox koku olarak "her sey" demektir.
+/// 2. **Sistem agaclari ve dizinleri** ([`REFUSED_SYSTEM_SUBTREES`] on ek,
+///    [`REFUSED_SYSTEM_DIRECTORIES`] tam eslesme) — kullanicinin projesi degil.
+/// 3. **Ev dizini, onu iceren her ust dizin ve `~/Library`** — ilk ikisi tum
+///    kullanici verisini tek kayitla acardi (`/Users`, `/`,
+///    `/System/Volumes/Data`); ucuncusu uygulama destek dosyalari, tarayici
+///    profilleri ve token'lar demek (`~/Library/Application Support/gh`).
+///    Hicbiri "proje" degil.
+/// 4. **Blok listesindeki yollar** (`~/.ssh`, `~/.aws`, `.../secrets` ...) —
+///    [`crate::security::sandbox`] boyle bir kok altindaki dosyalari zaten
+///    okumuyordu; kaydi bastan reddetmek ayni karari **gorunur** kiliyor
+///    (kullanici "ekledim ama calismiyor" ile bas basa kalmasin).
+///
+/// Butun karsilastirmalar **firmlink normalizasyonundan sonra** yapilir
+/// ([`strip_data_volume`]): macOS'ta ayni dizin iki kanonik yoldan gorunur ve
+/// kurallardan yalnizca birinin o yolu gormesi bir bypass demektir.
+///
+/// `home` disaridan veriliyor ki kural ortam degiskenine dokunmadan test
+/// edilebilsin.
+fn refuse_unsuitable_root(canonical: &Path, home: Option<&Path>) -> Result<(), RegistryError> {
+    // Firmlink normalizasyonu **once**: butun karsilastirmalar tek bir kanonik
+    // bicim uzerinde yapilsin. Aksi halde her kural iki kez yazilmak zorunda
+    // kalir ve biri unutuldugunda sessizce delinir (Gate 3 C1).
+    let candidate = strip_data_volume(canonical);
+    let home = home.map(strip_data_volume);
+
+    if candidate.parent().is_none() {
+        return Err(RegistryError::path_refused(
+            "filesystem koku proje olarak kaydedilemez",
+        ));
+    }
+
+    if REFUSED_SYSTEM_SUBTREES
+        .iter()
+        .any(|refused| candidate.starts_with(refused))
+    {
+        return Err(RegistryError::path_refused(
+            "sistem dizinleri proje olarak kaydedilemez",
+        ));
+    }
+
+    if REFUSED_SYSTEM_DIRECTORIES
+        .iter()
+        .any(|refused| Path::new(refused) == candidate)
+    {
+        return Err(RegistryError::path_refused(
+            "sistem dizinleri proje olarak kaydedilemez",
+        ));
+    }
+
+    if let Some(home) = home.as_deref() {
+        if candidate == home {
+            return Err(RegistryError::path_refused(
+                "ev dizininin kendisi proje olarak kaydedilemez; \
+                 bir alt dizin secin",
+            ));
+        }
+        // **Ata reddi** (Gate 3 C1): kok, ev dizinini *iceriyorsa* reddedilir.
+        // `/Users` ya da `/System/Volumes/Data` gibi bir yol "ev dizininin
+        // kendisi" degildir ama ondan daha genistir — tek kayitla tum
+        // kullanici verisini acar. Tam eslesme bu ailenin yalnizca bir uyesini
+        // yakaliyordu; `starts_with` tersi yonde bakarak hepsini kapatir.
+        if home.starts_with(&candidate) {
+            return Err(RegistryError::path_refused(
+                "ev dizinini iceren bir ust dizin proje olarak kaydedilemez; \
+                 projenin kendi dizinini secin",
+            ));
+        }
+        // On ek: `~/Library` altindaki her sey (Application Support, Keychains,
+        // tarayici profilleri, `~/Library/Application Support/gh`) kapali.
+        if candidate.starts_with(home.join("Library")) {
+            return Err(RegistryError::path_refused(
+                "`~/Library` ve altindaki dizinler proje olarak kaydedilemez",
+            ));
+        }
+    }
+
+    if let Some(reason) = blocklist::is_blocked_resolved(&candidate) {
+        return Err(RegistryError::path_refused(reason.describe()));
+    }
+
+    Ok(())
+}
+
+/// macOS firmlink onekini soyar: `/System/Volumes/Data/Users/ad` → `/Users/ad`.
+///
+/// Onek yoksa yol **oldugu gibi** doner. `/System/Volumes/Data`in kendisi `/`
+/// olur ve filesystem koku kuralina takilir — dogru sonuc, cunku o yol gercekten
+/// tum veri biriminin kokudur.
+fn strip_data_volume(path: &Path) -> PathBuf {
+    match path.strip_prefix(DATA_VOLUME_PREFIX) {
+        Ok(rest) => Path::new("/").join(rest),
+        Err(_) => path.to_path_buf(),
+    }
+}
+
 impl RegisteredRoot {
     /// Ham metni normalize eder.
     ///
     /// Sirasiyla: bos/uzunluk kontrolu → `~` reddi → mutlak olma kontrolu →
     /// `canonicalize` (symlink + `..` cozumu, var olma kontrolu) → dizin olma
-    /// kontrolu → filesystem koku reddi → UTF-8 kontrolu.
+    /// kontrolu → **uygunsuz kok reddi** ([`refuse_unsuitable_root`]: filesystem
+    /// koku, sistem dizinleri, ev dizini/`~/Library`, blok listesi) → UTF-8
+    /// kontrolu.
     ///
     /// `canonicalize` **once** cagrilmaz: var olmayan bir yolda hata verir ve
     /// "mutlak degil" ile "yok" ayrimini kaybederdik.
@@ -236,12 +414,7 @@ impl RegisteredRoot {
         if !canonical.is_dir() {
             return Err(RegistryError::NotADirectory);
         }
-        if canonical.parent().is_none() {
-            // Filesystem koku. Bir sandbox koku olarak "her sey" demektir.
-            return Err(RegistryError::path_refused(
-                "filesystem koku proje olarak kaydedilemez",
-            ));
-        }
+        refuse_unsuitable_root(&canonical, home_directory().as_deref())?;
 
         let text = canonical
             .to_str()
@@ -878,6 +1051,212 @@ mod tests {
     fn the_filesystem_root_cannot_be_registered() {
         let error = RegisteredRoot::resolve("/").expect_err("reddedilmeli");
         assert_eq!(error.code(), RegistryErrorCode::PathRefused);
+    }
+
+    /// **ASU-069 kabul kaniti**: `register_project` tool'u kayitli kok
+    /// listesini genisletebiliyor; sistem dizinleri bu yolla kaydedilemez.
+    #[test]
+    fn system_directories_cannot_be_registered() {
+        for path in ["/usr", "/etc", "/private", "/var", "/tmp", "/Applications"] {
+            // Yol makinede yoksa test bir sey kanitlamaz; varsa reddedilmeli.
+            let Ok(canonical) = std::fs::canonicalize(path) else {
+                continue;
+            };
+            let Err(error) = RegisteredRoot::resolve(&text(&canonical)) else {
+                panic!("`{path}` proje olarak kaydedilebildi");
+            };
+            assert_eq!(error.code(), RegistryErrorCode::PathRefused, "yol `{path}`");
+        }
+    }
+
+    /// Ev dizininin **kendisi** proje degildir: tek kayitla tum kullanici
+    /// verisi Asuna'ya acilirdi.
+    #[test]
+    fn the_home_directory_itself_cannot_be_registered() {
+        let temp = TempDir::new("home");
+        let home = std::fs::canonicalize(temp.path()).expect("canonicalize");
+
+        let error = refuse_unsuitable_root(&home, Some(&home)).expect_err("ev dizini reddedilmeli");
+        assert_eq!(error.code(), RegistryErrorCode::PathRefused);
+        assert!(error.to_string().contains("ev dizini"), "mesaj: {error}");
+
+        // Ama altindaki bir dizin kaydedilebilir.
+        let project = home.join("Work").join("asuna");
+        refuse_unsuitable_root(&project, Some(&home)).expect("alt dizin kabul edilmeli");
+    }
+
+    /// **Gate 3 C1 (a) regresyonu**: ev dizininin bir seviye **ustu**
+    /// (`/Users`) tam eslesmeye takilmiyordu ve tum kullanici agacini tek
+    /// kayitla acardi. Ata reddi bu ailenin tamamini kapatir.
+    #[test]
+    fn an_ancestor_of_the_home_directory_cannot_be_registered() {
+        let home = Path::new("/tmp/x/home");
+
+        for ancestor in ["/tmp/x", "/tmp", "/"] {
+            let Err(error) = refuse_unsuitable_root(Path::new(ancestor), Some(home)) else {
+                panic!("`{ancestor}` ev dizinini iceriyor, reddedilmeliydi");
+            };
+            assert_eq!(error.code(), RegistryErrorCode::PathRefused, "`{ancestor}`");
+        }
+
+        // Kardes ve alt dizinler etkilenmiyor.
+        refuse_unsuitable_root(Path::new("/tmp/x/home/Work"), Some(home))
+            .expect("alt dizin kabul edilmeli");
+        refuse_unsuitable_root(Path::new("/tmp/y/baska"), Some(home))
+            .expect("kardes dizin kabul edilmeli");
+    }
+
+    /// **Gate 3 C1 (b) regresyonu**: macOS firmlink'i
+    /// (`/System/Volumes/Data/...`) ayni dizini ikinci bir kanonik yoldan
+    /// gosterir. `~/Library` korumasi o yolda on eki tutturamiyordu.
+    #[test]
+    fn the_data_volume_firmlink_cannot_be_used_to_bypass_the_home_rules() {
+        let home = Path::new("/tmp/x/home");
+
+        for path in [
+            "/System/Volumes/Data/tmp/x/home/Library",
+            "/System/Volumes/Data/tmp/x/home/Library/Application Support/gh",
+            "/System/Volumes/Data/tmp/x/home",
+            "/System/Volumes/Data/tmp/x",
+            "/System/Volumes/Data",
+            "/System/Volumes/Data/tmp/x/home/.ssh",
+        ] {
+            let Err(error) = refuse_unsuitable_root(Path::new(path), Some(home)) else {
+                panic!("`{path}` firmlink uzerinden kabul edildi");
+            };
+            assert_eq!(error.code(), RegistryErrorCode::PathRefused, "`{path}`");
+        }
+
+        // Firmlink uzerinden gelen **mesru** bir proje yolu yine kabul edilir.
+        refuse_unsuitable_root(
+            Path::new("/System/Volumes/Data/tmp/x/home/Work/asuna"),
+            Some(home),
+        )
+        .expect("firmlink uzerinden gelen gercek proje kabul edilmeli");
+    }
+
+    /// `/System` ve kardesleri **on ek** olarak reddedilir: alt agaclarinin
+    /// hicbiri kullanicinin projesi degil.
+    #[test]
+    fn system_subtrees_are_refused_by_prefix() {
+        let home = Path::new("/tmp/x/home");
+
+        for path in [
+            "/System",
+            "/System/Volumes",
+            "/System/Library/CoreServices",
+            "/Library/Keychains",
+            "/Applications/Xcode.app",
+            "/Network/Servers",
+        ] {
+            let Err(error) = refuse_unsuitable_root(Path::new(path), Some(home)) else {
+                panic!("`{path}` kabul edildi");
+            };
+            assert_eq!(error.code(), RegistryErrorCode::PathRefused, "`{path}`");
+        }
+    }
+
+    /// Tam eslesme listesi **alt agaci** kapatmaz: harici disk ve gecici dizin
+    /// altindaki gercek projeler kaydedilebilmeli.
+    #[test]
+    fn refused_directories_do_not_close_their_subtrees() {
+        let home = Path::new("/tmp/x/home");
+
+        for path in ["/Volumes", "/usr", "/private", "/private/var", "/Users"] {
+            assert!(
+                refuse_unsuitable_root(Path::new(path), Some(home)).is_err(),
+                "`{path}` kabul edildi"
+            );
+        }
+
+        for path in [
+            "/Volumes/Yedek/isler/proje",
+            "/usr/local/src/deneme",
+            "/private/var/folders/ab/cd/T/asuna-test",
+        ] {
+            refuse_unsuitable_root(Path::new(path), Some(home))
+                .unwrap_or_else(|error| panic!("`{path}` reddedildi: {error}"));
+        }
+    }
+
+    /// **Gercek makine kaniti**: `$HOME`un ustu ve firmlink'li `~/Library`
+    /// gercek `HOME` degeriyle de reddediliyor.
+    #[test]
+    fn the_real_home_ancestors_are_refused_on_this_machine() {
+        // `HOME` yoksa test bir sey kanitlamaz.
+        let Some(home) = home_directory() else {
+            return;
+        };
+        let Some(parent) = home.parent() else {
+            return;
+        };
+
+        assert!(
+            refuse_unsuitable_root(parent, Some(&home)).is_err(),
+            "ev dizininin ust dizini kabul edildi: {}",
+            parent.display()
+        );
+
+        let firmlinked = Path::new(DATA_VOLUME_PREFIX)
+            .join(home.join("Library").strip_prefix("/").expect("mutlak yol"));
+        assert!(
+            refuse_unsuitable_root(&firmlinked, Some(&home)).is_err(),
+            "firmlink uzerinden ~/Library kabul edildi: {}",
+            firmlinked.display()
+        );
+    }
+
+    /// `~/Library` ve altindaki her sey: uygulama destek dosyalari, tarayici
+    /// profilleri, keychain. Proje degil.
+    #[test]
+    fn the_library_directory_cannot_be_registered() {
+        let temp = TempDir::new("library");
+        let home = std::fs::canonicalize(temp.path()).expect("canonicalize");
+
+        for suffix in [
+            "Library",
+            "Library/Application Support",
+            "Library/Keychains",
+        ] {
+            let Err(error) = refuse_unsuitable_root(&home.join(suffix), Some(&home)) else {
+                panic!("`{suffix}` kabul edildi");
+            };
+            assert_eq!(error.code(), RegistryErrorCode::PathRefused, "`{suffix}`");
+        }
+    }
+
+    /// Blok listesindeki bir dizin kok olamaz. Sandbox altindaki dosyalari
+    /// zaten okumuyordu; kaydi bastan reddetmek ayni karari gorunur kiliyor.
+    #[test]
+    fn blocklisted_directories_cannot_be_registered() {
+        let temp = TempDir::new("blocked");
+        let home = std::fs::canonicalize(temp.path()).expect("canonicalize");
+
+        for suffix in [".ssh", ".aws", ".gnupg", "secrets", "app-credentials"] {
+            let Err(error) = refuse_unsuitable_root(&home.join(suffix), Some(&home)) else {
+                panic!("`{suffix}` kabul edildi");
+            };
+            assert_eq!(error.code(), RegistryErrorCode::PathRefused, "`{suffix}`");
+        }
+    }
+
+    /// Ev dizini cozulemediginde kalan kurallar yine kosar; olmayan bir koruma
+    /// var gibi gosterilmez.
+    #[test]
+    fn root_validation_still_works_without_a_home_directory() {
+        assert!(refuse_unsuitable_root(Path::new("/"), None).is_err());
+        assert!(refuse_unsuitable_root(Path::new("/usr"), None).is_err());
+        assert!(refuse_unsuitable_root(Path::new("/Users/kimse/.ssh"), None).is_err());
+        assert!(refuse_unsuitable_root(Path::new("/Users/kimse/Work/asuna"), None).is_ok());
+    }
+
+    /// Gecici dizinler (`/private/var/folders/...`) **reddedilmez**: sistem
+    /// dizini listesi tam eslesme, on ek degil. Bu testlerin kendisi de o
+    /// dizinlerde kosuyor.
+    #[test]
+    fn a_directory_under_a_system_path_is_still_registrable() {
+        let temp = TempDir::new("under-system");
+        RegisteredRoot::resolve(&text(temp.path())).expect("gecici dizin kaydedilebilmeli");
     }
 
     #[test]

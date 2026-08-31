@@ -12,6 +12,7 @@
 //! | [`handoff`] | `.asuna/context.json` devir teslim artefakti (ASU-043) |
 //! | [`view`] | Yukaridakilerin tek kod yolunda birlestigi `project_context` komutu (ASU-044) |
 //! | [`files`] | Kok icinde tek dosya okuma: `read_project_file` (ASU-051) |
+//! | [`listing`] | Kok icinde dizin listeleme: `list_project_dir` (ASU-068) |
 //! | [`editor`] | Projeyi konfigure edilmis editorde acma: `open_project` (ASU-052) |
 //!
 //! # Cakisma kurali
@@ -24,5 +25,6 @@ pub mod editor;
 pub mod files;
 pub mod git_metadata;
 pub mod handoff;
+pub mod listing;
 pub mod registry;
 pub mod view;

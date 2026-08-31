@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "asuna-project-dir-list",
+  "description": "Guncel proje koku icinde DIZIN LISTELEME yuzeyi (ASU-068). Tek komut acar: `list_project_dir` — Asuna'nin `list_project_files` tool'u (risk 0, salt okuma) bunu cagirir. `asuna-project-file-read`'ten AYRI TUTULUYOR ve bu bilincli: dosya okuma ICERIK dondurur, burasi yalnizca AD/TUR/BOYUT dondurur — iki ayri gizlilik ekseni. Bu dosyayi `tauri.conf.json` listesinden cikarmak Asuna'nin dizin gormesini kapatir ama bilinen bir dosyayi okumayi ve proje ozetini gorunur birakir; tersi de dogru. DOSYA ICERIGI HICBIR ZAMAN DONMEZ: komut hicbir dosyayi acmaz, yalnizca `read_dir` + `metadata` cagirir. Renderer NE PROJEYI NE DE MUTLAK YOLU SECEBILIR: komut `project_id` almaz (hedef her zaman registry'deki guncel projedir) ve yalnizca kok'e gore gorece bir metin kabul eder (bos metin = proje koku). Cozum ASU-049 path sandbox'indan gecer: `..` leksik olarak cozulur, symlink canonicalize edilir, kok disina cikan yol tipli olarak reddedilir (`traversal` / `symlink_escape` / `absolute` / `tilde`); blok listesindeki bir DIZIN (`.ssh/`, `secrets/` ...) listelenemez, blok listesindeki DOSYALAR listede gorunur ama `blocked: true` isaretlidir ve icerikleri yine okunamaz. OZYINELEME YOKTUR: tek seviye listelenir, `.git/`, `node_modules/`, `target/` tek satir olarak gorunur ve icleri acilmaz. 200 girdi tavani vardir ve asildiginda kirpma SESSIZ DEGIL, ciktida bildirilir. YAZMA YOKTUR: dizin olusturma, yeniden adlandirma ve silme komutu bu projede tanimli degil. Kapsam ana pencere ile sinirlidir; wildcard izin yoktur.",
+  "platforms": ["macOS"],
+  "windows": ["main"],
+  "permissions": ["allow-list-project-dir"]
+}

@@ -581,3 +581,374 @@ cagrilarinin kalici kaydi `tool_events`.
 ### Notlar
 Bu, guvenlik modelinin ilk gercek sinavi. Bir madde bile gecmezse Phase 6'ya gecilmez —
 reviewer agent + `asuna-config/security.md` checklist'i ile acik kapatilir.
+
+---
+
+# Wave D: Proje Farkindaligi Tool'lari (ASU-067..070)
+
+> **Cikis noktasi:** M4 canli testinde ortaya cikan **gercek** bosluklar, tasarim
+> tahmini degil. Kullanici UI'dan proje ekledi ama Asuna'nin registry'ye bakacak
+> hicbir tool'u yoktu (`get_current_project` yalnizca **tek** projeyi gorur ve
+> secim yoksa "bilmiyorum" der). Ayrica "freelancer klasorunde ne var?"
+> cevaplanamadi: `read_project_file` dosya **adini** bilmek zorunda, model de ad
+> uyduramaz.
+>
+> **Ilke degismedi:** once salt okuma. Wave D iki risk 0 ve iki risk 1 tool
+> ekliyor; risk 2+ hala **yok**.
+
+Wave D sonrasi registry: **yedi tool** — `get_current_project`, `list_projects`,
+`read_project_file`, `list_project_files` (risk 0); `open_project`,
+`register_project`, `set_current_project` (risk 1, hepsi onayli).
+
+---
+
+## ASU-067: `list_projects` Tool (Risk 0)
+
+**Scope**: backend | **Boyut**: S | **Durum**: DONE (sesli madde ASU-071'de) | **Bagimlilik**: ASU-047, ASU-040
+
+### Acceptance Criteria
+- [x] Tool kayitli projeleri donduruyor: ad, kimlik, yol, durum
+- [x] Hangisinin **guncel proje** oldugu ciktida isaretli
+- [x] Bos listede "kayitli proje yok" diyor ve proje uydurmayi yasakliyor
+- [x] Yeni Rust yuzeyi acilmadi (mevcut `project_list` komutu sariliyor)
+- [x] `tool_events`'e yol degil **sayi** yaziliyor
+- [ ] Sesli test: "Hangi projelerim var?" gercek listeden cevapliyor
+
+### Uygulama Notlari
+
+**Yeni komut yok.** `project_list` zaten Projeler sekmesini besliyor (ASU-040,
+`asuna-projects-read` capability'si) ve salt okuma: hicbir dizinin **icine**
+girmez, yalnizca kayitli koklerin var olup olmadigini `stat` ile tazeler. Tool
+onu sariyor; ACL yuzeyi genislemedi.
+
+**"Guncel proje" TS tarafinda turetiliyor.** Semada bir `current` kolonu yok —
+guncel proje = en son acilan kayitli proje (`registry::current` →
+`most_recently_opened`). `pickCurrentProjectId` o SQL'in aynasi ve saf bir
+fonksiyon olarak test ediliyor: `last_opened_at` dolu + `unlinked` degil, en
+yeni once, esitlikte kimlik artan. Ikinci bir IPC (`project_context`)
+yapilmadi — o komut dosya okuyup git calistiriyor, bir liste sorusu icin
+fazlasiyla pahali.
+
+**Yol modele oldugu gibi gidiyor.** `get_current_project` de guncel projenin
+mutlak yolunu modele veriyor (ASU-044); listede farkli bir kural uygulamak ayni
+bilgiyi iki ayri gizlilik seviyesinde tutmak olurdu. **Defter ayri:**
+`auditSummary` yalnizca "N kayitli proje listelendi" — `tool_events` yol
+gormez.
+
+---
+
+## ASU-068: `list_project_files` Tool (Risk 0) + `list_project_dir` komutu
+
+**Scope**: backend | **Boyut**: M | **Durum**: DONE (sesli madde ASU-071'de) | **Bagimlilik**: ASU-049, ASU-051
+
+### Acceptance Criteria
+- [x] Tool guncel proje koku icindeki bir **dizini** listeliyor (ad, tur, boyut)
+- [x] Bos `path` = proje koku
+- [x] Dosya verildiginde tipli hata (`not_a_directory`), `not_found`'dan ayri
+- [x] Kacis / `~` / mutlak / symlink → mevcut `SandboxViolation` yollari
+- [x] Ozyineleme **yok**; uretilmis dizinler listede tek satir
+- [x] 200 girdi tavani, asilirsa `truncated: true` ve kirpma ciktida yaziyor
+- [x] Blok listesindeki girdiler **gorunur ama `blocked: true`**
+- [x] Dosya **icerigi** hicbir kosulda donmuyor
+- [x] 4 adim ACL + `acl_regression.rs` (kacis yollari + kapsam disi pencere)
+- [x] `auditSummary` yalnizca "N girdi listelendi: <path>"
+- [ ] Sesli test: "Bu klasorde ne var?" gercek listeden cevapliyor
+
+### Uygulama Notlari
+
+**Tek yeni Rust komutu:** `list_project_dir(path)` →
+`src-tauri/src/projects/listing.rs`. Kendi capability'si var
+(`asuna-project-dir-list`) ve `asuna-project-file-read`'ten **ayri**: dosya
+okuma ICERIK dondurur, listeleme yalnizca AD/TUR/BOYUT. Ayni izin dosyasina
+konsaydi "dizinleri gorebil ama dosya icerigi okuyamasin" (ya da tersi) diye bir
+kurulum mumkun olmazdi. `commands.rs` bunu iki testle kilitliyor
+(`project_directory_listing_has_its_own_capability`,
+`the_directory_surface_is_read_only`).
+
+**`sandbox::resolve_project_root` eklendi.** `resolve_in_root` kok'un kendisi
+icin `Empty` doner — bir **dosya** hedefi icin dogru karar, bir **dizin** hedefi
+icin degil. `resolve_in_project` artik yeni fonksiyonu cagiriyor; fonksiyon kok'u
+canonicalize eder, dizin oldugunu dogrular ve **kok'u de blok listesinden
+gecirir**. Bu bir politika degisikligi degil, var olan kuralin dizin yoluna
+dusen yarisi (`sandbox.rs` modul dokumantasyonu: "blok listesi cozulmus tam yol
+uzerinde calisir").
+
+**Ozyineleme neden yok.** Tek seviye listeleniyor; alt dizini merak eden model
+ayrica soruyor. Ozyineleme bagimlilik/build dizinlerine denk geldiginde sesli
+bir oturuma on binlerce satir bosaltirdi ve "ne kadarini gordum?" sorusunu
+bulaniklastirirdi. **Yan etkisi tam olarak istenen sey:** bu dizinler listede
+tek satir olarak gorunur, icleri acilmaz. Ayrica **kendileri** icin bir istisna
+yazilmadi — biri dogrudan listelenmek istenirse 200 girdi tavani devreye giriyor
+ve kirpildigi soyleniyor.
+
+**Blok listesindeki girdiler gizlenmiyor, isaretleniyor.** `.env` listede
+gorunur ve `blocked: true` tasir. Gizlemek kullaniciyi "neden gormuyor?" diye
+sasirtirdi; **isim bir sizinti degil**, icerik yolu (`read_project_file`) blok
+listesi tarafindan kapali kalmaya devam ediyor ve bu modul hicbir dosya acmiyor.
+`blocked` ayrica su iki durumu da kapsiyor: kok disina cikan / kirik symlink
+(model okunabilir sanip cagri israf etmesin) ve UTF-8'e cevrilemeyen ad.
+
+**Yarim liste yok.** Tek bir dizin girdisi okunamazsa cagri tipli olarak duser.
+Yarim bir liste "bu dizinde bunlar var" diye sunulurdu ve eksigi gorunmezdi.
+
+---
+
+## ASU-069: `register_project` Tool (Risk 1, HER modda onay)
+
+**Scope**: backend | **Boyut**: M | **Durum**: DONE (sesli madde ASU-071'de) | **Bagimlilik**: ASU-048, ASU-040
+
+### Acceptance Criteria
+- [x] Tool mevcut `project_add` komutunu sariyor (yeni Rust yuzeyi yok)
+- [x] `resolveApproval` **her modda** `needs_approval` (tanimin kendi talebi)
+- [x] Onay kartinda yol net gorunuyor (`path=/Users/...`)
+- [x] Reddedilince hicbir kok kaydedilmiyor, "kaydettim" denmiyor
+- [x] Host tarafinda ek dogrulama: ev dizini, `~/Library`, sistem dizinleri, blok listesi
+- [x] Kayit guncel projeyi **degistirmiyor** ve ozet bunu soyluyor
+- [ ] Sesli test: "Su klasoru projelerime ekle" onay isteyip ekliyor
+
+### `project_add` dogrulama incelemesi (bulgu)
+
+**ASU-069'dan ONCE `RegisteredRoot::resolve` sunlari dogruluyordu:**
+
+| Kontrol | Durum |
+|---|---|
+| Bos / 4096 karakter tavani | vardi |
+| `~` reddi (genisletme yok) | vardi |
+| NUL bayti reddi | vardi |
+| Mutlak yol sarti | vardi |
+| `canonicalize` (var olma + symlink + `..` cozumu) | vardi |
+| Dizin olma sarti | vardi |
+| Filesystem koku (`/`) reddi | vardi |
+| UTF-8 sarti | vardi |
+| **Ev dizininin kendisi (`$HOME`)** | **YOKTU** |
+| **`~/Library` ve alti** | **YOKTU** |
+| **Sistem dizinleri (`/usr`, `/etc`, `/Applications` ...)** | **YOKTU** |
+| **Blok listesindeki dizinler (SSH/cloud/secrets)** | **YOKTU** |
+
+Yani ASU-069 oncesi `project_add`, ev dizinini ya da bir SSH dizinini **kabul
+ederdi**. UI akisinda bu daha az onemliydi (kullanici bir pencerede tikliyor);
+tool yuzeyi acildigi anda kritik hale geliyor cunku **kayitli kok = Asuna'nin
+okuyabildigi alan**. Dort kontrol de `refuse_unsuitable_root` icinde Rust
+tarafina eklendi ve `project_add`in **tum** cagiranlarini (UI dahil) kapsiyor —
+renderer'a guvenilmedi.
+
+**Neden tam eslesme, on ek degil (sistem dizinleri).** macOS'ta `canonicalize`
+bircok yolu `/private/...` altina tasir; gecici dizinler dahil. On ek eslesmesi
+kullanicinin gercek projelerini de reddederdi. Reddedilen sey **dizinin
+kendisi**: `/usr` proje olamaz ama `/usr/local/src/deneme` olabilir. `~/Library`
+bunun **istisnasi** ve bilincli: oradaki her sey (Application Support,
+Keychains, tarayici profilleri) proje degil, dolayisiyla on ek eslesmesi dogru.
+
+**Ev dizini cozulemezse** ev dizini tabanli kurallar atlanir ve digerleri kosar
+— uydurulmus bir home yolu ile karsilastirma yapmak olmayan bir korumayi var
+gibi gostermek olurdu. `refuse_unsuitable_root(canonical, home)` home'u parametre
+aliyor: kural ortam degiskenine dokunmadan test edilebiliyor.
+
+### Uygulama Notlari
+
+**Sema tek alanli ve alanin adi `path`.** Proje **adi** bilerek yok: ad
+verilmezse host dizin adini kullanir. Modelin ad uydurabilmesi, kullanicinin
+onay kartinda gordugu yol ile listede sonra gorecegi ad arasinda fark acardi.
+Alan adinin `path` olmasi ayrica onay kartini dogru dolduruyor —
+`toApprovalArgumentsPreview` girdiyi `path=<yol>` olarak yaziyor (test bunu
+kilitliyor).
+
+**Risk 1, risk 2 degil.** Hicbir dosya degismiyor ve islem geri alinabilir
+(Projeler sekmesinden kayit kaldirilir). Ama onay **kosulsuz**
+(`requiresApproval: true`): diger risk 1 tool'u bir pencere aciyor, bu ise
+sandbox'in yuzeyini kalici olarak genisletiyor.
+
+---
+
+## ASU-070: `set_current_project` Tool (Risk 1, onayli)
+
+**Scope**: backend | **Boyut**: S | **Durum**: DONE (sesli madde ASU-071'de) | **Bagimlilik**: ASU-048, ASU-067
+
+### Acceptance Criteria
+- [x] Tool `project_set_current` komutunu sariyor
+- [x] Model **adi** verebiliyor: tool once `project_list`ten kimligi cozuyor
+- [x] Tam eslesme (buyuk/kucuk harf yok sayilir); kismi eslesme yok
+- [x] Birden cok aday → tipli hata + aday listesi, tool **secim yapmiyor**
+- [x] Bilinmeyen ad → tipli hata + kayitli projelerin listesi
+- [x] Basarida yeni guncel projenin adi donuyor
+- [x] Reddedilince secim degismiyor ve "gectim" denmiyor
+- [ ] Sesli test: "Freelancer projesine gec" onay isteyip geciyor
+
+### Uygulama Notlari
+
+**Ad → kimlik cozumu tool'un isi.** Kullanici "freelancer'a gec" der; modelin
+elinde `freelancer` **kimligi** yoktur. Tool once `project_list`i cagirir,
+`matchProjects` ile cozer, sonra `project_set_current`i kimlikle cagirir. Iki
+karar: (a) **tam eslesme** — `pro` yazip `proje-a`ya gecmek, modelin yanlis
+projede dosya okumasi demek olurdu; (b) **belirsizlikte secim yok** — iki proje
+ayni adi tasiyorsa adaylar listelenir ve model kullaniciya sorar.
+
+**Turkce yerel kucultme** (`toLocaleLowerCase('tr')`) iki tarafa da uygulaniyor:
+"Istanbul" ile modelin yazdigi kucuk harfli hali ancak ayni donusumle eslesir.
+
+**Neden onayli.** "Guncel proje" bir etiket degil; `read_project_file`,
+`list_project_files` ve `open_project`in **hedefi**. Secimi degistirmek sonraki
+her dosya cagrisinin baska bir kok'e gitmesi demek — ekranda gorunen proje ile
+Asuna'nin okudugu proje sessizce ayrilmamali.
+
+**Host reddi oldugu gibi tasiniyor.** Yolu olmayan bir etiket (`unlinked`) ya da
+kok'u kaybolmus bir proje guncel yapilamaz (`registry::set_current`); o ret
+`refused` koduyla gelir ve ozet "gectigini IDDIA ETME" der.
+
+---
+
+## ASU-071: Wave D Sesli Kabul Testi
+
+**Scope**: test | **Boyut**: S | **Durum**: PENDING | **Bagimlilik**: ASU-067..070
+
+### Acceptance Criteria
+- [ ] "Hangi projelerim var?" → `list_projects` calisiyor, gercek liste okunuyor
+- [ ] "Freelancer klasorunde ne var?" → `list_project_files` gercek icerikten cevapliyor
+- [ ] "Su klasoru projelerime ekle" → onay karti cikiyor, onaylaninca ekleniyor
+- [ ] Ayni istek **reddedilince** proje eklenmiyor ve Asuna eklendigini iddia etmiyor
+- [ ] "Freelancer projesine gec" → onay isteniyor, onaylaninca guncel proje degisiyor
+- [ ] Olmayan bir proje adinda Asuna proje **uydurmuyor**, kullaniciya soruyor
+- [ ] Hassas bir dizini listeleme istegi reddediliyor ve audit'e yaziliyor
+- [ ] Dort cagri da `tool_events`'e ve Araclar sekmesine dusuyor
+
+---
+
+## Wave D — Gate 3 güvenlik review düzeltmeleri
+
+> Review Wave D kodu yazıldıktan sonra koştu; aşağıdakiler **düzeltilmiş** hâlin
+> gerekçesi. İlk turda yazılan bazı yorumlar artık yanlış olduğu için kodda da
+> güncellendi — bu bölüm neyin neden değiştiğinin kaydı.
+
+### C1 (CRITICAL) — `refuse_unsuitable_root` iki kanonik yoldan atlatılabiliyordu
+
+ASU-069'un ilk hâli "ev dizininin kendisi" korumasını `canonical == home` **tam
+eşleşmesi** ile, sistem dizinlerini de tam eşleşme listesiyle yazmıştı. İki
+bypass:
+
+1. **Ata dizin.** `/Users` ev dizininin *kendisi* değil, ama ondan geniş: tek
+   kayıtla bütün kullanıcı ağacı okunabilir alana girerdi. Aynı aile:
+   `/System/Volumes/Data`, `/`.
+2. **macOS firmlink.** `/System/Volumes/Data/Users/<ad>/Library` aynı dizinin
+   ikinci kanonik yolu. `home.join("Library")` öneki tutmuyordu; `/System` tam
+   eşleşme olduğu için o alt ağaç da açıktı. Arkasında `~/.config/gh/hosts.yml`
+   token'ı, `~/Library/Application Support`, `.zsh_history` var — blocklist
+   bunları **ada göre yakalamıyor**.
+
+Üç düzeltme birlikte:
+
+- **Ata reddi**: `home.starts_with(candidate)` → reddet. `/Users`, `/`,
+  `/System/Volumes/Data` tek satırda kapanıyor ve bu "ev dizininin kendisi"
+  kuralının doğru genellemesi (tam eşleşme onun yalnızca bir üyesiydi).
+- **`REFUSED_SYSTEM_SUBTREES` (ön ek)**: `/System`, `/Library`, `/Applications`,
+  `/Network`. Bu ağaçların hiçbir alt dizini kullanıcının projesi değil.
+- **Firmlink normalizasyonu** (`strip_data_volume`): `/System/Volumes/Data`
+  öneki **bütün** karşılaştırmalardan önce soyuluyor. Tek kanonik biçim üstünde
+  karar vermek, her kuralı iki kez yazma (ve birini unutma) ihtiyacını
+  kaldırıyor.
+
+**Neden `/private` ve `/var` hâlâ tam eşleşme** (`REFUSED_SYSTEM_DIRECTORIES`):
+macOS'ta geçici dizinler `/private/var/folders/<hash>/T/` altında yaşıyor ve
+kullanıcının gerçek projeleri de `/Volumes/<disk>/...` ile `/usr/local/src/...`
+altında olabiliyor. `/private`ı ön ek yapmak testleri değil **gerçek kullanımı**
+kırardı. `/System` için aynı gerekçe geçersiz, o yüzden o ön ek.
+
+`/Users` ve `/home` de tam eşleşme listesine eklendi — ata reddi zaten kapatıyor
+ama `HOME` çözülemediğinde de kapalı kalsınlar.
+
+Kanıt: 5 birim testi (ata, firmlink, ön ek ağaçları, alt ağaçların açık
+kalması) + gerçek `$HOME` üstünde koşan bir birim testi + `acl_regression.rs`
+içinde gerçek makinede `/Users` ve firmlink'li `~/Library`yi IPC üzerinden
+deneyen `home_ancestors_and_firmlinks_cannot_be_registered_over_ipc`.
+
+### H1 (HIGH) — `matchProjects` kimlik eşleşmesinde belirsizliği yutuyordu
+
+Gerekçe "kimlikler benzersizdir" idi; doğru ama yetersiz. Kimlikler adların
+slug'ı olarak üretiliyor (`registry::add` → `slugify`), yani ad ve kimlik ayrı
+isim uzayı **değil**:
+
+```text
+{ id: 'freelancer',   name: 'freelancer' }
+{ id: 'freelancer-2', name: 'Freelancer' }
+```
+
+"freelancer'a geç" → kimlik eşleşmesi tek aday döndürüyordu; doğru cevap
+"hangisini kastettin?". Sessizce seçmek, sonraki her dosya çağrısının yanlış
+kökte çalışması demekti.
+
+Yeni kural: iki küme de hesaplanıyor; kimlik eşleşmesi dışında başka bir ad
+eşleşmesi varsa sonuç birleştiriliyor ve çağıran taraf bunu `ambiguous_project`
+olarak görüyor. Kimlik eşleşmesi listede **başta** duruyor (kullanıcı gerçekten
+kimlik verdiyse ilk sırada görünsün).
+
+### M1 (MEDIUM) — onay kartı yolu 64 karakterde kesiyordu
+
+`MAX_PREVIEW_VALUE_CHARS = 64` sıradan metin için makul, dosya yolu için değil:
+`/Users/ad/Work/monorepo/packages/worker` tam da **sonundan** kırpılıyordu ve
+kullanıcı ne onayladığını göremiyordu. C1 ile birleşince, denetlenmesi gereken
+tek ucu gizliyordu.
+
+Düzeltme `realtime-service.ts` içinde ve **yalnızca önizleme kırpması**: yol
+gibi görünen değerler (`/` veya `~/` ile başlayan) için ayrı bir tavan
+(`MAX_PREVIEW_PATH_CHARS = 160`) ve **ortadan** kırpma — baş 28 karakter + `…` +
+son. Satırın toplam tavanı (240) değişmedi. "Yol gibi görünen" tanımı bilerek
+dar: içinde eğik çizgi geçen her metni yol saymak, uzun serbest metne geniş
+tavanı açardı.
+
+### M2 (MEDIUM) — `read_dir` sınırsız tüketiliyordu
+
+200 girdi tavanı yalnızca **çıktıyı** koruyordu, **işi** değil:
+`node_modules/.pnpm` gibi bir dizinde on binlerce girdi okunuyor, symlink'ler
+için binlerce `canonicalize` çağrılıyordu. TS tarafı 10 sn'de timeout dönse bile
+Rust durmaz (`invoke` iptal edilmiyor) — sesli oturumun ortasında diski meşgul
+eden bir iş arkada devam ederdi.
+
+`MAX_SCANNED_ENTRIES = 5 000` eklendi; iterator orada bırakılıyor, yani kalan
+girdiler için `metadata`/`canonicalize` **hiç** çağrılmıyor.
+
+Yeni alan **`scanCapped`** (bool) sözleşmeye eklendi ve bu bilinçli: "200'de
+kırpıldı" ile "5 000'de saymayı bıraktık" farklı şeyler — ilkinde toplam
+biliniyor, ikincisinde bilinmiyor. Tek bayrakla anlatmak modele bilmediği bir
+sayıyı biliyormuş gibi verdirirdi. Model özeti `scanCapped` iken "EN AZ N girdi
+(tam sayı bilinmiyor)" diyor ve "yaklaşık su kadar" demeyi de açıkça yasaklıyor.
+
+> **Sözleşme kırılması:** `ProjectDirectoryView` artık `scanCapped` taşıyor.
+> Tool dışı tüketici (`src/components/composer.spec.tsx` sabiti, chat kabuğu
+> oturumunun dosyası) bir satır güncellenmeli — bkz. aşağıdaki "Açık" notu.
+
+### M3 (MEDIUM → orchestrator kararı) — `register_project` risk 2 oldu
+
+Risk seviyesi yalnızca bir etiket değil, iki mekanizmanın girdisi:
+
+- `ToolRegistry.register`, risk 2+ bir tanımı `requiresApproval` olmadan **kayıt
+  etmez**. Risk 1'de o koruma yoktu: biri `requiresApproval: true` satırını
+  silse tool sessizce onaysız çalışır hâle gelirdi.
+- Onay kartı ve `tool_events` risk seviyesini yazıyor; "risk 1 — geri
+  alınabilir düşük risk", okunabilir alanı **kalıcı** genişleten bir işlem için
+  doğru cümle değil.
+
+Bugün davranış farkı yok (ikisi de her modda onay ister); değişen şey korumanın
+ayara değil **tanıma** bağlanması. `set_current_project` risk 1 kaldı: hedefi
+değiştiriyor ama okunabilir alanı büyütmüyor.
+
+Registry artık: dört risk 0, iki risk 1, **bir risk 2**. Risk 3 hâlâ yok.
+`registry.spec.ts` risk 2 kümesinin tam olarak `['register_project']` olduğunu
+kilitliyor — ikincisi sessizce eklenemez.
+
+### Ucuz düzeltmeler
+
+- **L1** — bloklu girdide `size_bytes: None`. `.env`in kaç bayt olduğu küçük ama
+  gereksiz bir sızıntı (kaç anahtar var?) ve okunamayan bir dosyanın ölçüsü
+  modelin işine yaramıyor.
+- **L2** — `register-project.ts` içindeki "deftere yol yazılmaz" yorumu
+  yanlıştı: **sonuç özeti** yol taşımıyor, ama argümandaki yol
+  `tool_events.arguments_redacted` alanına host tarafında redakte edilerek
+  **yazılıyor** — denetim için gerekli, çünkü "hangi dizin kaydedilmek istendi?"
+  sorusunun cevabı odur. Yorum düzeltildi.
+
+### Açık — orchestrator aksiyonu
+
+`ProjectDirectoryView`e `scanCapped` eklenmesi, chat kabuğu oturumunun
+dosyasındaki bir test sabitini kırıyor:
+`src/components/composer.spec.tsx:36` → fixture'a `scanCapped: false` satırı
+eklenmeli. Dosya başka oturuma ait olduğu için **dokunulmadı**; `pnpm typecheck`
+o tek hatayla kırmızı.

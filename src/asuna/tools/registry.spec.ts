@@ -603,27 +603,46 @@ describe('varsayilan registry — `get_current_project`', () => {
    * PROJECT.md Bolum 17 "once salt okuma": risk 2+ bir tool bu listeye
    * orchestrator karari olmadan giremez.
    */
-  it('varsayilan set uc tool: iki salt okuma, bir onayli aksiyon', () => {
+  it('varsayilan set yedi tool: dort salt okuma, iki risk 1, bir risk 2', () => {
     const registry = createAsunaToolRegistry();
 
     expect(registry.list().map((tool) => tool.name)).toEqual([
       'get_current_project',
+      'list_projects',
       'read_project_file',
+      'list_project_files',
       'open_project',
+      'register_project',
+      'set_current_project',
     ]);
 
-    // ASU-051: dosya okuma salt okuma ve onaysiz.
-    expect(registry.resolve('read_project_file')?.risk).toBe(0);
-    expect(registry.resolve('read_project_file')?.requiresApproval).toBe(false);
+    // ASU-051/067/068: salt okuma yuzeyleri onaysiz.
+    for (const name of ['list_projects', 'read_project_file', 'list_project_files']) {
+      expect(registry.resolve(name)?.risk, name).toBe(0);
+      expect(registry.resolve(name)?.requiresApproval, name).toBe(false);
+    }
 
-    // ASU-052: editorde acma risk 1 ve tanimin kendisi onay istiyor —
-    // ileride risk 1'i otomatik geciren bir mod eklense bile sorulmaya
-    // devam eder (`resolveApproval` bir tanimi gevsetemez).
-    expect(registry.resolve('open_project')?.risk).toBe(1);
-    expect(registry.resolve('open_project')?.requiresApproval).toBe(true);
+    // ASU-052/070: risk 1 ve tanimlarin kendisi onay istiyor — ileride risk 1'i
+    // otomatik geciren bir mod eklense bile sorulmaya devam ederler
+    // (`resolveApproval` bir tanimi gevsetemez).
+    for (const name of ['open_project', 'set_current_project']) {
+      expect(registry.resolve(name)?.risk, name).toBe(1);
+      expect(registry.resolve(name)?.requiresApproval, name).toBe(true);
+    }
 
-    // Risk 2+ hicbir tool acik degil.
-    expect(registry.list().filter((tool) => tool.risk >= 2)).toEqual([]);
+    // ASU-069 (Gate 3 M3): tek risk 2 tool'u. Kayitli kok = okunabilir alan
+    // demek, dolayisiyla kayit **kalici** bir yetki genislemesi. Risk 2 olmasi
+    // `register` zorlamasini devreye sokuyor: onay talebi silinirse tool
+    // acilista reddedilir.
+    expect(registry.resolve('register_project')?.risk).toBe(2);
+    expect(registry.resolve('register_project')?.requiresApproval).toBe(true);
+
+    // Risk 3 (destructive/harici etki) hicbir tool acik degil ve risk 2 yalnizca
+    // bu bir tanede — yeni bir tanenin sessizce eklenmesi burada gorunur.
+    expect(registry.list().filter((tool) => tool.risk >= 2).map((tool) => tool.name)).toEqual([
+      'register_project',
+    ]);
+    expect(registry.list().filter((tool) => tool.risk === 3)).toEqual([]);
   });
 
   /** ASU-044 davranisi tasinmada bozulmadi: ayni ozet, ayni yapisal veri. */

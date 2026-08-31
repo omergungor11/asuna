@@ -49,6 +49,9 @@ fn test_config() -> config::AsunaConfig {
         ("OPENAI_API_KEY", "sk-proj-TEST-DEGERI-AGA-CIKILMAZ"),
         ("ASUNA_REALTIME_MODEL", "gpt-realtime-2.1"),
         ("ASUNA_SUMMARY_MODEL", "gpt-4o-mini"),
+        // Chat Shell: metin sohbetinin modeli. Testlerde ag'a cikilmaz; deger
+        // yalnizca config sozlesmesini doldurur.
+        ("ASUNA_CHAT_MODEL", "gpt-4o-mini"),
         ("ASUNA_REALTIME_VOICE", "marin"),
         ("ASUNA_WAKE_WORD", "Hey Asuna"),
         ("ASUNA_MEMORY_ENABLED", "true"),
@@ -124,6 +127,7 @@ fn build_test_app_with_privacy(db_state: DbState, privacy: PrivacyState) -> App<
             crate::projects::registry::project_set_current,
             crate::projects::view::project_context,
             crate::projects::files::read_project_file,
+            crate::projects::listing::list_project_dir,
             crate::projects::editor::open_project,
             crate::privacy::get_privacy_settings,
             crate::privacy::set_privacy_settings
@@ -2226,7 +2230,7 @@ fn the_tool_commands_are_denied_outside_the_permitted_window() {
         .build()
         .expect("ikinci pencere kurulmali");
 
-    for command in ["read_project_file", "open_project"] {
+    for command in ["read_project_file", "open_project", "list_project_dir"] {
         let error = invoke_with(
             &foreign,
             command,
@@ -2237,5 +2241,288 @@ fn the_tool_commands_are_denied_outside_the_permitted_window() {
             is_acl_denial(&error),
             "`{command}` kapsam disi pencereden calisti: {error}"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ASU-068 — dizin listeleme, gercek ACL uzerinde
+// ---------------------------------------------------------------------------
+
+/// **ASU-068 kabul kaniti**: "freelancer klasorunde ne var?" sorusunun veri
+/// yolu gercek ACL uzerinden calisiyor ve donen yol **gorece** kaliyor.
+#[test]
+fn a_project_directory_can_be_listed_over_the_real_acl() {
+    let temp = ToolTempDir::new("listdir");
+    std::fs::write(temp.path().join("README.md"), "# Asuna\n").expect("README");
+    std::fs::create_dir_all(temp.path().join("src")).expect("src");
+    std::fs::write(temp.path().join("src").join("main.ts"), "export {};").expect("main.ts");
+
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+    register_project_over_ipc(&webview, temp.path());
+
+    // Bos yol = proje koku.
+    let response = invoke_with(
+        &webview,
+        "list_project_dir",
+        serde_json::json!({ "path": "" }),
+    )
+    .expect("list_project_dir calismali");
+    let value: serde_json::Value = serde_json::from_str(&response).expect("JSON");
+    assert_eq!(value["path"], "");
+    assert_eq!(value["totalEntries"], 2);
+    assert_eq!(value["truncated"], false);
+    assert_eq!(value["entries"][0]["name"], "src");
+    assert_eq!(value["entries"][0]["kind"], "dir");
+    assert_eq!(value["entries"][1]["name"], "README.md");
+    assert_eq!(value["entries"][1]["kind"], "file");
+
+    let canonical = std::fs::canonicalize(temp.path())
+        .expect("canonicalize")
+        .to_string_lossy()
+        .into_owned();
+    assert!(
+        !response.contains(&canonical),
+        "mutlak yol renderer'a sizdi: {response}"
+    );
+
+    // Alt dizin.
+    let response = invoke_with(
+        &webview,
+        "list_project_dir",
+        serde_json::json!({ "path": "src" }),
+    )
+    .expect("alt dizin listelenmeli");
+    assert!(response.contains("main.ts"), "yanit: {response}");
+}
+
+/// Listeleme **icerik dondurmez** ve blok listesindeki dosya gorunur ama
+/// `blocked` isaretlidir.
+#[test]
+fn listing_never_returns_file_contents_over_ipc() {
+    let temp = ToolTempDir::new("listsecrets");
+    std::fs::write(
+        temp.path().join(".env"),
+        "OPENAI_API_KEY=sk-proj-BU-DEGER-SIZMAMALI\n",
+    )
+    .expect(".env");
+
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+    register_project_over_ipc(&webview, temp.path());
+
+    let response = invoke_with(
+        &webview,
+        "list_project_dir",
+        serde_json::json!({ "path": "" }),
+    )
+    .expect("listelenmeli");
+
+    assert!(response.contains(".env"), "yanit: {response}");
+    assert!(
+        response.contains("\"blocked\":true"),
+        ".env okunamaz isaretlenmedi: {response}"
+    );
+    assert!(
+        !response.contains("BU-DEGER-SIZMAMALI"),
+        "dosya icerigi listeye sizdi: {response}"
+    );
+}
+
+/// **ASU-055 ile ayni kural**, listeleme yuzeyi icin: kacis denemeleri gercek
+/// ACL uzerinden de reddediliyor.
+#[test]
+fn directory_listing_refuses_escapes_over_the_real_acl() {
+    let temp = ToolTempDir::new("listescape");
+    std::fs::write(temp.path().join("README.md"), "# Asuna").expect("README");
+
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+    register_project_over_ipc(&webview, temp.path());
+
+    for (path, code, escape) in [
+        ("../..", "traversal", true),
+        ("~/.ssh", "tilde", true),
+        ("/etc", "absolute", true),
+        ("README.md", "not_a_directory", false),
+        ("yok", "not_found", false),
+    ] {
+        let error = invoke_with(
+            &webview,
+            "list_project_dir",
+            serde_json::json!({ "path": path }),
+        )
+        .expect_err("reddedilmeli");
+
+        assert!(!is_acl_denial(&error), "beklenmedik ACL reddi: {error}");
+        assert!(error.contains(code), "yol `{path}` icin hata: {error}");
+        assert!(
+            error.contains(&format!("\"escapeAttempt\":{escape}")),
+            "yol `{path}` icin kacis etiketi yanlis: {error}"
+        );
+    }
+}
+
+/// Renderer **projeyi secemez**: fazladan alanlarin hicbir etkisi yok.
+#[test]
+fn the_renderer_cannot_choose_which_project_to_list() {
+    let temp = ToolTempDir::new("listcurrent");
+    std::fs::write(temp.path().join("GUNCEL.md"), "x").expect("dosya");
+
+    let other = ToolTempDir::new("listother");
+    std::fs::write(other.path().join("GIZLI-DIGER-PROJE.md"), "x").expect("dosya");
+
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+    let other_id = register_project_over_ipc(&webview, other.path());
+    register_project_over_ipc(&webview, temp.path());
+
+    for args in [
+        serde_json::json!({ "path": "", "projectId": other_id.clone() }),
+        serde_json::json!({ "path": "", "root": other.path().to_string_lossy() }),
+    ] {
+        let response =
+            invoke_with(&webview, "list_project_dir", args.clone()).expect("listelenmeli");
+        assert!(response.contains("GUNCEL.md"), "args {args}: {response}");
+        assert!(
+            !response.contains("GIZLI-DIGER-PROJE.md"),
+            "args {args}: renderer projeyi degistirebildi: {response}"
+        );
+    }
+}
+
+#[test]
+fn listing_a_directory_is_refused_when_memory_is_disabled() {
+    let app = build_test_app_with(DbState::Disabled);
+    let webview = main_webview(&app);
+
+    let error = invoke_with(
+        &webview,
+        "list_project_dir",
+        serde_json::json!({ "path": "" }),
+    )
+    .expect_err("hata donmeli");
+
+    assert!(!is_acl_denial(&error), "hata: {error}");
+    assert!(error.contains("disabled"), "hata: {error}");
+}
+
+// ---------------------------------------------------------------------------
+// ASU-069 — kok kaydi, gercek ACL uzerinde
+// ---------------------------------------------------------------------------
+
+/// **ASU-069 kabul kaniti**: `register_project` tool'u sandbox yuzeyini
+/// genisletiyor, dolayisiyla hassas ve sistem dizinleri **host tarafinda**
+/// reddedilmeli — renderer'in ne gonderdigi onemli degil.
+#[test]
+fn sensitive_directories_cannot_be_registered_over_ipc() {
+    let temp = ToolTempDir::new("badroot");
+    let home = temp.path().join("home");
+    for suffix in [".ssh", ".aws", "secrets", "Library"] {
+        std::fs::create_dir_all(home.join(suffix)).expect("dizin");
+    }
+
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+
+    // Blok listesindeki dizinler: `HOME`den bagimsiz reddedilir.
+    for suffix in [".ssh", ".aws", "secrets"] {
+        let error = invoke_with(
+            &webview,
+            "project_add",
+            serde_json::json!({ "path": home.join(suffix).to_string_lossy() }),
+        )
+        .expect_err("reddedilmeli");
+
+        assert!(!is_acl_denial(&error), "beklenmedik ACL reddi: {error}");
+        assert!(error.contains("path-refused"), "`{suffix}`: {error}");
+    }
+
+    // Sistem dizinleri de kaydedilemez.
+    for path in ["/", "/usr", "/etc"] {
+        let Ok(canonical) = std::fs::canonicalize(path) else {
+            continue;
+        };
+        let error = invoke_with(
+            &webview,
+            "project_add",
+            serde_json::json!({ "path": canonical.to_string_lossy() }),
+        )
+        .expect_err("reddedilmeli");
+        assert!(error.contains("path-refused"), "`{path}`: {error}");
+    }
+}
+
+/// **Gate 3 C1 kabul kaniti, gercek makinede.** Ev dizininin **ustu**
+/// (`/Users`) ve firmlink'li `~/Library` (`/System/Volumes/Data/...`) gercek
+/// ACL uzerinden de reddediliyor.
+///
+/// Ilk turda ikisi de **kabul ediliyordu**: tam eslesme `canonical == home`
+/// bir seviye yukariyi gormuyordu, `home.join("Library")` oneki de ikinci
+/// kanonik yolu tutmuyordu. Arkalarinda `~/.config/gh/hosts.yml` token'i,
+/// Application Support ve kabuk gecmisi var.
+#[test]
+fn home_ancestors_and_firmlinks_cannot_be_registered_over_ipc() {
+    let Some(home) = std::env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .and_then(|value| std::fs::canonicalize(value).ok())
+    else {
+        // `HOME` yoksa test bir sey kanitlamaz.
+        return;
+    };
+
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(parent) = home.parent() {
+        candidates.push(parent.to_path_buf());
+    }
+    let library = home.join("Library");
+    if let Ok(relative) = library.strip_prefix("/") {
+        candidates.push(std::path::Path::new("/System/Volumes/Data").join(relative));
+    }
+    if let Ok(relative) = home.strip_prefix("/") {
+        candidates.push(std::path::Path::new("/System/Volumes/Data").join(relative));
+    }
+
+    for path in candidates {
+        // Yol makinede yoksa (firmlink olmayan bir kurulum) test atlanir;
+        // varsa **reddedilmeli**.
+        if std::fs::canonicalize(&path).is_err() {
+            continue;
+        }
+        let error = invoke_with(
+            &webview,
+            "project_add",
+            serde_json::json!({ "path": path.to_string_lossy() }),
+        )
+        .unwrap_or_else(|error| error);
+
+        assert!(!is_acl_denial(&error), "beklenmedik ACL reddi: {error}");
+        assert!(
+            error.contains("path-refused"),
+            "`{}` kaydedilebildi: {error}",
+            path.display()
+        );
+    }
+}
+
+/// `~` genisletilmez ve gorece yol kabul edilmez — tool yuzeyinden de.
+#[test]
+fn a_registration_path_must_be_absolute_and_real_over_ipc() {
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+
+    for (path, expected) in [
+        ("~/Work/asuna", "path-refused"),
+        ("gorece/yol", "path-refused"),
+        ("", "path-refused"),
+        ("/var/kesinlikle-olmayan-dizin-asu069", "path-not-found"),
+    ] {
+        let error = invoke_with(&webview, "project_add", serde_json::json!({ "path": path }))
+            .expect_err("reddedilmeli");
+        assert!(!is_acl_denial(&error), "beklenmedik ACL reddi: {error}");
+        assert!(error.contains(expected), "yol `{path}`: {error}");
     }
 }

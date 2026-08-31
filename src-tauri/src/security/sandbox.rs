@@ -328,6 +328,29 @@ pub fn resolve_in_project(
     project_id: &str,
     relative: &str,
 ) -> Result<SandboxedPath, SandboxViolation> {
+    let root = resolve_project_root(db, project_id)?;
+    resolve_in_root(&root, relative)
+}
+
+/// Kayitli bir projenin **kok dizinini** cozer.
+///
+/// [`resolve_in_project`]'in ilk yarisi, ayri bir fonksiyon olarak. Sebep:
+/// kokun **kendisi** de mesru bir hedef olabilir — `list_project_dir` (ASU-068)
+/// proje kokunu listeler ve [`resolve_in_root`] o durumda
+/// [`SandboxViolation::Empty`] doner (bir **dosya** hedefi olarak dogru karar,
+/// bir **dizin** hedefi olarak degil).
+///
+/// Ayni durum ve blok listesi kurallari gecerli:
+///
+/// - Yalnizca [`ProjectStatus::Active`] bir kayit erisim verir.
+/// - Kok `canonicalize` edilir (kokun kendisi symlink olabilir) ve gercekten
+///   dizin olmasi sart kosulur.
+/// - **Kok da blok listesinden gecer**: `~/.ssh` ya da `~/secrets/x` gibi bir
+///   dizin proje olarak kaydedilmis olsa bile acilmaz. Bu, modul basindaki
+///   "blok listesi cozulmus tam yol uzerinde calisir" kuralinin kok'e dusen
+///   yarisi — [`resolve_in_root`] dosya yolunda ayni karari zaten veriyordu,
+///   burasi dizin yolunda ayni sonucu uretir.
+pub fn resolve_project_root(db: &AsunaDb, project_id: &str) -> Result<PathBuf, SandboxViolation> {
     let project = project_repository::find_by_id(db, project_id)
         .map_err(|_| SandboxViolation::NotRegistered)?
         .ok_or(SandboxViolation::NotRegistered)?;
@@ -344,7 +367,15 @@ pub fn resolve_in_project(
         .path
         .as_deref()
         .ok_or(SandboxViolation::RootMissing)?;
-    resolve_in_root(Path::new(root), relative)
+
+    let canonical = std::fs::canonicalize(root).map_err(|_| SandboxViolation::RootMissing)?;
+    if !canonical.is_dir() {
+        return Err(SandboxViolation::RootMissing);
+    }
+    if let Some(reason) = blocklist::is_blocked_resolved(&canonical) {
+        return Err(SandboxViolation::Blocklisted(reason));
+    }
+    Ok(canonical)
 }
 
 /// [`resolve_in_project`]'in kok'u dogrudan alan hali.

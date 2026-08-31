@@ -72,6 +72,11 @@ fn main() {
             // kok'e gore gorece bir yol verebilir; projeyi secemez, mutlak yol
             // veremez. Cozum, blok listesi ve kirpma Rust tarafinda.
             "read_project_file",
+            // ASU-068: guncel proje koku icinde DIZIN LISTELEME
+            // (capabilities/asuna-project-dir-list.json). Icerik donmez,
+            // yalnizca adlar/turler/boyutlar. Ozyineleme yok, 200 girdi tavani;
+            // renderer projeyi secemez, mutlak yol veremez.
+            "list_project_dir",
             // ASU-052: guncel projeyi konfigure edilmis editorde acar
             // (capabilities/asuna-project-open.json). Renderer ne yolu ne
             // editor komutunu secebilir; alt process arguman vektoruyle

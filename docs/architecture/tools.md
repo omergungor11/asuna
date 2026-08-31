@@ -93,6 +93,11 @@ fonksiyondur; `true` dönünce SDK `execute`'u **hiç** çağırmaz, önce `tool
 risk, redakte argüman özeti, `timeoutMs`, `requestedAtMs`) + `approveTool(requestId)` /
 `rejectTool(requestId)`. Karar **kimlikle** verilir; "sonuncuyu onayla" yolu yok.
 
+**Yol argümanları kartta ortadan kırpılır** (Gate 3 M1). Genel değer tavanı 64 karakter;
+bir dosya yolu için bu, kartın tam da ayırt edici **sonunu** (`.../packages/worker`) kesiyordu
+ve kullanıcı ne onayladığını göremiyordu. `/` veya `~/` ile başlayan değerler 160 karaktere
+kadar ve **ortadan** kırpılır (`baş … son`); satırın toplam tavanı (240) değişmedi.
+
 **Kart davranışı** (ASU-053): açılışta odak **"Reddet"** butonundadır ve tek klavye kısayolu
 `Esc` = reddet — **onaylayan kısayol yoktur**. Gerekçe: kart tam kullanıcı Enter'a basarken
 açılırsa risk 1+ bir aksiyon refleksle onaylanabilir; kazayla basılan tuşun sonucu her zaman
@@ -109,14 +114,33 @@ oturumun ortasında kapatılan tool'un çağrısı `errorKind: 'disabled'` ile r
 | Tool | Risk | Not | Task | Durum |
 |---|---|---|---|---|
 | `get_current_project` | 0 | id, ad, path, git branch, proje özeti | ASU-044 | Açık |
+| `list_projects` | 0 | kayıtlı projeler + hangisi güncel; `project_list`i sarar, yeni Rust yüzeyi yok | ASU-067 | Açık |
 | `read_project_file` | 0 | kayıtlı root içinde; blocklist; 256 KiB tavanı; binary reddi; 6000 karakter kırpma | ASU-051 | Açık |
+| `list_project_files` | 0 | tek seviye dizin listesi (ad/tür/boyut, **içerik yok**); özyineleme yok; 200 girdi tavanı; bloklu girdiler `blocked: true` | ASU-068 | Açık |
 | `open_project` | 1 | `ASUNA_EDITOR_COMMAND` ile editörü açar; onay ister | ASU-052 | Açık |
+| `register_project` | **2** | yeni kök kaydeder — okunabilir alanı **kalıcı** genişletir; her modda onay (Gate 3 M3) | ASU-069 | Açık |
+| `set_current_project` | 1 | güncel proje seçimi; adı kimliğe çözer, belirsizlikte seçmez; onay ister | ASU-070 | Açık |
 | `get_git_status` | 0 | veri katmanı Phase 4'te hazır, tool açılmadı | — | Backlog |
 | `list_recent_project_activity` | 0 | aynı | — | Backlog |
 | `create_project_note` | 1 | yalnızca `.asuna/notes/` altına yazacak | — | Backlog |
 
-MVP'de modele **üç** tool açıktır. Kalanlar `asuna-tasks/backlog.md`'de; her yeni tool
-Bölüm 5'teki desene ve Bölüm 7'deki audit sözleşmesine uymak zorundadır.
+MVP'de modele **yedi** tool açıktır: dört risk 0 (salt okuma), iki risk 1 ve **bir risk 2**
+(`register_project`). Risk 3 (destructive / harici etki) hâlâ **yok**. Kalanlar
+`asuna-tasks/backlog.md`'de; her yeni tool Bölüm 5'teki desene ve Bölüm 7'deki audit
+sözleşmesine uymak zorundadır.
+
+**Risk seviyesi bir etiket değil, mekanizma girdisidir** (Gate 3 M3). `register_project`
+risk 1'den 2'ye çıkarıldı çünkü `ToolRegistry.register` yalnızca risk 2+ tanımlarda
+`requiresApproval` yokluğunu **hata** sayar; risk 1'de o koruma yok ve onay talebi tanımdan
+silinse tool sessizce onaysız çalışırdı. Davranış bugün aynı (ikisi de her modda sorar),
+değişen şey korumanın ayara değil tanıma bağlanması. `registry.spec.ts` risk 2 kümesinin tam
+olarak `['register_project']` olduğunu kilitler.
+
+**Wave D (ASU-067..070) neyi kapattı.** Canlı testte iki gerçek boşluk çıktı: (a) kullanıcı
+UI'dan proje ekliyordu ama Asuna registry'yi göremiyordu — `get_current_project` yalnızca
+**tek** projeyi görür; (b) dosya adını bilmeden dosya okunamıyordu, yani "şu klasörde ne var?"
+cevapsızdı. Dört tool bu iki boşluğu kapatıyor. Detay + kabul kriterleri:
+`asuna-tasks/phases/phase-5.md` → "Wave D".
 
 ## 5. Yürütme deseni — "ince backchannel"
 
@@ -146,6 +170,9 @@ Bu sınırın pazarlıksız sonuçları:
   "yapıldı/yapılmadı + özet" döner.
 - Her yeni komut için: `src-tauri/build.rs` `AppManifest::commands([...])` listesine ekle +
   `src-tauri/permissions/` altında dar izin + capability satırı (bkz. `security.md`).
+  ASU-068 buna somut bir örnek: `list_project_dir` **kendi** capability'sinde
+  (`asuna-project-dir-list`), dosya okumanınkinde değil — içerik döndüren yüzey ile yalnızca
+  ad döndüren yüzey aynı anahtarla açılıp kapanmamalı.
 
 ## 6. Shell politikası
 

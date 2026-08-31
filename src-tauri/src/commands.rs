@@ -25,7 +25,7 @@ pub fn get_frontend_config(config: State<'_, AsunaConfig>) -> FrontendConfig {
 /// etkinlestirme) ve `lib.rs` (`generate_handler!`) ile karsilastirir. Yeni bir
 /// `#[tauri::command]` eklerken dort yerin hepsi guncellenmeli.
 #[cfg(test)]
-pub const EXPOSED_COMMANDS: [&str; 26] = [
+pub const EXPOSED_COMMANDS: [&str; 27] = [
     "get_frontend_config",
     "mint_realtime_token",
     "db_status",
@@ -49,6 +49,7 @@ pub const EXPOSED_COMMANDS: [&str; 26] = [
     "project_remove",
     "project_set_current",
     "read_project_file",
+    "list_project_dir",
     "open_project",
     "get_privacy_settings",
     "set_privacy_settings",
@@ -156,6 +157,17 @@ pub const PROJECT_WRITE_COMMANDS: [&str; 3] =
 /// kurulum mumkun olmazdi.
 #[cfg(test)]
 pub const PROJECT_FILE_READ_COMMANDS: [&str; 1] = ["read_project_file"];
+
+/// Kayitli kok icinde **dizin listeleyen** komutlar (ASU-068).
+///
+/// `PROJECT_FILE_READ_COMMANDS`ten ayri bir liste ve ayri bir capability. Iki
+/// yuzey ayni kok'e bakiyor ama farkli seyler donduruyor: dosya okuma
+/// **icerik** verir, listeleme yalnizca **ad/tur/boyut**. Ayni izin dosyasina
+/// konsaydi "dizinleri gorebil ama dosya icerigi okuyamasin" (ya da tersi) diye
+/// bir kurulum mumkun olmazdi — ki bu ikisi arasindaki fark tam olarak
+/// kullanicinin sormak isteyecegi soru.
+#[cfg(test)]
+pub const PROJECT_DIR_LIST_COMMANDS: [&str; 1] = ["list_project_dir"];
 
 /// **Alt process baslatan** komutlar (ASU-052).
 ///
@@ -699,12 +711,71 @@ mod tests {
             "asuna-projects-read.json",
             "asuna-projects-write.json",
             "asuna-project-open.json",
+            "asuna-project-dir-list.json",
         ] {
             let permissions = permissions_of(file);
             for command in PROJECT_FILE_READ_COMMANDS {
                 assert!(
                     !permissions.contains(&permission_name(command)),
                     "`{command}` `{file}` icinde de aciliyor"
+                );
+            }
+        }
+    }
+
+    /// **ASU-068 kabul kaniti**: dizin listeleme kendi capability'sinde durur.
+    ///
+    /// Ayrimin somut karsiligi: `asuna-project-dir-list`i `tauri.conf.json`
+    /// listesinden cikarmak Asuna'nin dizin gormesini kapatir ama bilinen bir
+    /// dosyayi okumayi acik birakir — ve tersi. Icerik donduren yuzey ile
+    /// yalnizca ad donduren yuzey ayni anahtarla acilip kapanmamali.
+    #[test]
+    fn project_directory_listing_has_its_own_capability() {
+        assert_eq!(
+            permissions_of("asuna-project-dir-list.json"),
+            vec![permission_name("list_project_dir")]
+        );
+
+        for file in [
+            "asuna-projects-read.json",
+            "asuna-projects-write.json",
+            "asuna-project-file-read.json",
+            "asuna-project-open.json",
+        ] {
+            let permissions = permissions_of(file);
+            for command in PROJECT_DIR_LIST_COMMANDS {
+                assert!(
+                    !permissions.contains(&permission_name(command)),
+                    "`{command}` `{file}` icinde de aciliyor"
+                );
+            }
+        }
+    }
+
+    /// Dizin listeleme yuzeyi **salt okunur** ve boyle kalir.
+    ///
+    /// ASU-050'nin audit testiyle ayni desen: bir politika degil bir **yuzey
+    /// eksikligi**. Dizin olusturan, tasiyan ya da silen bir komut eklenirse bu
+    /// test duser ve karar bilincli olarak verilmek zorunda kalir.
+    #[test]
+    fn the_directory_surface_is_read_only() {
+        for forbidden in [
+            "create_project_dir",
+            "delete_project_dir",
+            "remove_project_dir",
+            "rename_project_path",
+            "write_project_file",
+            "delete_project_file",
+        ] {
+            assert!(
+                !EXPOSED_COMMANDS.contains(&forbidden),
+                "`{forbidden}` acilmis — dosya sistemi yuzeyi artik salt okunur degil"
+            );
+            let permission = format!("allow-{}", forbidden.replace('_', "-"));
+            for (file_name, content) in all_capability_files() {
+                assert!(
+                    !content.contains(&permission),
+                    "`{file_name}` `{permission}` izni tasiyor"
                 );
             }
         }

@@ -647,8 +647,55 @@ interface PendingApproval {
 /** Audit ozetlerinde ve onay kartinda kullanilan deger kirpma siniri. */
 const MAX_PREVIEW_VALUE_CHARS = 64;
 
+/**
+ * **Yol** degerleri icin ayri, daha genis tavan (Gate 3 M1).
+ *
+ * 64 karakter siradan bir metin icin makul ama bir dosya yolu icin degil:
+ * `/Users/ad/Work-Restored/monorepo/packages/worker` gibi bir yol tam da
+ * **sonundan** kirpiliyordu ve onay kartinda kullaniciya "neyi onayliyorum?"
+ * sorusunun cevabi kalmiyordu. `register_project` gibi bir tool'da bu, kalici
+ * bir yetki genislemesinin denetlenmesi gereken tek ucunu gizlemek demek.
+ *
+ * Butun satirin tavani ([`MAX_PREVIEW_CHARS`]) degismedi, yani kart yine
+ * sinirli — degisen yalnizca tek bir yol degerine ayrilan pay.
+ */
+const MAX_PREVIEW_PATH_CHARS = 160;
+
+/**
+ * Yol kirpilirken korunan **bas** parca.
+ *
+ * Geri kalan tavan sona ayriliyor: bir yolun ayirt edici kismi son
+ * bilesenleridir (`.../packages/worker`), koku degil.
+ */
+const PREVIEW_PATH_HEAD_CHARS = 28;
+
 /** Onay kartina giden ozetin tavani. */
 const MAX_PREVIEW_CHARS = 240;
+
+/**
+ * Deger bir dosya yolu mu?
+ *
+ * Kasitli olarak dar: yalnizca mutlak yollar ve `~` ile baslayanlar. Icinde
+ * egik cizgi gecen her metni "yol" saymak, uzun bir serbest metne genis tavani
+ * acardi.
+ */
+function looksLikePath(value: string): boolean {
+  return value.startsWith('/') || value.startsWith('~/');
+}
+
+/**
+ * Yolu **ortadan** kirpar: bas ve son birlikte korunur.
+ *
+ * `/Users/ad/…/packages/worker` — kullanici hem nerede oldugunu hem neyi
+ * onayladigini gorur. Sondan kirpmak ikincisini kaybederdi.
+ */
+function clipPath(value: string): string {
+  if (value.length <= MAX_PREVIEW_PATH_CHARS) {
+    return value;
+  }
+  const tailChars = MAX_PREVIEW_PATH_CHARS - PREVIEW_PATH_HEAD_CHARS - 1;
+  return `${value.slice(0, PREVIEW_PATH_HEAD_CHARS)}…${value.slice(value.length - tailChars)}`;
+}
 
 /** Ic ice yapilar **sekil** olarak yazilir; icerik hicbir zaman serilestirilmez. */
 function describeValue(value: unknown): string {
@@ -659,6 +706,9 @@ function describeValue(value: unknown): string {
     return `{${Object.keys(value).length.toString()} alan}`;
   }
   if (typeof value === 'string') {
+    if (looksLikePath(value)) {
+      return clipPath(value);
+    }
     return value.length > MAX_PREVIEW_VALUE_CHARS
       ? `${value.slice(0, MAX_PREVIEW_VALUE_CHARS - 1)}…`
       : value;

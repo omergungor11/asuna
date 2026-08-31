@@ -88,6 +88,16 @@
       (PROJECT.md Bolum 39/13); farkli bir realtime saglayicisi denemek ucuz olmali.
 - [ ] **Windows / Linux destegi** — MVP macOS-only. Wake word ve entitlement katmani platforma bagli.
 
+- [ ] **`create_project_scaffold` tool'u (risk 2)** — sesle diskte yeni proje olusturma (dizin +
+      iskelet dosyalar). Mutation: her cagrida onay + olusturma konumunun sinirlanmasi + Gate 3
+      review sart. Kullanici istegi (2026-08-31, canli test).
+- [ ] **Dis mesaj/entegrasyon tool'u (risk 3, tasarim gerekli)** — "Warp'a / baska bir uygulamaya
+      mesaj gonder" turu harici etki. Hedef, format ve onay modeli tasarlanmadan yazilmaz; kisitsiz
+      "her uygulamaya yaz" yok (bkz. Rejected: sinirsiz shell). Kullanici istegi (2026-08-31).
+- [ ] **Ekran/uygulama duzeyi farkindalik ("Jarvis" katmani)** — kullanicinin o an ne yaptigini
+      (aktif uygulama, pencere, belki ekran icerigi) bilme. Buyuk gizlilik/tasarim karari; proje
+      farkindaligi (Wave D toollari) bunun guvenli ilk dilimi. (2026-08-31)
+
 ## Rejected (nedeniyle)
 
 <!-- - [Fikir] — [neden reddedildi, tarih] -->
