@@ -196,6 +196,108 @@ Katman mimarileri: `docs/architecture/{voice,memory,tools,security}.md`.
 
 ---
 
+## ADR-008: Chat Shell pivotu — Asuna ChatGPT/Claude-tarzi kalici konusma arayuzu olur — 2026-08-31
+
+**Durum**: accepted (karar veren: **kullanici**, 2026-08-31)
+
+> Numara notu: `asuna-plans/plan-chat-shell.md` bu karari "ADR-006 olacak" diye anar; ADR-006 ve
+> ADR-007 2026-08-24'te alinmis oldugu icin numara **ADR-008**'dir. Plan icindeki referans eskidir.
+
+**Karar**: Asuna'nin birincil arayuzu **kalici, gorunur, metin tabanli konusma** olur —
+ChatGPT/Claude deseninde: sol tarafta tarih gruplu konusma listesi, ortada mesaj akisi, altta
+composer (dosya ekleme dahil), projeler uzerinden konusma baslatma. Ses katmani **silinmez**;
+ChatGPT'deki gibi bir **voice mode**'a doner (mikrofon butonu → mevcut Realtime akisi).
+Bu kararla CLAUDE.md'nin **"Asuna generic chatbot UI degildir"** prime directive'i degistirilir.
+
+Kararin alt basliklari (hepsi bu ADR kapsaminda):
+
+| # | Karar | Kisa gerekce |
+|---|-------|--------------|
+| 1 | Konusma = mevcut `sessions` satiri (`title`, `modality` kolonlari eklendi), **yeni tablo yok** | Mevcut veri, ozet/hafiza boru hatti ve `session_*` komutlari korunur |
+| 2 | `messages` + `attachments` yeni tablolar, `session_id` FK **ON DELETE CASCADE** | "Konusmayi sil" tek islemde gercekten siler; yetim satir kalmaz |
+| 3 | Metin chat cagrisi **Rust'ta** (`chat_send`), non-streaming; model `ASUNA_CHAT_MODEL` (zorunlu env) | ADR-006 (key renderer'a girmez) + ADR-003 (model ID hard-code edilmez) aynen gecerli |
+| 4 | `message_append` ACL'e **kaydedilmedi** — renderer mesaj yazamaz | Renderer asistan mesaji uyduramasin; yazma yolu tek: `chat_send` |
+| 5 | Kullanici metni ve asistan yaniti **redakte edilmez**; **dosya girisi** redakte edilir | Konusmanin kendisi kullanicinin yazdigi seydir; dosya icerigi kazara girer |
+| 6 | `chat_send` `modality='voice'` oturumu **reddeder** | Modalite terfisi (ses oturumunu metne cevirme) bilincli olarak kapsam disi |
+
+**Gerekce**:
+
+- **Prime directive neden degisti.** Eski kural bir *sira* kuraliydi: "voice loop kanitlanmadan
+  buyuk bir sohbet UI'si insa etme" (TRANSCRIPT.md Bolum 19 — "another giant todo application"
+  reddi, R7 kapsam kaymasi riski). O sira **tamamlandi**: M1 canli testte gecti, Phase 3 hafiza
+  ve Phase 4-5 proje/tool katmani calisiyor. Kalan bosluk kullanicinin gunluk kullaniminda
+  gorundu — sesle soylenen sey **hicbir yerde durmuyordu**: gecmise donulemiyor, uzun bir metin
+  yapistirilamiyor, dosya verilemiyor, sessiz calisilan bir ortamda Asuna hic kullanilamiyordu.
+  Yani karar "chatbot'a donusmek" degil, **erisim yuzeyini** genisletmek: ayni cekirdek (hafiza,
+  proje baglami, tool'lar, onay/audit) iki giristen de kullanilir. Ses hala urunun ayirt edici
+  ozelligi; artik tek giris degil.
+- **(1) Neden yeni "conversations" tablosu degil.** `sessions` zaten konusmanin kimligi: ozet,
+  `end_reason`, `project_id`, hafiza cikariminin `source_session_id`'si hep ona bagli. Ikinci bir
+  tablo acmak bu baglarin **iki kere** yazilmasi ve hangisinin "gercek" oldugunun belirsizlesmesi
+  demekti. Genisletme geriye donuk uyumlu tutuldu: `modality` varsayilani `'voice'`, `session_list`
+  yanitinin bicimi degismedi (TS tarafi strict parse ediyor), chat listesi **ayri** bir komutla
+  (`conversation_list`) doner.
+- **(3) Neden Rust proxy.** Renderer'dan dogrudan OpenAI cagirmak `OPENAI_API_KEY`'i webview'a
+  sokardi — ADR-006'nin acikca yasakladigi sey. Ephemeral token yolu burada islemiyor (o yol
+  Realtime'a ozgu). Ayrica mesajlarin **DB'ye yazilmasi** ile **model cagrisi** ayni islemde
+  olmali: `chat_send` kullanici mesajini ve asistan yanitini **tek transaction**'da yaziyor, yani
+  yarim konusma (kullanici mesaji var, yanit yok) diske dusmuyor. Non-streaming v1 tercihi bunun
+  bedeli — akan yanit gostermek icin islem sinirinin bolunmesi gerekir (backlog).
+- **(4) `message_append` neden ACL disi.** Komut Rust tarafinda var (chat akisi kullaniyor) ama
+  `build.rs` manifestine ve capability dosyasina **kaydedilmedi**, yani renderer'dan cagrilamaz.
+  Aksi halde UI, model hic cagrilmadan `role: 'assistant'` bir satir yazabilirdi — konusma
+  gecmisinin butunlugu ADR-005'in "guven siniri Rust'ta" ilkesinin bir parcasi. Ayni desen
+  ASU-050'deki `record_tool_event` sinirinin (append-only, ozet Rust'ta) devami.
+- **(5) Redaksiyon takasi** (Gate 3 review L1'de acikca soruldu): `redact_sensitive_text`
+  saklanan **turetilmis** metinde (ozet, hafiza adayi, dosya icerigi) calisir. Konusmanin kendisi
+  turetilmis degil — kullanicinin bilerek yazdigi metindir ve maskelemek onu **bozar** ("API
+  key'im calismiyor, sk-... ile deniyorum" satirini maskelemek kullaniciyi cevapsiz birakir;
+  daha kotusu, kendi yazdigini geri okuyamaz). Dosya girisi tersine: kullanici bir dosyayi
+  **icerigini okumadan** ekler, `.env` benzeri bir sey kazara girebilir — orada redaksiyon +
+  ad blocklist + 24k kirpma uygulanir. Sinir "kullanici ne yazdigini biliyor mu?" sorusuna gore
+  cizildi. Not: bu, konusma metninin diskte duz durdugu anlamina gelir — SQLCipher backlog'da.
+- **(6) Modalite terfisi neden reddedildi.** "Sesli konusmaya metinle devam etmek" cazip ama
+  yarim tanimli: ses oturumunun transcript'i opsiyonel (`ASUNA_TRANSCRIPT_PERSIST`), yani
+  terfi edilen konusmanin gecmisi **bazen bos** olurdu ve model kullanicinin az once konustugu
+  seyi gormeden cevap verirdi. Sessiz basarisizlik yerine durust ret secildi.
+
+**Alternatifler**:
+
+- *Prime directive'i korumak, chat'i kucuk bir "gecmis" panelinde birakmak*: mevcut backlog
+  maddesi buydu ("Konusma gecmisi UI'si", salt-okunur). Kullanicinin problemi salt-okunur bir
+  arsiv degil — metinle **calisabilmek** (uzun icerik yapistirmak, dosya vermek). Yarim cozum
+  ikinci bir arayuz borcu birakirdi.
+- *Sesi kaldirip saf metin urune donmek*: urunun ayirt edici ozelligini ve Phase 1-2 yatirimini
+  atardi; TRANSCRIPT.md'deki cikis problemi ("AI'a gitmek" yerine hazir bekleyen AI) sesle
+  cozuluyor. Reddedildi — VoicePanel **hicbir kosulda unmount edilmez** kurali bunun teknik
+  garantisi.
+- *Chat'i Realtime oturumunun metin kanali uzerinden surmek* (tek yol, tek SDK): baglanti acik
+  degilken mesaj gonderilemezdi, her mesaj bir realtime oturumu maliyeti demekti (R1) ve metin
+  icin gereksiz WebRTC bagimliligi getirirdi. Ayri, ucuz, durum tutmayan bir chat completions
+  cagrisi hem daha basit hem daha ucuz.
+- *Renderer'dan dogrudan OpenAI + proxy yok*: ADR-006 ihlali, tartisilmadi.
+- *Attachment dosyalarini diskte tutup DB'de yol saklamak*: dosya sonradan degisir/silinirse
+  konusma gecmisi **kendini degistirir**; ayrica her okumada sandbox'tan tekrar gecmek gerekirdi.
+  Redakte edilmis metnin kendisi DB'ye yazilir (boyut siniri: 24k karakter).
+
+**Etki**:
+
+- CLAUDE.md prime directive yeniden yazildi: sohbet UI yasagi kalkti, yerine **"voice loop
+  korunur — `VoicePanel` asla unmount edilmez"** kurali geldi.
+- Yeni zorunlu env anahtari: **`ASUNA_CHAT_MODEL`** (`.env.example`'da ornek `gpt-4o-mini`).
+  Eksikse uygulama acilista `ConfigError::Missing` ile durur — `ASUNA_SUMMARY_MODEL` /
+  `ASUNA_EDITOR_COMMAND` ile ayni bilincli desen (sessiz varsayilan model = kullanicinin
+  faturasina bilmedigi cagri).
+- Sema surumu 6 (`006_conversations`). `session_delete` / `session_clear_all` davranisi kagit
+  uzerinde ayni, ama artik mesaj ve ekleri de goturuyor.
+- Yeni capability: `asuna-chat.json`. `session_set_title` mevcut `asuna-session.json`'da kalir
+  (oturum yuzeyi), chat komutlari ayri dosyada — yuzeyler karismaz.
+- Geri donus maliyeti: **orta**. Migration 006'nin `down`'i var ve chat katmani (Rust `chat.rs`,
+  `src/shared/chat.ts`, chat UI bilesenleri) ayri dosyalarda duruyor; ses yolu bu degisiklikten
+  bagimsiz calismaya devam ediyor. Geri donulurse kaybedilen sey kullanici konusmalaridir.
+
+---
+
 ## ADR-007: Claude Code gelistirme modeli = Fable orchestrator + opus subagent'lar — 2026-08-24
 
 **Durum**: accepted

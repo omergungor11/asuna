@@ -72,6 +72,7 @@
         "asuna-projects-write",
         "asuna-project-file-read",
         "asuna-project-dir-list",
+        "asuna-chat",
         "asuna-project-open",
         "asuna-privacy",
         "asuna-dialog"

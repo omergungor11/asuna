@@ -38,7 +38,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use super::clock;
-use super::model::{SessionEndReason, SessionRecord};
+use super::model::{SessionEndReason, SessionModality, SessionRecord};
 use super::project_repository;
 use super::store_error::{database, StoreError, StoreSkipReason};
 use super::transcript::{self, TranscriptFileOutcome, TranscriptLine};
@@ -77,6 +77,10 @@ pub const SUMMARY_PREVIEW_CHARS: usize = 280;
 /// mesajini hem dosyayi sisirir. Ust sinir asilirsa **son** replikler tutulur
 /// (yeni olan daha degerli).
 pub const MAX_TRANSCRIPT_LINES: usize = 2_000;
+
+/// Konusma basliginin azami karakteri — semadaki CHECK ile ayni (migration
+/// 006). Asan baslik **kirpilmaz, reddedilir**: bkz. [`set_title`].
+pub const MAX_SESSION_TITLE_CHARS: usize = 200;
 
 // ---------------------------------------------------------------------------
 // Girdi / cikti tipleri
@@ -249,6 +253,25 @@ pub enum SessionPurgeResult {
     },
 }
 
+/// Baslik yazmanin sonucu (Chat Shell).
+///
+/// `SessionWriteResult` **kullanilmiyor**: o tip tam bir [`SessionRecord`]
+/// tasiyor ve `src/shared/session.ts` onu beklenmeyen alan varsa hata vererek
+/// ayristiriyor. Baslik yazmak icin tum kaydi geri gondermek hem gereksiz hem
+/// de o sozlesmeyi bu yola bagimli kilardi.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "kebab-case")]
+pub enum SessionTitleResult {
+    #[serde(rename_all = "camelCase")]
+    Recorded {
+        id: i64,
+        title: String,
+    },
+    Skipped {
+        reason: StoreSkipReason,
+    },
+}
+
 /// Kapanis sirasinda dogrulanmis/olculmus degerler.
 struct FinalizeValues {
     ended_at: String,
@@ -279,11 +302,31 @@ impl SessionUsage {
 // Repository
 // ---------------------------------------------------------------------------
 
-/// Yeni oturum kaydi acar (`started_at` + `model`).
+/// Yeni **ses** oturumu acar (`started_at` + `model`).
+///
+/// Modalite [`SessionModality::Voice`]: bu, 006 oncesindeki tek yoldu ve
+/// mevcut cagiranlarin (ses akisi, testler) davranisi degismedi. Metin
+/// konusmasi acan yol [`start_with_modality`]'dir.
 pub fn start(
     db: &AsunaDb,
     model: &str,
     project_id: Option<&str>,
+    now: &str,
+) -> Result<SessionRecord, StoreError> {
+    start_with_modality(db, model, project_id, SessionModality::Voice, now)
+}
+
+/// Yeni oturum kaydi acar; modaliteyi cagiran secer (Chat Shell).
+///
+/// Ayri bir fonksiyon olmasinin sebebi bir uslup tercihi degil: [`start`]'in
+/// imzasini degistirmek ses yolundaki ve `extraction` testlerindeki tum
+/// cagiranlari dokunmaya zorlardi. Varsayilan davranis tek bir yerde yazili
+/// kalsin diye [`start`] buraya deleger.
+pub fn start_with_modality(
+    db: &AsunaDb,
+    model: &str,
+    project_id: Option<&str>,
+    modality: SessionModality,
     now: &str,
 ) -> Result<SessionRecord, StoreError> {
     let model = model.trim();
@@ -302,10 +345,12 @@ pub fn start(
             // 003'ten beri `project_id` bir yabanci anahtar; etiketin karsiligi
             // yoksa `unlinked` bir satir acilir (`memory_create` ile ayni kural).
             project_repository::ensure_optional_label(&transaction, project_id.as_deref(), &now)?;
+            // `modality` acikca yaziliyor: semadaki DEFAULT bir guvenlik agi,
+            // yazma yolunun kaynagi degil.
             transaction.execute(
-                "INSERT INTO sessions (started_at, project_id, model, created_at)
-                 VALUES (?1, ?2, ?3, ?1)",
-                params![now, project_id, model],
+                "INSERT INTO sessions (started_at, project_id, model, created_at, modality)
+                 VALUES (?1, ?2, ?3, ?1, ?4)",
+                params![now, project_id, model, modality],
             )?;
             let id = transaction.last_insert_rowid();
             let record = load(&transaction, id)?;
@@ -697,6 +742,91 @@ pub fn delete_all(db: &AsunaDb) -> Result<u32, StoreError> {
     Ok(u32::try_from(deleted).unwrap_or(u32::MAX))
 }
 
+/// Konusma basligini yazar (Chat Shell).
+///
+/// # Neden kirpma degil reddetme
+///
+/// Baslik kullanicinin (ya da otomatik baslik kuralinin) verdigi bir etikettir.
+/// Tavani asan bir basligi sessizce kirpmak, listede gordugu metnin kaydin
+/// tamami oldugunu sanmasina yol acardi; kirpma karari cagiranin
+/// (`setTitle(ilk 60 karakter)`) ve gorunur olmali.
+///
+/// Bos baslik da reddedilir: "baslik yok" durumu NULL ile ifade edilir ve UI
+/// onu "Adsiz konusma" olarak yazar. Bos metin ikisinin arasinda anlamsiz bir
+/// ucuncu durum uretirdi (semadaki CHECK de bunu zorluyor).
+pub fn set_title(db: &AsunaDb, id: i64, title: &str) -> Result<String, StoreError> {
+    if id <= 0 {
+        return Err(StoreError::invalid("`sessionId` pozitif olmali"));
+    }
+    let title = title.trim();
+    if title.is_empty() {
+        return Err(StoreError::invalid("`title` bos birakilamaz"));
+    }
+    if title.chars().count() > MAX_SESSION_TITLE_CHARS {
+        return Err(StoreError::invalid(
+            "`title` en fazla 200 karakter olabilir",
+        ));
+    }
+    let title = title.to_owned();
+
+    let updated = db
+        .with_connection(|connection| {
+            connection.execute(
+                "UPDATE sessions SET title = ?2 WHERE id = ?1",
+                params![id, title],
+            )
+        })
+        .map_err(|error| StoreError::storage(error, "session_set_title"))?;
+
+    if updated == 0 {
+        return Err(StoreError::NotFound);
+    }
+    Ok(title)
+}
+
+/// Kaydin modalitesi. `None` = boyle bir oturum yok.
+///
+/// # Neden ayri bir okuma
+///
+/// [`SessionRecord`] `modality` **tasimiyor** (`model::SESSION_COLUMNS_NOT_LOADED`):
+/// o tip `session_start` yanitinin govdesi ve `src/shared/session.ts` onu
+/// beklenmeyen alan varsa hata vererek ayristiriyor. `chat_send` ise metin
+/// konusmasi ile ses oturumunu ayirt etmek zorunda (Gate 3 / M2), bu yuzden tek
+/// kolonluk bu projeksiyon acildi — satir tipini genisletmek IPC sozlesmesini
+/// kirardi.
+pub(crate) fn modality_of(db: &AsunaDb, id: i64) -> Result<Option<SessionModality>, StoreError> {
+    if id <= 0 {
+        return Err(StoreError::invalid("`sessionId` pozitif olmali"));
+    }
+
+    db.with_connection(|connection| {
+        connection
+            .query_row(
+                "SELECT modality FROM sessions WHERE id = ?1",
+                params![id],
+                |row| row.get::<_, SessionModality>("modality"),
+            )
+            .optional()
+    })
+    .map_err(|error| StoreError::storage(error, "session_modality"))
+}
+
+/// Boyle bir oturum kaydi var mi?
+///
+/// `messages`/`attachments` yazma yollari bunu **once** sorar: FK ihlalini
+/// bir `Storage` hatasina cevirmek yerine "boyle bir konusma yok" (`NotFound`)
+/// demek, cagiranin duzeltebilecegi bir cevaptir.
+pub(crate) fn exists(connection: &rusqlite::Connection, id: i64) -> rusqlite::Result<bool> {
+    let found: Option<i64> = connection
+        .query_row(
+            "SELECT id FROM sessions WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(found.is_some())
+}
+
 /// Tek oturumu kimligiyle okur.
 pub fn get_by_id(db: &AsunaDb, id: i64) -> Result<Option<SessionRecord>, StoreError> {
     db.with_connection(|connection| load(connection, id))
@@ -743,12 +873,24 @@ fn clamp_transcript(lines: &[TranscriptLine]) -> &[TranscriptLine] {
 /// Calisma zamani hafiza anahtari kapaliysa (ASU-037) DB'ye **hic dokunulmaz**
 /// ve `skipped` doner: renderer oturum kimligi almaz, dolayisiyla kapanista
 /// yazilacak bir kayit da olusmaz.
+///
+/// # `modality` (Chat Shell)
+///
+/// Opsiyonel ve varsayilani `voice`. Ses yolu (`session-manager.ts`) bu
+/// parametreyi **gondermiyor** ve gondermesi de gerekmiyor — yani mevcut
+/// cagiranlar ve `src/shared/session.ts` sozlesmesi degismedi. Metin sohbeti
+/// `modality: "text"` gonderir (`chat-service.ts`).
+///
+/// Yanit bicimi de degismedi: [`SessionRecord`] `title`/`modality` alanlarini
+/// **tasimaz** (bkz. `model::SESSION_COLUMNS_NOT_LOADED`); konusma listesinin
+/// ihtiyaci olan alanlari `conversation_list` doner.
 #[tauri::command]
 pub fn session_start(
     state: State<'_, DbState>,
     config: State<'_, AsunaConfig>,
     privacy: State<'_, Arc<PrivacyState>>,
     project_id: Option<String>,
+    modality: Option<SessionModality>,
 ) -> Result<SessionWriteResult, StoreError> {
     if !privacy.memory_enabled() {
         return Ok(SessionWriteResult::Skipped {
@@ -761,14 +903,60 @@ pub fn session_start(
         });
     };
 
-    let session = start(
+    // Model **modaliteye gore** secilir (Gate 3 / L3): metin konusmasini
+    // yuruten model `ASUNA_CHAT_MODEL`dir, `sessions.model` de onu yazmali.
+    // Aksi halde kayit "bu konusmayi gpt-realtime yapti" derdi — hicbir
+    // realtime cagrisi olmamis bir konusma icin yanlis bir kayit ve maliyet
+    // analizini de yaniltirdi. Renderer ikisini de secemez; yalnizca
+    // modaliteyi soyler.
+    let modality = modality.unwrap_or_default();
+    let model = match modality {
+        SessionModality::Text => &config.chat_model,
+        SessionModality::Voice => &config.realtime_model,
+    };
+
+    let session = start_with_modality(
         db,
-        &config.realtime_model,
+        model,
         project_id.as_deref(),
+        modality,
         &clock::now_utc(),
     )?;
     Ok(SessionWriteResult::Recorded {
         session: Box::new(session),
+    })
+}
+
+/// Konusmanin basligini yazar (Chat Shell).
+///
+/// Renderer ilk kullanici mesajindan sonra otomatik bir baslik gonderir; ayni
+/// komut kullanicinin elle yeniden adlandirmasi icin de kullanilir.
+///
+/// Hafiza kapaliyken `skipped` doner (hata degil): baslik, kalici bir kaydin
+/// alani; kayit yoksa yazilacak bir sey de yok. `memory_delete` ile ayni ayrim
+/// gecerli degil cunku bu bir **yazma** islemi.
+#[tauri::command]
+pub fn session_set_title(
+    state: State<'_, DbState>,
+    privacy: State<'_, Arc<PrivacyState>>,
+    session_id: i64,
+    title: String,
+) -> Result<SessionTitleResult, StoreError> {
+    if !privacy.memory_enabled() {
+        return Ok(SessionTitleResult::Skipped {
+            reason: StoreSkipReason::MemoryDisabled,
+        });
+    }
+    let Some(db) = database(&state)? else {
+        return Ok(SessionTitleResult::Skipped {
+            reason: StoreSkipReason::MemoryDisabled,
+        });
+    };
+
+    let title = set_title(db, session_id, &title)?;
+    Ok(SessionTitleResult::Recorded {
+        id: session_id,
+        title,
     })
 }
 
@@ -1830,5 +2018,201 @@ mod tests {
                 .limit,
             None
         );
+    }
+
+    // --- Chat Shell: modalite + baslik (migration 006) -----------------------
+
+    /// Modalite verilmeden acilan oturum bir **ses** oturumudur — mevcut
+    /// cagiranlarin davranisi degismedi.
+    #[test]
+    fn a_session_started_without_a_modality_is_a_voice_session() {
+        let db = fresh_db();
+        let session = start(&db, MODEL, None, START).expect("oturum acilmali");
+
+        let modality: String = db
+            .with_connection(|conn| {
+                conn.query_row(
+                    "SELECT modality FROM sessions WHERE id = ?1",
+                    params![session.id],
+                    |row| row.get(0),
+                )
+            })
+            .expect("modalite okunmali");
+        assert_eq!(modality, "voice");
+        assert_eq!(SessionModality::default(), SessionModality::Voice);
+    }
+
+    #[test]
+    fn a_text_conversation_records_its_modality() {
+        let db = fresh_db();
+        let session = start_with_modality(&db, "gpt-4o-mini", None, SessionModality::Text, START)
+            .expect("konusma acilmali");
+
+        let modality: SessionModality = db
+            .with_connection(|conn| {
+                conn.query_row(
+                    "SELECT modality FROM sessions WHERE id = ?1",
+                    params![session.id],
+                    |row| row.get(0),
+                )
+            })
+            .expect("modalite okunmali");
+        assert_eq!(modality, SessionModality::Text);
+    }
+
+    /// **Sozlesme kapisi**: `SessionRecord` yaniti Chat Shell kolonlarini
+    /// tasimaz. `src/shared/session.ts` beklenmeyen alanda hata firlatiyor —
+    /// buraya bir alan eklemek calisan ses yolunu IPC sinirinde kirardi.
+    #[test]
+    fn the_session_record_payload_did_not_grow_with_the_chat_columns() {
+        let db = fresh_db();
+        let session = start_with_modality(&db, MODEL, None, SessionModality::Text, START)
+            .expect("oturum acilmali");
+
+        let json = serde_json::to_value(&session).expect("serialize");
+        let object = json.as_object().expect("JSON nesnesi");
+        assert!(!object.contains_key("title"), "yanit: {json}");
+        assert!(!object.contains_key("modality"), "yanit: {json}");
+        assert_eq!(object.len(), crate::db::model::SESSION_COLUMNS.len());
+    }
+
+    #[test]
+    fn sets_and_overwrites_the_conversation_title() {
+        let db = fresh_db();
+        let session = start(&db, MODEL, None, START).expect("oturum");
+
+        assert_eq!(
+            set_title(&db, session.id, "  Ilk konusma  ").expect("baslik yazilmali"),
+            "Ilk konusma",
+            "bastaki/sondaki bosluk kirpilmali"
+        );
+
+        set_title(&db, session.id, "Yeniden adlandirildi").expect("baslik degismeli");
+
+        let title: Option<String> = db
+            .with_connection(|conn| {
+                conn.query_row(
+                    "SELECT title FROM sessions WHERE id = ?1",
+                    params![session.id],
+                    |row| row.get(0),
+                )
+            })
+            .expect("baslik okunmali");
+        assert_eq!(title.as_deref(), Some("Yeniden adlandirildi"));
+    }
+
+    #[test]
+    fn a_new_conversation_has_no_title() {
+        let db = fresh_db();
+        let session = start(&db, MODEL, None, START).expect("oturum");
+
+        let title: Option<String> = db
+            .with_connection(|conn| {
+                conn.query_row(
+                    "SELECT title FROM sessions WHERE id = ?1",
+                    params![session.id],
+                    |row| row.get(0),
+                )
+            })
+            .expect("baslik okunmali");
+        assert_eq!(
+            title, None,
+            "baslik uydurulmamali (UI 'Adsiz konusma' yazar)"
+        );
+    }
+
+    /// Bos ve asiri uzun baslik **reddedilir** (kirpilmaz) — gerekce
+    /// `set_title` dokumantasyonunda.
+    #[test]
+    fn an_empty_or_oversized_title_is_rejected() {
+        let db = fresh_db();
+        let session = start(&db, MODEL, None, START).expect("oturum");
+
+        for title in ["", "   ", "\n\t"] {
+            assert_eq!(
+                set_title(&db, session.id, title)
+                    .expect_err("bos baslik reddedilmeli")
+                    .code(),
+                StoreErrorCode::Invalid
+            );
+        }
+
+        let too_long = "b".repeat(MAX_SESSION_TITLE_CHARS + 1);
+        assert_eq!(
+            set_title(&db, session.id, &too_long)
+                .expect_err("uzun baslik reddedilmeli")
+                .code(),
+            StoreErrorCode::Invalid
+        );
+
+        // Tam tavan gecerli olmali (sinir kapali araliktir).
+        let exact = "b".repeat(MAX_SESSION_TITLE_CHARS);
+        set_title(&db, session.id, &exact).expect("tam tavandaki baslik kabul edilmeli");
+
+        // Reddedilen hicbir istek kaydi degistirmedi.
+        let title: Option<String> = db
+            .with_connection(|conn| {
+                conn.query_row(
+                    "SELECT title FROM sessions WHERE id = ?1",
+                    params![session.id],
+                    |row| row.get(0),
+                )
+            })
+            .expect("baslik okunmali");
+        assert_eq!(title, Some(exact));
+    }
+
+    #[test]
+    fn setting_the_title_of_an_unknown_conversation_reports_not_found() {
+        let db = fresh_db();
+        assert_eq!(
+            set_title(&db, 4242, "yok")
+                .expect_err("bilinmeyen konusma")
+                .code(),
+            StoreErrorCode::NotFound
+        );
+        assert_eq!(
+            set_title(&db, 0, "gecersiz")
+                .expect_err("gecersiz kimlik")
+                .code(),
+            StoreErrorCode::Invalid
+        );
+    }
+
+    #[test]
+    fn the_title_result_is_tagged_on_the_wire() {
+        let json = serde_json::to_value(SessionTitleResult::Recorded {
+            id: 3,
+            title: "Ilk konusma".to_owned(),
+        })
+        .expect("serialize");
+        assert_eq!(json["status"], "recorded");
+        assert_eq!(json["id"], 3);
+        assert_eq!(json["title"], "Ilk konusma");
+
+        let json = serde_json::to_value(SessionTitleResult::Skipped {
+            reason: StoreSkipReason::MemoryDisabled,
+        })
+        .expect("serialize");
+        assert_eq!(json["status"], "skipped");
+        assert_eq!(json["reason"], "memory-disabled");
+    }
+
+    #[test]
+    fn exists_separates_a_live_conversation_from_a_deleted_one() {
+        let db = fresh_db();
+        let session = start(&db, MODEL, None, START).expect("oturum");
+
+        let (before, after) = db
+            .with_connection(|conn| {
+                let before = exists(conn, session.id)?;
+                conn.execute("DELETE FROM sessions WHERE id = ?1", params![session.id])?;
+                let after = exists(conn, session.id)?;
+                Ok((before, after))
+            })
+            .expect("sorgu calismali");
+
+        assert!(before);
+        assert!(!after);
     }
 }

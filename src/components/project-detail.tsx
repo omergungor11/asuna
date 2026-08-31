@@ -16,13 +16,34 @@
  */
 
 import type { ProjectContextResult } from '../asuna/projects/project-context';
+import type { ConversationSummary } from '../shared/chat';
 import type { SessionListItem } from '../shared/session';
 
+import { conversationTitleOf } from './chat-text';
 import {
   LAST_SESSION_SCOPE_NOTE,
   describeGitStatus,
   describeLastSession,
 } from './project-text';
+
+/**
+ * Projede metin konusmasi bolumu (plan-chat-shell.md WP3).
+ *
+ * Ayri bir tip: proje **baglami** (ASU-044) ile konusma listesi farkli
+ * kaynaklardan gelir ve bu ekranda yan yana durmalari onlari tek yetki yapmaz.
+ * Kabuk bu bolumu vermezse hic render edilmez — bilesen kendi veri cekmez.
+ */
+export interface ProjectChatSection {
+  /** Hangi projede konusma acilacak; secim yoksa `null`. */
+  readonly projectId: string | null;
+  readonly projectName: string | null;
+  readonly conversations: readonly ConversationSummary[];
+  /** Bilgi ya da hata satiri (hafiza kapali, liste okunamadi...). */
+  readonly notice: string | null;
+  readonly starting: boolean;
+  readonly onStartConversation: (projectId: string) => void;
+  readonly onSelectConversation: (sessionId: number) => void;
+}
 
 export interface ProjectDetailProps {
   /** Guncel proje yoksa `null` — o zaman komut hic cagrilmaz. */
@@ -31,6 +52,8 @@ export interface ProjectDetailProps {
   readonly lastSession: SessionListItem | null;
   /** Oturum ozeti okunamadiysa nedeni; gizlenmez. */
   readonly lastSessionError: string | null;
+  /** Metin konusmalari bolumu; kabuk vermezse bolum yok. */
+  readonly chat?: ProjectChatSection;
 }
 
 export function ProjectDetail({
@@ -38,7 +61,10 @@ export function ProjectDetail({
   loading,
   lastSession,
   lastSessionError,
+  chat,
 }: ProjectDetailProps): React.JSX.Element {
+  const chatProjectId = chat?.projectId ?? null;
+
   return (
     <section className="asuna-project-detail" aria-label="Güncel proje detayı">
       <h3 className="asuna-project-detail__title">Güncel proje detayı</h3>
@@ -124,6 +150,53 @@ export function ProjectDetail({
             </p>
           )}
         </>
+      )}
+
+      {chat !== undefined && chatProjectId !== null && (
+        <div className="asuna-project-chat">
+          <h4 className="asuna-project-chat__title">
+            {chat.projectName === null
+              ? 'Bu projedeki konuşmalar'
+              : `${chat.projectName} konuşmaları`}
+          </h4>
+
+          <button
+            type="button"
+            disabled={chat.starting}
+            onClick={(): void => {
+              chat.onStartConversation(chatProjectId);
+            }}
+          >
+            Bu projede yeni konuşma
+          </button>
+
+          {chat.notice !== null && (
+            <p className="asuna-project-detail__notice" role="alert">
+              {chat.notice}
+            </p>
+          )}
+
+          {chat.conversations.length === 0 ? (
+            <p className="asuna-project-detail__notice">
+              Bu projede henüz metin konuşması yok.
+            </p>
+          ) : (
+            <ul className="asuna-project-chat__list" aria-label="Bu projenin konuşmaları">
+              {chat.conversations.map((conversation) => (
+                <li key={conversation.id}>
+                  <button
+                    type="button"
+                    onClick={(): void => {
+                      chat.onSelectConversation(conversation.id);
+                    }}
+                  >
+                    {conversationTitleOf(conversation)}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       )}
     </section>
   );

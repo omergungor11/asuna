@@ -27,6 +27,8 @@ pub type EnvMap = BTreeMap<String, String>;
 pub const KEY_OPENAI_API_KEY: &str = "OPENAI_API_KEY";
 pub const KEY_REALTIME_MODEL: &str = "ASUNA_REALTIME_MODEL";
 pub const KEY_SUMMARY_MODEL: &str = "ASUNA_SUMMARY_MODEL";
+/// Chat Shell: metin sohbetini yuruten model (plan-chat-shell.md WP2).
+pub const KEY_CHAT_MODEL: &str = "ASUNA_CHAT_MODEL";
 pub const KEY_REALTIME_VOICE: &str = "ASUNA_REALTIME_VOICE";
 pub const KEY_WAKE_WORD: &str = "ASUNA_WAKE_WORD";
 pub const KEY_MEMORY_ENABLED: &str = "ASUNA_MEMORY_ENABLED";
@@ -45,10 +47,11 @@ pub const KEY_EDITOR_COMMAND: &str = "ASUNA_EDITOR_COMMAND";
 
 /// Konfigurasyonu olusturan tum anahtarlar. Process environment sadece bu
 /// listedeki anahtarlar icin okunur — alakasiz degiskenler config'e sizmaz.
-pub const ALL_KEYS: [&str; 17] = [
+pub const ALL_KEYS: [&str; 18] = [
     KEY_OPENAI_API_KEY,
     KEY_REALTIME_MODEL,
     KEY_SUMMARY_MODEL,
+    KEY_CHAT_MODEL,
     KEY_REALTIME_VOICE,
     KEY_WAKE_WORD,
     KEY_MEMORY_ENABLED,
@@ -341,6 +344,13 @@ pub struct AsunaConfig {
     /// burada), dolayisiyla webview'in bu model ID'sini bilmesi icin bir neden
     /// yok. `to_frontend` whitelist'ine eklenmemesi bilincli bir karardir.
     pub summary_model: String,
+    /// Metin sohbetini yuruten model (Chat Shell / `chat.rs`).
+    ///
+    /// Renderer'a **gitmez**: sohbet cagrisini bu process yapar (kalici API key
+    /// burada), dolayisiyla webview'in bu ID'yi bilmesi icin bir neden yok —
+    /// `summary_model` ile ayni gerekce. `to_frontend` whitelist'ine
+    /// eklenmemesi bilincli bir karardir.
+    pub chat_model: String,
     pub realtime_voice: Option<String>,
     pub wake_word: String,
     pub memory_enabled: bool,
@@ -449,6 +459,7 @@ pub fn load_from_map(map: &EnvMap) -> Result<AsunaConfig, ConfigError> {
 
     let realtime_model = model_id(map, KEY_REALTIME_MODEL, "gpt-realtime-2.1")?;
     let summary_model = model_id(map, KEY_SUMMARY_MODEL, "gpt-4o-mini")?;
+    let chat_model = model_id(map, KEY_CHAT_MODEL, "gpt-4o-mini")?;
 
     let realtime_voice = match optional(map, KEY_REALTIME_VOICE)? {
         None => None,
@@ -596,6 +607,7 @@ pub fn load_from_map(map: &EnvMap) -> Result<AsunaConfig, ConfigError> {
         openai_api_key,
         realtime_model,
         summary_model,
+        chat_model,
         realtime_voice,
         wake_word,
         memory_enabled,
@@ -673,6 +685,7 @@ mod tests {
             (KEY_OPENAI_API_KEY, TEST_API_KEY),
             (KEY_REALTIME_MODEL, "gpt-realtime-2.1"),
             (KEY_SUMMARY_MODEL, "gpt-4o-mini"),
+            (KEY_CHAT_MODEL, "gpt-4o-mini"),
             (KEY_REALTIME_VOICE, "marin"),
             (KEY_WAKE_WORD, "Hey Asuna"),
             (KEY_MEMORY_ENABLED, "true"),
@@ -712,6 +725,7 @@ mod tests {
 
         assert_eq!(config.realtime_model, "gpt-realtime-2.1");
         assert_eq!(config.summary_model, "gpt-4o-mini");
+        assert_eq!(config.chat_model, "gpt-4o-mini");
         assert_eq!(config.realtime_voice.as_deref(), Some("marin"));
         assert_eq!(config.wake_word, "Hey Asuna");
         assert!(config.memory_enabled);
@@ -935,8 +949,8 @@ mod tests {
 
     #[test]
     fn rejects_model_with_whitespace() {
-        // Iki model anahtari da ayni kurala tabi (ASU-033).
-        for key in [KEY_REALTIME_MODEL, KEY_SUMMARY_MODEL] {
+        // Uc model anahtari da ayni kurala tabi (ASU-033 + Chat Shell).
+        for key in [KEY_REALTIME_MODEL, KEY_SUMMARY_MODEL, KEY_CHAT_MODEL] {
             let Err(error) = load_from_map(&map_with(key, "gpt realtime")) else {
                 panic!("`{key}` icin hata bekleniyordu");
             };
@@ -959,6 +973,25 @@ mod tests {
         assert!(!serialized.contains("gpt-ozet-gizli"), "JSON: {serialized}");
         assert!(
             !serialized.to_lowercase().contains("summary"),
+            "JSON: {serialized}"
+        );
+    }
+
+    /// Ayni gerekce sohbet modeli icin de gecerli: `chat_send` cagrisini bu
+    /// process yapiyor, renderer model secmiyor.
+    #[test]
+    fn chat_model_stays_in_the_trusted_process() {
+        let config = load_from_map(&map_with(KEY_CHAT_MODEL, "gpt-sohbet-gizli"))
+            .expect("gecerli config yuklenmeli");
+        let json = serde_json::to_value(config.to_frontend()).expect("serialize edilebilmeli");
+
+        let serialized = json.to_string();
+        assert!(
+            !serialized.contains("gpt-sohbet-gizli"),
+            "JSON: {serialized}"
+        );
+        assert!(
+            !serialized.to_lowercase().contains("chatmodel"),
             "JSON: {serialized}"
         );
     }
@@ -1132,6 +1165,7 @@ mod tests {
             (KEY_OPENAI_API_KEY, "   "),
             (KEY_REALTIME_MODEL, model_value.as_str()),
             (KEY_SUMMARY_MODEL, model_value.as_str()),
+            (KEY_CHAT_MODEL, model_value.as_str()),
             (KEY_REALTIME_VOICE, TEST_API_KEY),
             (KEY_MEMORY_ENABLED, TEST_API_KEY),
             (KEY_TOOL_APPROVAL_MODE, TEST_API_KEY),

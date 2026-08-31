@@ -1,15 +1,25 @@
 # Project Memory
 
 ## Project Info
-- Asuna: macOS uzerinde local-first calisan, "Hey Asuna" wake word'u ile uyanan sesli kisisel AI companion — chatbot DEGIL.
+- Asuna: macOS uzerinde local-first calisan kisisel AI companion. Iki giris: **kalici metin
+  konusmasi** (ChatGPT/Claude-tarzi kabuk) ve **voice mode** ("Hey Asuna" ile uyanan Realtime
+  oturumu). Ayni cekirdek: hafiza, proje baglami, tool + onay/audit. Pivot: **ADR-008**
+  (2026-08-31) — eski "chatbot DEGIL" kurali kaldirildi; yerine gecen kural: `VoicePanel`
+  asla unmount edilmez, dashboard'a donusme hala non-goal.
 
 ## Kaynak gercek (spec dosyalari)
 - `PROJECT.md` — urun/mimari spec, 40 bolum. Mimari karar oncesi buraya bak.
 - `TRANSCRIPT.md` — urun niyeti ve gereksinimlerin cikis noktasi.
 - `asuna-docs/AGENT-SPEC-ORIGINAL.md` — coding agent kurallari (prime directive, guvenlik, memory, tool kurallari).
-- `asuna-docs/DECISIONS.md` — verilmis mimari kararlar (ADR-001..ADR-007).
+- `asuna-docs/DECISIONS.md` — verilmis mimari kararlar (ADR-001..ADR-008).
+  Not: `AGENT-SPEC-ORIGINAL.md` ve `PROJECT.md` pivot **oncesi** metinlerdir; sohbet UI yasagi
+  konusunda ADR-008 ve CLAUDE.md gecerlidir.
 
 ## Project Status
+
+> **PROJE ASKIDA (2026-08-31, kullanici karari).** Sebep + teshis + devam adimlari:
+> `asuna-tasks/active/session-notes.md` son bolum. Kod tabani saglam; eksik olan prompt
+> katmani (core.v3 "# Tools") ve sesli kabul testlerinin tamamlanmasi.
 - **Phase 0 TAMAM** (11/11) — scaffold + CI + 4 arastirma ADR'ye baglandi.
 - **Phase 1 TAMAM** (ASU-011..020) — realtime voice dikey dilimi calisiyor.
   **M1 canli testte gecti (2026-08-24)**: Turkce anlasildi, barge-in sorunsuz, temiz kapanis.
@@ -25,15 +35,18 @@
   (risk 0); `open_project`, `set_current_project` (risk 1); `register_project` (**risk 2**).
   Risk 3 yok. **ASU-055** (M4) ve **ASU-071** (Wave D) sesli kabul bekliyor; senaryolar
   `asuna-config/testing.md` → "M4 kabul senaryosu" (A1..A18).
-- **Paralel oturum uyarisi (2026-08-31):** repoda ayrica bir **chat kabugu** oturumu calisiyor —
-  `asuna-plans/plan-chat-shell.md`, `src/app`, `src/components`, `src/shared/chat.ts`,
-  `src-tauri/src/chat.rs` ve db dosyalari o oturuma ait. Bu dosyalara dokunma, task-index'e
-  chat-shell task'i ekleme.
+- **Phase 7 (Chat Shell pivotu) kod TAMAM** (ASU-072..078, 2026-08-31): migration 006
+  (`messages`/`attachments` + `sessions.title`/`modality`, CASCADE), Rust `chat_send` proxy'si
+  (key Rust'ta; **zorunlu** yeni env `ASUNA_CHAT_MODEL`; non-streaming; kullanici + asistan
+  mesaji tek transaction), `attachment_ingest` / `attachment_from_project`, capability
+  `asuna-chat.json` (**`message_append` bilerek ACL disi**), chat kabugu UI.
+  Gate 3: 0 CRITICAL. **ASU-079** (M6 kabul testi) bekliyor.
 - Katman mimarileri: `docs/architecture/{voice,memory,tools,security}.md`.
 
 ## Important Patterns
 - **Urun dongusu**: wake → sesli konusma → baglamsal yardim → memory/tool kullanimi → guvenli oturum kapanisi → idle.
-  Bu dongunun disina cikan bir tasarim (ornegin buyuk dashboard) once sorgulanir.
+  Metin girisi ayni cekirdegi kullanir (ADR-008). Bu dongunun disina cikan bir tasarim
+  (ornegin buyuk dashboard) once sorgulanir.
 - **Modul sinirlari ayri kalir**: audio / agent / memory / projects / tools / permissions / security / database / ui.
   React componentleri dogrudan shell komutu calistirmaz veya DB sorgusu atmaz.
 - **Stack**: Tauri 2 + React + TypeScript (strict) + Vite, pnpm, SQLite, OpenAI Agents SDK

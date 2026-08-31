@@ -25,7 +25,7 @@ pub fn get_frontend_config(config: State<'_, AsunaConfig>) -> FrontendConfig {
 /// etkinlestirme) ve `lib.rs` (`generate_handler!`) ile karsilastirir. Yeni bir
 /// `#[tauri::command]` eklerken dort yerin hepsi guncellenmeli.
 #[cfg(test)]
-pub const EXPOSED_COMMANDS: [&str; 27] = [
+pub const EXPOSED_COMMANDS: [&str; 34] = [
     "get_frontend_config",
     "mint_realtime_token",
     "db_status",
@@ -53,6 +53,16 @@ pub const EXPOSED_COMMANDS: [&str; 27] = [
     "open_project",
     "get_privacy_settings",
     "set_privacy_settings",
+    // Chat Shell (capabilities/asuna-chat.json). `message_append` BILEREK yok:
+    // `role` parametresi renderer'a "assistant" satiri uydurma imkani verirdi;
+    // sohbetin tek yazma yolu `chat_send`dir.
+    "conversation_list",
+    "message_list",
+    "attachment_list",
+    "session_set_title",
+    "chat_send",
+    "attachment_ingest",
+    "attachment_from_project",
 ];
 
 /// Hafizayi **okuyan** komutlar (ASU-031, ASU-035).
@@ -98,11 +108,14 @@ pub const SESSION_READ_COMMANDS: [&str; 1] = ["session_list"];
 /// temizligi acik birakmak, kapali sanilan bir yuzey uretirdi. Kullanicinin
 /// **calisma zamani** anahtari ise silmeyi engellemez — o ayri bir eksen.
 #[cfg(test)]
-pub const SESSION_WRITE_COMMANDS: [&str; 4] = [
+pub const SESSION_WRITE_COMMANDS: [&str; 5] = [
     "session_start",
     "session_finalize",
     "session_delete",
     "session_clear_all",
+    // Chat Shell konusma basligi da bir oturum yazimidir: oturum yazma
+    // yetkisi kaldirilinca baslik yazimi da kapanir (asuna-session.json).
+    "session_set_title",
 ];
 
 /// Tool audit defterini **okuyan** komutlar (ASU-050).
@@ -750,6 +763,45 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// **WP1 guvenlik tavsiyesi (Gate 3 / L6)**: `message_append` renderer'a
+    /// **acilmaz**.
+    ///
+    /// Komut var ve `#[tauri::command]` isaretli — ama bilerek kayitsiz. `role`
+    /// parametresi aldigi icin acik olsaydi webview `assistant` rolunde bir
+    /// satir yazabilir, yani model hicbir sey soylememisken konusmada "Asuna
+    /// boyle dedi" diyen bir mesaj olusturabilirdi. Sohbetin tek yazma yolu
+    /// `chat_send`tir ve asistan satirini yalnizca gercek model yaniti uretir.
+    ///
+    /// Ayni kilidin calisma zamani karsiligi:
+    /// `acl_regression::the_renderer_cannot_append_a_message_directly`.
+    #[test]
+    fn message_append_is_not_exposed_to_the_renderer() {
+        const FORBIDDEN: &str = "message_append";
+
+        assert!(
+            !EXPOSED_COMMANDS.contains(&FORBIDDEN),
+            "`{FORBIDDEN}` acilmis — renderer asistan rolunde mesaj uydurabilir"
+        );
+
+        // ACL manifest'inde de olmamali: manifest'e girmek izni **uretir**.
+        assert!(
+            !read("build.rs").contains(&format!("\"{FORBIDDEN}\"")),
+            "`{FORBIDDEN}` build.rs ACL manifest'inde tanimli"
+        );
+
+        let permission = permission_name(FORBIDDEN);
+        for (file_name, content) in all_capability_files() {
+            assert!(
+                !content.contains(&permission),
+                "`{file_name}` `{permission}` izni tasiyor"
+            );
+        }
+
+        // Sohbetin yazma yolu ise acik olmali — yasak, yuzeyin tamamini
+        // kapatmakla karistirilmasin.
+        assert!(EXPOSED_COMMANDS.contains(&"chat_send"));
     }
 
     /// Dizin listeleme yuzeyi **salt okunur** ve boyle kalir.

@@ -24,6 +24,18 @@
 //! Ayni gerekceyle `summary::SummaryService` de `manage` **edilmiyor**:
 //! `session_finalize` kapanistan sonra ozet uretimini tetikler; servis kayitli
 //! olmadigi icin tetik log'layip durur ve bu testlerden ag'a cikilmaz.
+//!
+//! `chat::ChatService` ise `manage` **ediliyor** ama endpoint'i kapali bir
+//! loopback portu ([`offline_chat_service`]): komutun ACL'den sonraki yolu da
+//! olculebilsin, ama OpenAI'ye hicbir istek gitmesin.
+//!
+//! # Komut kumesi uretimle ayni
+//!
+//! Buradaki `generate_handler!` listesi `lib.rs`'teki ile **birebir** ayni
+//! olmali; tek fark runtime'in mock, DB'nin bellek ici/kapali olmasi. Bir
+//! komut uretimde acilip burada acilmazsa ACL regresyonu olculmemis olur.
+//! Kumenin `EXPOSED_COMMANDS` ile ayni oldugu `commands.rs` tarafinda statik
+//! olarak dogrulaniyor; `message_append` ikisinde de bilerek yok.
 
 use tauri::ipc::{CallbackFn, InvokeBody};
 use tauri::test::MockRuntime;
@@ -102,6 +114,11 @@ fn build_test_app_with_privacy(db_state: DbState, privacy: PrivacyState) -> App<
         // ayni sekilde `manage` ediliyor — ag'a cikmaz, yalnizca kayitli kokun
         // altindaki sabit allowlist'i okur.
         .manage(crate::projects::context::ProjectContextService::new())
+        // `chat_send` bu servisi bekler. `RealtimeTokenService`in aksine
+        // `manage` **ediliyor**: komutun ACL'den sonraki yolu da olculebilsin.
+        // Ag'a cikilamaz — endpoint kapali bir loopback portu (bkz.
+        // `offline_chat_service`).
+        .manage(Arc::new(offline_chat_service()))
         // `RealtimeTokenService` BILEREK yok — bkz. modul dokumantasyonu.
         .invoke_handler(tauri::generate_handler![
             crate::commands::get_frontend_config,
@@ -129,6 +146,16 @@ fn build_test_app_with_privacy(db_state: DbState, privacy: PrivacyState) -> App<
             crate::projects::files::read_project_file,
             crate::projects::listing::list_project_dir,
             crate::projects::editor::open_project,
+            // Chat Shell (WP2): uretimdeki `lib.rs` ile ayni kume.
+            // `message_append` BILEREK yok — renderer'a acilmadi
+            // (`commands.rs::message_append_is_not_exposed_to_the_renderer`).
+            crate::db::conversation_repository::conversation_list,
+            crate::db::message_repository::message_list,
+            crate::db::attachment_repository::attachment_list,
+            crate::db::session_repository::session_set_title,
+            crate::chat::chat_send,
+            crate::chat::attachment_ingest,
+            crate::chat::attachment_from_project,
             crate::privacy::get_privacy_settings,
             crate::privacy::set_privacy_settings
         ])
@@ -140,6 +167,19 @@ fn build_test_app_with_privacy(db_state: DbState, privacy: PrivacyState) -> App<
     // elle manage edilir — uretimdeki `lib.rs` ile ayni sira.
     app.manage(db_state);
     app
+}
+
+/// Ag'a **cikamayan** sohbet servisi.
+///
+/// Endpoint, hemen kapatilan bir loopback portudur: bir istek yine de
+/// yapilirsa OpenAI'ye degil, kimsenin dinlemedigi 127.0.0.1'e gider ve
+/// baglanti reddiyle duser. Testlerin hicbiri buraya kadar gelmiyor (istekten
+/// once ya hafiza kapali ya da konusma yok), bu ikinci savunma hatti.
+fn offline_chat_service() -> crate::chat::ChatService {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("port acilmali");
+    let address = listener.local_addr().expect("adres okunmali");
+    drop(listener);
+    crate::chat::ChatService::with_endpoint(format!("http://{address}/v1/chat/completions"))
 }
 
 fn build_test_app() -> App<MockRuntime> {
@@ -2525,4 +2565,273 @@ fn a_registration_path_must_be_absolute_and_real_over_ipc() {
         assert!(!is_acl_denial(&error), "beklenmedik ACL reddi: {error}");
         assert!(error.contains(expected), "yol `{path}`: {error}");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Chat Shell (WP2 / Gate 3 M3)
+// ---------------------------------------------------------------------------
+
+/// Metin sohbetinin yedi komutu ana pencerede **ACL'den geciyor**.
+///
+/// Beklenen sey basari degil, reddin bir **ACL reddi olmamasi**: hafiza kapali
+/// oldugu icin komutlar kendi dururst hatalarini doner (`session_list` ile ayni
+/// sozlesme: okuma bos, yazma "kapali" der). Ag'a cikilmaz.
+#[test]
+fn chat_commands_pass_the_acl_on_the_main_window() {
+    let app = build_test_app();
+    let webview = main_webview(&app);
+
+    // Salt okuma yuzeyleri: hafiza kapaliyken **bos dizi** doner (hata degil).
+    for (command, args) in [
+        ("conversation_list", serde_json::json!({})),
+        ("message_list", serde_json::json!({ "sessionId": 1 })),
+        ("attachment_list", serde_json::json!({ "sessionId": 1 })),
+    ] {
+        let response = invoke_with(&webview, command, args)
+            .unwrap_or_else(|error| panic!("`{command}` calismaliydi: {error}"));
+        assert_eq!(response, "[]", "`{command}` yaniti: {response}");
+    }
+
+    // Yazma yuzeyleri: ACL'den gecer, sonra "hafiza kapali" der.
+    for (command, args) in [
+        (
+            "session_set_title",
+            serde_json::json!({ "sessionId": 1, "title": "Deneme" }),
+        ),
+        (
+            "chat_send",
+            serde_json::json!({ "sessionId": 1, "text": "merhaba", "attachmentIds": [] }),
+        ),
+        (
+            "attachment_ingest",
+            serde_json::json!({
+                "sessionId": 1,
+                "fileName": "notlar.md",
+                "content": "icerik",
+                "mimeType": null
+            }),
+        ),
+        (
+            "attachment_from_project",
+            serde_json::json!({ "sessionId": 1, "relativePath": "README.md" }),
+        ),
+    ] {
+        let outcome = invoke_with(&webview, command, args).unwrap_or_else(|error| error);
+        assert!(
+            !is_acl_denial(&outcome),
+            "`{command}` ACL tarafindan reddedildi: {outcome}"
+        );
+    }
+}
+
+/// Hafiza aciksa sohbet komutlari gercekten calisiyor: konusma acilir, baslik
+/// yazilir, mesaj listesi okunur. Model cagrisi **yapilmaz** (konusma bos ve
+/// `chat_send` bu testte cagrilmiyor).
+#[test]
+fn a_text_conversation_can_be_opened_and_titled_over_the_real_acl() {
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+
+    let started = invoke_with(
+        &webview,
+        "session_start",
+        serde_json::json!({ "projectId": null, "modality": "text" }),
+    )
+    .expect("session_start calismali");
+    let value: serde_json::Value = serde_json::from_str(&started).expect("JSON");
+    let session_id = value["session"]["id"].as_i64().expect("konusma kimligi");
+
+    invoke_with(
+        &webview,
+        "session_set_title",
+        serde_json::json!({ "sessionId": session_id, "title": "Ilk konusma" }),
+    )
+    .expect("session_set_title calismali");
+
+    let conversations = invoke_with(&webview, "conversation_list", serde_json::json!({}))
+        .expect("conversation_list calismali");
+    assert!(
+        conversations.contains("\"title\":\"Ilk konusma\""),
+        "yanit: {conversations}"
+    );
+    assert!(
+        conversations.contains("\"modality\":\"text\""),
+        "yanit: {conversations}"
+    );
+    assert!(
+        conversations.contains("\"messageCount\":0"),
+        "yanit: {conversations}"
+    );
+
+    // Mesaj listesi bos ama okunabilir.
+    let messages = invoke_with(
+        &webview,
+        "message_list",
+        serde_json::json!({ "sessionId": session_id }),
+    )
+    .expect("message_list calismali");
+    assert_eq!(messages, "[]", "yanit: {messages}");
+}
+
+/// **Gate 3 / L3**: metin konusmasi `ASUNA_CHAT_MODEL` ile kaydedilir, ses
+/// oturumu `ASUNA_REALTIME_MODEL` ile. Renderer ikisini de secemez.
+#[test]
+fn a_text_conversation_records_the_chat_model_and_a_voice_session_the_realtime_model() {
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+
+    let text = invoke_with(
+        &webview,
+        "session_start",
+        serde_json::json!({ "modality": "text" }),
+    )
+    .expect("metin konusmasi acilmali");
+    assert!(
+        text.contains("\"model\":\"gpt-4o-mini\""),
+        "metin konusmasi realtime modeliyle kaydedilmis: {text}"
+    );
+
+    // Modalite verilmezse varsayilan `voice` — mevcut ses yolu degismedi.
+    let voice = invoke_with(&webview, "session_start", serde_json::json!({}))
+        .expect("ses oturumu acilmali");
+    assert!(
+        voice.contains("\"model\":\"gpt-realtime-2.1\""),
+        "ses oturumu chat modeliyle kaydedilmis: {voice}"
+    );
+
+    // Renderer model **secemez**: alan gonderilse bile yok sayilir.
+    let ignored = invoke_with(
+        &webview,
+        "session_start",
+        serde_json::json!({ "modality": "text", "model": "renderer-uydurdu" }),
+    )
+    .expect("session_start calismali");
+    assert!(
+        !ignored.contains("renderer-uydurdu"),
+        "renderer model secebildi: {ignored}"
+    );
+}
+
+/// **WP1 guvenlik tavsiyesi**: `message_append` renderer'a acilmadi.
+///
+/// Komut `role` parametresi aliyor; acik olsaydi webview `assistant` rolunde
+/// bir satir yazabilir, yani model soylememisken "Asuna boyle dedi" uydurabilirdi.
+/// Sohbetin tek yazma yolu `chat_send`.
+#[test]
+fn the_renderer_cannot_append_a_message_directly() {
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+
+    let error = invoke_with(
+        &webview,
+        "message_append",
+        serde_json::json!({
+            "sessionId": 1,
+            "role": "assistant",
+            "content": "Bunu ben soylemedim."
+        }),
+    )
+    .expect_err("`message_append` renderer'dan cagrilabilmemeli");
+
+    assert!(
+        is_acl_denial(&error),
+        "`message_append` ACL disinda kalmali: {error}"
+    );
+}
+
+/// Ekleme komutlari mutlak yol **kabul etmez**; hedef her zaman guncel projedir
+/// ve konusmanin projesi aktif degilse istek reddedilir. (Sandbox'in kendi
+/// testleri `security::sandbox`ta; buradaki olcum IPC yuzeyinden.)
+#[test]
+fn attaching_a_project_file_over_ipc_cannot_escape_the_current_project() {
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+
+    let started = invoke_with(
+        &webview,
+        "session_start",
+        serde_json::json!({ "modality": "text" }),
+    )
+    .expect("konusma acilmali");
+    let value: serde_json::Value = serde_json::from_str(&started).expect("JSON");
+    let session_id = value["session"]["id"].as_i64().expect("konusma kimligi");
+
+    for path in [
+        "../../.ssh/id_ed25519",
+        "/etc/passwd",
+        "~/.aws/credentials",
+        ".env",
+    ] {
+        let error = invoke_with(
+            &webview,
+            "attachment_from_project",
+            serde_json::json!({ "sessionId": session_id, "relativePath": path }),
+        )
+        .expect_err("reddedilmeli");
+
+        assert!(!is_acl_denial(&error), "beklenmedik ACL reddi: {error}");
+        // Kayitli proje yok: hicbir yol cozulemez. Onemli olan **kabul
+        // edilmemesi** ve mesajin yol sizdirmamasi.
+        assert!(
+            !error.contains("/etc/passwd") && !error.contains(".ssh"),
+            "hata mesaji yol sizdirdi: {error}"
+        );
+    }
+}
+
+/// Yuklenen dosya yolu IPC'den de gelemez ve blok listesi burada da gecerli.
+#[test]
+fn an_uploaded_attachment_name_is_validated_over_ipc() {
+    let app = build_test_app_with_memory();
+    let webview = main_webview(&app);
+
+    let started = invoke_with(
+        &webview,
+        "session_start",
+        serde_json::json!({ "modality": "text" }),
+    )
+    .expect("konusma acilmali");
+    let value: serde_json::Value = serde_json::from_str(&started).expect("JSON");
+    let session_id = value["session"]["id"].as_i64().expect("konusma kimligi");
+
+    for name in [".env", "id_rsa", "backup.key.txt", "../../.ssh/id_ed25519"] {
+        let error = invoke_with(
+            &webview,
+            "attachment_ingest",
+            serde_json::json!({
+                "sessionId": session_id,
+                "fileName": name,
+                "content": "OPENAI_API_KEY=sk-proj-GIZLI",
+                "mimeType": "text/plain"
+            }),
+        )
+        .expect_err("reddedilmeli");
+
+        assert!(!is_acl_denial(&error), "beklenmedik ACL reddi: {error}");
+        assert!(
+            error.contains("\"code\":\"invalid\""),
+            "ad `{name}`: {error}"
+        );
+    }
+
+    // Gecerli bir ad kabul edilir ve icerigi maskeli saklanir.
+    let stored = invoke_with(
+        &webview,
+        "attachment_ingest",
+        serde_json::json!({
+            "sessionId": session_id,
+            "fileName": "notlar.txt",
+            "content": "OPENAI_API_KEY=sk-proj-GIZLI",
+            "mimeType": "text/plain"
+        }),
+    )
+    .expect("gecerli ad kabul edilmeli");
+
+    // Yanit **icerik tasimaz** (`AttachmentRecord`da `content` alani yok).
+    assert!(
+        !stored.contains("sk-proj-GIZLI"),
+        "icerik IPC'ye sizdi: {stored}"
+    );
+    assert!(!stored.contains("content"), "icerik alani donmus: {stored}");
+    assert!(stored.contains("\"origin\":\"upload\""), "yanit: {stored}");
 }

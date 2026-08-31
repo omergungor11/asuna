@@ -136,6 +136,12 @@ const CREDENTIAL_FILES: [&str; 10] = [
 /// Karar yalnizca yolun **metnine** bakar; dosyanin var olmasi gerekmez.
 /// Bu bilincli: var olmayan bir yol icin de "okunamaz" diyebilmek, cagiran
 /// tarafin once dosyayi acip sonra sormasini engeller.
+///
+/// # Ad kurallari iki kez kosar (tester B2)
+///
+/// Once yolun kendi metni, sonra [`fold_confusables`] ile **katlanmis** hali.
+/// Boylece `．env` (fullwidth nokta) ya da Kiril `е` iceren bir `.еnv` listeyi
+/// atlayamaz.
 pub fn is_blocked(path: &Path) -> Option<BlockReason> {
     for component in path.components() {
         let Component::Normal(part) = component else {
@@ -146,23 +152,74 @@ pub fn is_blocked(path: &Path) -> Option<BlockReason> {
             // Belirsizlikte "oku" demek yanlis yondeki hata olurdu.
             return Some(BlockReason::SensitiveDirectory);
         };
-        if SENSITIVE_DIRECTORIES
-            .iter()
-            .any(|directory| directory.eq_ignore_ascii_case(part))
-        {
-            return Some(BlockReason::SensitiveDirectory);
+        if let Some(reason) = blocked_directory(part) {
+            return Some(reason);
         }
-        // `credentials`, `credentials.json`, `aws-credentials` ...
-        if part.to_ascii_lowercase().contains("credential")
-            && !CREDENTIAL_FILES.contains(&part.to_ascii_lowercase().as_str())
-        {
-            return Some(BlockReason::SensitiveDirectory);
+        let folded = fold_confusables(part);
+        if folded != part {
+            if let Some(reason) = blocked_directory(&folded) {
+                return Some(reason);
+            }
         }
     }
 
     // Dosya adi yoksa (`/` gibi) ad tabanli kurallar uygulanmaz; bilesen
     // taramasi zaten yukarida kosmus durumda.
     let name = path.file_name().and_then(|name| name.to_str())?;
+
+    if let Some(reason) = blocked_file_name(name) {
+        return Some(reason);
+    }
+    let folded = fold_confusables(name);
+    if folded != name {
+        if let Some(reason) = blocked_file_name(&folded) {
+            return Some(reason);
+        }
+    }
+
+    // Repo-yerel `.git/config`. Dosyanin **tamami** bloklu; icinden bir satir
+    // ayiklamak icin bile acilmaz. Remote adi ASU-042'de `git remote get-url`
+    // ciktisindan redakte edilerek geliyor.
+    //
+    // Dogrudan ust dizin degil, yolun **herhangi bir bileseninde** `.git`
+    // araniyor: submodule'lerin ayari `.git/modules/<ad>/config` altinda durur
+    // ve o dosya da ayni remote URL'ini tasir.
+    if folded.eq_ignore_ascii_case("config") && has_component(path, ".git") {
+        return Some(BlockReason::CredentialStore);
+    }
+
+    None
+}
+
+/// Dizin adi kurallari — yolun **her** bileseni icin.
+fn blocked_directory(part: &str) -> Option<BlockReason> {
+    if SENSITIVE_DIRECTORIES
+        .iter()
+        .any(|directory| directory.eq_ignore_ascii_case(part))
+    {
+        return Some(BlockReason::SensitiveDirectory);
+    }
+    // `credentials`, `credentials.json`, `aws-credentials` ...
+    let lowercase = part.to_ascii_lowercase();
+    if lowercase.contains("credential") && !CREDENTIAL_FILES.contains(&lowercase.as_str()) {
+        return Some(BlockReason::SensitiveDirectory);
+    }
+    None
+}
+
+/// Dosya adi kurallari.
+///
+/// # Nokta-bilesenleri (tester B2)
+///
+/// Yalnizca **son** uzantiya bakmak yetmiyordu: `backup.key.txt`,
+/// `sunucu.pem.bak` ve `config.env.example` listeden geciyordu. Artik adin
+/// **govdesinden sonraki her nokta-bileseni** bir uzanti gibi sinaniyor.
+///
+/// Govde (ilk bilesen) bilerek **disarida**: aksi halde `key.md` ya da
+/// `secret.md` gibi siradan bir dokuman reddedilirdi. Kural "adin sonuna
+/// zararsiz bir uzanti ekleyerek kacamazsin" demek; "adinda `key` gecen dosyayi
+/// okumam" demek degil (`monkey.md` okunabilir kalir).
+fn blocked_file_name(name: &str) -> Option<BlockReason> {
     let lowercase = name.to_ascii_lowercase();
 
     // `.env`, `.env.local`, `.env.production.local`, ayrica `.env` uzantili
@@ -187,15 +244,6 @@ pub fn is_blocked(path: &Path) -> Option<BlockReason> {
         return Some(BlockReason::PrivateKeyMaterial);
     }
 
-    if let Some(extension) = path.extension().and_then(|value| value.to_str()) {
-        if PRIVATE_KEY_EXTENSIONS
-            .iter()
-            .any(|blocked| blocked.eq_ignore_ascii_case(extension))
-        {
-            return Some(BlockReason::PrivateKeyMaterial);
-        }
-    }
-
     if CREDENTIAL_FILES
         .iter()
         .any(|blocked| blocked.eq_ignore_ascii_case(name))
@@ -203,18 +251,109 @@ pub fn is_blocked(path: &Path) -> Option<BlockReason> {
         return Some(BlockReason::CredentialStore);
     }
 
-    // Repo-yerel `.git/config`. Dosyanin **tamami** bloklu; icinden bir satir
-    // ayiklamak icin bile acilmaz. Remote adi ASU-042'de `git remote get-url`
-    // ciktisindan redakte edilerek geliyor.
-    //
-    // Dogrudan ust dizin degil, yolun **herhangi bir bileseninde** `.git`
-    // araniyor: submodule'lerin ayari `.git/modules/<ad>/config` altinda durur
-    // ve o dosya da ayni remote URL'ini tasir.
-    if lowercase == "config" && has_component(path, ".git") {
-        return Some(BlockReason::CredentialStore);
+    // Govdeden sonraki her bilesen bir uzanti gibi degerlendirilir.
+    // `.env` gibi bir dotfile'da govde bos string olur ve `skip(1)` dogru
+    // sonucu verir: `["env"]`.
+    for suffix in lowercase.split('.').skip(1) {
+        if suffix.is_empty() {
+            continue;
+        }
+        if suffix == "env" {
+            return Some(BlockReason::EnvironmentFile);
+        }
+        if PRIVATE_KEY_EXTENSIONS.contains(&suffix)
+            || PRIVATE_KEY_PREFIXES
+                .iter()
+                .any(|blocked| suffix.starts_with(blocked))
+        {
+            return Some(BlockReason::PrivateKeyMaterial);
+        }
+        let dotted = format!(".{suffix}");
+        if CREDENTIAL_FILES.contains(&dotted.as_str()) || CREDENTIAL_FILES.contains(&suffix) {
+            return Some(BlockReason::CredentialStore);
+        }
     }
 
     None
+}
+
+/// ASCII'ye **benzeyen** karakterleri ASCII'ye katlar.
+///
+/// # Kapsam ve sinir (bilincli)
+///
+/// Bu bir NFKC/UTS#39 uygulamasi **degildir** ve oyle olmadigi icin de yeni bir
+/// bagimlilik gerektirmiyor. Katlanan kume:
+///
+/// - Tam genislikli ASCII (`U+FF01..U+FF5E`) → ASCII karsiligi; boylece
+///   `．env` ve `．ｅｎｖ` yakalanir.
+/// - Nokta benzerleri: `U+2024`, `U+3002`, `U+FF61` → `.`
+/// - Gorunmez karakterler (sifir genislikli birlestirici/ayirici, yumusak
+///   tire) ve birlesen aksan isaretleri (`U+0300..U+036F`) **atilir**.
+/// - Kiril ve Yunan alfabesindeki yaygin ASCII homogliflleri (`е`→`e`,
+///   `а`→`a`, `ο`→`o` ...).
+///
+/// Kapsam disi: baska yazi sistemlerindeki (Ermeni, Cherokee, matematiksel
+/// harf blokları) homoglifler. Kararli bir saldirgan bunlarla hala liste disi
+/// bir ad uretebilir — bu yuzden ad kurali **tek** savunma degil: icerik her
+/// durumda `redaction::redact_sensitive_text`ten geciyor ve dosya yolu
+/// `sandbox` tarafindan kok icine kilitleniyor.
+fn fold_confusables(name: &str) -> String {
+    /// (benzeyen, ASCII karsiligi) — hepsi kucuk harf.
+    const HOMOGLYPHS: [(char, char); 27] = [
+        // Kiril
+        ('а', 'a'),
+        ('в', 'b'),
+        ('с', 'c'),
+        ('ԁ', 'd'),
+        ('е', 'e'),
+        ('ѕ', 's'),
+        ('һ', 'h'),
+        ('і', 'i'),
+        ('ј', 'j'),
+        ('к', 'k'),
+        ('м', 'm'),
+        ('н', 'h'),
+        ('о', 'o'),
+        ('р', 'p'),
+        ('т', 't'),
+        ('у', 'y'),
+        ('х', 'x'),
+        // Yunan
+        ('α', 'a'),
+        ('ε', 'e'),
+        ('η', 'n'),
+        ('ι', 'i'),
+        ('κ', 'k'),
+        ('μ', 'm'),
+        ('ν', 'v'),
+        ('ο', 'o'),
+        ('ρ', 'p'),
+        ('τ', 't'),
+    ];
+
+    let mut folded = String::with_capacity(name.len());
+    for character in name.chars() {
+        let invisible = matches!(
+            character,
+            '\u{200B}'..='\u{200D}' | '\u{FEFF}' | '\u{00AD}' | '\u{2060}'
+        ) || ('\u{0300}'..='\u{036F}').contains(&character);
+        if invisible {
+            continue;
+        }
+
+        // Once kucuk harfe: buyuk Kiril `Е` de tabloya dussun.
+        let lowered = character.to_lowercase().next().unwrap_or(character);
+        let mapped = match lowered {
+            '\u{FF01}'..='\u{FF5E}' => char::from_u32(lowered as u32 - 0xFEE0).unwrap_or(lowered),
+            '\u{2024}' | '\u{3002}' | '\u{FF61}' => '.',
+            other => HOMOGLYPHS
+                .iter()
+                .find(|(from, _)| *from == other)
+                .map_or(other, |(_, to)| *to),
+        };
+        folded.push(mapped);
+    }
+    folded
 }
 
 /// Yolun bilesenlerinden biri tam olarak `name` mi?
@@ -384,6 +523,98 @@ mod tests {
             is_blocked_resolved(&resolved),
             Some(BlockReason::SensitiveDirectory)
         );
+    }
+
+    /// **tester B2**: zararsiz bir uzanti eklemek listeyi atlatmiyor. Kontrol
+    /// artik adin govdesinden sonraki **her** nokta-bilesenine bakiyor.
+    #[test]
+    fn appending_a_harmless_extension_does_not_bypass_the_list() {
+        for (path, reason) in [
+            (
+                "/Users/omer/Work/asuna/backup.key.txt",
+                BlockReason::PrivateKeyMaterial,
+            ),
+            (
+                "/Users/omer/Work/asuna/sunucu.pem.bak",
+                BlockReason::PrivateKeyMaterial,
+            ),
+            (
+                "/Users/omer/Work/asuna/id_rsa.txt",
+                BlockReason::PrivateKeyMaterial,
+            ),
+            (
+                "/Users/omer/Work/asuna/yedek.id_ed25519.eski",
+                BlockReason::PrivateKeyMaterial,
+            ),
+            (
+                "/Users/omer/Work/asuna/kasa.p12.zip",
+                BlockReason::PrivateKeyMaterial,
+            ),
+            (
+                "/Users/omer/Work/asuna/config.env.example",
+                BlockReason::EnvironmentFile,
+            ),
+            (
+                "/Users/omer/Work/asuna/uygulama.env.sample",
+                BlockReason::EnvironmentFile,
+            ),
+            (
+                "/Users/omer/Work/asuna/yedek.npmrc.txt",
+                BlockReason::CredentialStore,
+            ),
+        ] {
+            assert_eq!(blocked(path), Some(reason), "okunmamali: {path}");
+        }
+    }
+
+    /// **tester B2**: unicode benzerleriyle de atlatilamiyor.
+    #[test]
+    fn confusable_look_alike_names_are_refused() {
+        for path in [
+            // Kiril `е`
+            "/Users/omer/Work/asuna/.еnv",
+            // Tam genislikli nokta
+            "/Users/omer/Work/asuna/．env",
+            // Tam genislikli harfler
+            "/Users/omer/Work/asuna/．ｅｎｖ",
+            // Sifir genislikli birlestirici arada
+            "/Users/omer/Work/asuna/.e\u{200B}nv",
+            // Kiril `а` ile `id_rsа`
+            "/Users/omer/Work/asuna/id_rsа",
+            // Hassas dizin adi Kiril `ѕ` ile
+            "/Users/omer/.ѕsh/id_ed25519",
+        ] {
+            assert!(blocked(path).is_some(), "okunmamali: {path}");
+        }
+    }
+
+    /// Katlama **yalnizca** listeye yaklastirmak icin: Turkce ve diger
+    /// alfabelerdeki siradan adlar okunabilir kalmali.
+    #[test]
+    fn folding_does_not_block_ordinary_non_ascii_names() {
+        for path in [
+            "/Users/omer/Work/asuna/önemli-notlar.md",
+            "/Users/omer/Work/asuna/şirket-planı.md",
+            "/Users/omer/Work/asuna/日本語.md",
+            "/Users/omer/Work/asuna/ekip-toplantısı.txt",
+        ] {
+            assert_eq!(blocked(path), None, "okunabilmeli: {path}");
+        }
+    }
+
+    /// Kararin siniri: kontrol adin **govdesini** kapsamaz. `key.md` bir
+    /// dokumandir, anahtar degil — ve `monkey.md` de oyle.
+    #[test]
+    fn the_stem_of_a_name_is_not_treated_as_an_extension() {
+        for path in [
+            "/Users/omer/Work/asuna/key.md",
+            "/Users/omer/Work/asuna/secret.md",
+            "/Users/omer/Work/asuna/monkey.md",
+            "/Users/omer/Work/asuna/env.ts",
+            "/Users/omer/Work/asuna/pem.go",
+        ] {
+            assert_eq!(blocked(path), None, "okunabilmeli: {path}");
+        }
     }
 
     /// Yanlis pozitif kontrolu: projenin normal dosyalari okunabilir kalmali.

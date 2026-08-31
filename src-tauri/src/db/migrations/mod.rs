@@ -46,6 +46,11 @@ pub const V4_DOWN: &str = include_str!("004_tool_events.down.sql");
 pub const V5_UP: &str = include_str!("005_tool_event_outcome.up.sql");
 pub const V5_DOWN: &str = include_str!("005_tool_event_outcome.down.sql");
 
+/// Migration 6 — `sessions.title` / `sessions.modality` + `messages` +
+/// `attachments` (Chat Shell pivotu, plan-chat-shell.md WP1).
+pub const V6_UP: &str = include_str!("006_conversations.up.sql");
+pub const V6_DOWN: &str = include_str!("006_conversations.down.sql");
+
 /// Sirali migration tanimlari.
 ///
 /// **Bu vektore yalnizca sona ekleme yapilir.** Araya ekleme ya da silme, daha
@@ -57,11 +62,12 @@ fn definitions() -> Vec<M<'static>> {
         M::up(V3_UP).down(V3_DOWN),
         M::up(V4_UP).down(V4_DOWN),
         M::up(V5_UP).down(V5_DOWN),
+        M::up(V6_UP).down(V6_DOWN),
     ]
 }
 
 /// Bu kod surumunun bekledigi sema surumu (`PRAGMA user_version`).
-pub const EXPECTED_SCHEMA_VERSION: u32 = 5;
+pub const EXPECTED_SCHEMA_VERSION: u32 = 6;
 
 /// Migration kumesi. Testler `validate()` icin bunu kullanir.
 pub fn migrations() -> Migrations<'static> {
@@ -129,6 +135,27 @@ pub fn outcomes_declared_in_schema() -> Vec<String> {
     values_in_check(V5_UP, "outcome IN (")
 }
 
+/// `sessions.modality` CHECK kisitindaki degerleri **sema metninden** okur
+/// (Chat Shell / migration 006). Rust `SessionModality` ve TypeScript
+/// `ConversationSummary['modality']` bu listeye testlerle baglidir.
+pub fn modalities_declared_in_schema() -> Vec<String> {
+    values_in_check(V6_UP, "modality IN (")
+}
+
+/// `messages.role` CHECK kisitindaki degerleri **sema metninden** okur
+/// (migration 006). Rust `MessageRole` ve TypeScript `ChatMessage['role']`
+/// bu listeye testlerle baglidir.
+pub fn message_roles_declared_in_schema() -> Vec<String> {
+    values_in_check(V6_UP, "role IN (")
+}
+
+/// `attachments.origin` CHECK kisitindaki degerleri **sema metninden** okur
+/// (migration 006). Rust `AttachmentOrigin` ve TypeScript
+/// `ChatAttachment['origin']` bu listeye testlerle baglidir.
+pub fn attachment_origins_declared_in_schema() -> Vec<String> {
+    values_in_check(V6_UP, "origin IN (")
+}
+
 /// `... IN ('a', 'b')` listesini ayristirir.
 fn values_in_check(schema: &str, marker: &str) -> Vec<String> {
     let start = schema
@@ -147,6 +174,8 @@ fn values_in_check(schema: &str, marker: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use rusqlite::params;
+
     use super::*;
 
     /// ADR-005 gate: bozuk SQL, eksik virgul, gecersiz CHECK — hepsi burada
@@ -385,6 +414,9 @@ mod tests {
             "idx_tool_events_session_id",
             "idx_tool_events_created_at",
             "idx_tool_events_tool_name",
+            // Chat Shell (006) — konusma uzerinden erisim ekseni.
+            "idx_messages_session_id",
+            "idx_attachments_session_id",
         ] {
             assert!(
                 names.iter().any(|name| name == expected),
@@ -1211,5 +1243,343 @@ mod tests {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("user_version okunmali");
         assert_eq!(version, EXPECTED_SCHEMA_VERSION);
+    }
+
+    // -----------------------------------------------------------------------
+    // Migration 6 — Chat Shell: `sessions.title` / `.modality` + `messages` +
+    // `attachments` (plan-chat-shell.md WP1)
+    // -----------------------------------------------------------------------
+
+    /// Kume metinleri sema metninden okunabiliyor — Rust enum'lari ve
+    /// TypeScript sabitleri bu satirlara baglanacak.
+    #[test]
+    fn the_chat_value_sets_are_readable_from_the_schema_text() {
+        assert_eq!(modalities_declared_in_schema(), ["voice", "text"]);
+        assert_eq!(
+            message_roles_declared_in_schema(),
+            ["user", "assistant", "system", "tool"]
+        );
+        assert_eq!(
+            attachment_origins_declared_in_schema(),
+            ["upload", "project"]
+        );
+    }
+
+    /// 006 oncesindeki oturumlar **oldugu gibi** kalir: baslik NULL, modalite
+    /// `voice`. Bu bir tahmin degil — metin sohbeti bu migration'dan once
+    /// yoktu, yani her eski satir gercekten bir ses oturumu.
+    #[test]
+    fn migration_six_marks_existing_sessions_as_voice_without_a_title() {
+        let mut connection = Connection::open_in_memory().expect("bellek ici DB");
+        connection
+            .pragma_update(None, "foreign_keys", "ON")
+            .expect("FK zorlamasi acilmali");
+        migrations()
+            .to_version(&mut connection, 5)
+            .expect("sema 5 uygulanmali");
+
+        connection
+            .execute(
+                "INSERT INTO sessions (id, started_at, summary, model, created_at, end_reason)
+                 VALUES (1, '2026-08-25T10:00:00Z', 'Ozet.', 'gpt-realtime-2.1', '2026-08-25T10:00:00Z', 'completed')",
+                [],
+            )
+            .expect("sema 5 oturumu yazilmali");
+
+        apply(&mut connection).expect("sema 6'ya yukseltilmeli");
+
+        let (title, modality, summary): (Option<String>, String, Option<String>) = connection
+            .query_row(
+                "SELECT title, modality, summary FROM sessions WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("oturum okunmali");
+        assert_eq!(title, None, "eski oturuma baslik uydurulmus");
+        assert_eq!(modality, "voice");
+        assert_eq!(summary.as_deref(), Some("Ozet."), "ozet degismemeli");
+    }
+
+    #[test]
+    fn the_modality_and_role_and_origin_checks_reject_unknown_values() {
+        let db = fresh_db();
+
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO sessions (started_at, model, created_at, modality)
+                 VALUES ('2026-08-25T10:00:00Z', 'm', '2026-08-25T10:00:00Z', 'video')",
+                [],
+            )
+        })
+        .expect_err("bilinmeyen modality reddedilmeli");
+
+        let session_id = insert_session(&db);
+
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO messages (session_id, role, content, created_at)
+                 VALUES (?1, 'developer', 'merhaba', '2026-08-25T10:00:00Z')",
+                params![session_id],
+            )
+        })
+        .expect_err("bilinmeyen role reddedilmeli");
+
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO attachments (session_id, file_name, origin, content, created_at)
+                 VALUES (?1, 'a.txt', 'indirme', 'x', '2026-08-25T10:00:00Z')",
+                params![session_id],
+            )
+        })
+        .expect_err("bilinmeyen origin reddedilmeli");
+    }
+
+    /// Bos mesaj yazilamaz ("gonderdim ama bos" ile "gondermedim" ayni
+    /// gorunmemeli) ve bos baslik da yazilamaz (NULL kullanilir).
+    #[test]
+    fn empty_content_and_empty_title_are_rejected_by_the_schema() {
+        let db = fresh_db();
+        let session_id = insert_session(&db);
+
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO messages (session_id, role, content, created_at)
+                 VALUES (?1, 'user', '', '2026-08-25T10:00:00Z')",
+                params![session_id],
+            )
+        })
+        .expect_err("bos mesaj reddedilmeli");
+
+        db.with_connection(|conn| {
+            conn.execute(
+                "UPDATE sessions SET title = '' WHERE id = ?1",
+                params![session_id],
+            )
+        })
+        .expect_err("bos baslik reddedilmeli (NULL kullanilmali)");
+
+        db.with_connection(|conn| {
+            conn.execute(
+                "UPDATE sessions SET title = ?2 WHERE id = ?1",
+                params![session_id, "b".repeat(201)],
+            )
+        })
+        .expect_err("tavani asan baslik reddedilmeli");
+    }
+
+    /// Attachment icerigi icin tavan: komut katmanindaki kirpma bir gun
+    /// atlanirsa dosya DB'ye sessizce sizmaz.
+    #[test]
+    fn oversized_attachment_content_is_rejected_by_the_schema() {
+        let db = fresh_db();
+        let session_id = insert_session(&db);
+
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO attachments (session_id, file_name, origin, content, created_at)
+                 VALUES (?1, 'buyuk.txt', 'upload', ?2, '2026-08-25T10:00:00Z')",
+                params![session_id, "x".repeat(32_001)],
+            )
+        })
+        .expect_err("tavani asan icerik reddedilmeli");
+
+        // Bos icerik gecerli: gercekten bos bir dosya eklenmis olabilir.
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO attachments (session_id, file_name, origin, content, created_at)
+                 VALUES (?1, 'bos.txt', 'upload', '', '2026-08-25T10:00:00Z')",
+                params![session_id],
+            )
+        })
+        .expect("bos dosya icerigi kabul edilmeli");
+    }
+
+    /// **Kabul kriteri 2**: konusmayi silmek mesajlari ve eklenen dosyalarin
+    /// icerigini gercekten goturur. `tool_events`in tam tersi davranis ve
+    /// gerekcesi 006'nin bas yorumunda.
+    #[test]
+    fn deleting_a_session_cascades_to_messages_and_attachments() {
+        let db = fresh_db();
+        let session_id = insert_session(&db);
+
+        let (messages, attachments, events) = db
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO messages (session_id, role, content, created_at)
+                     VALUES (?1, 'user', 'merhaba', '2026-08-25T10:00:00Z')",
+                    params![session_id],
+                )?;
+                let message_id = conn.last_insert_rowid();
+                conn.execute(
+                    "INSERT INTO attachments (session_id, message_id, file_name, origin, content, created_at)
+                     VALUES (?1, ?2, 'notlar.md', 'upload', 'gizli olmayan metin', '2026-08-25T10:00:00Z')",
+                    params![session_id, message_id],
+                )?;
+                // Audit satiri ayni oturuma bagli: CASCADE **ona** bulasmamali.
+                conn.execute(
+                    "INSERT INTO tool_events (session_id, tool_name, risk_level, approval_state, created_at)
+                     VALUES (?1, 'read_project_file', 0, 'not_required', '2026-08-25T10:00:00Z')",
+                    params![session_id],
+                )?;
+
+                conn.execute("DELETE FROM sessions WHERE id = ?1", params![session_id])?;
+
+                conn.query_row(
+                    "SELECT (SELECT count(*) FROM messages),
+                            (SELECT count(*) FROM attachments),
+                            (SELECT count(*) FROM tool_events)",
+                    [],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)),
+                )
+            })
+            .expect("sorgu calismali");
+
+        assert_eq!(messages, 0, "mesajlar konusmayla birlikte gitmeliydi");
+        assert_eq!(attachments, 0, "eklenen dosya icerigi DB'de kalmis");
+        assert_eq!(events, 1, "audit defteri konusma silinince silinmemeli");
+    }
+
+    /// Mesaj silinirse ekin **kaydi** kalir, yalnizca bagi kopar: bekleyen bir
+    /// ek ile silinmis bir ek ayni gorunmemeli.
+    #[test]
+    fn deleting_a_message_only_clears_the_attachment_link() {
+        let db = fresh_db();
+        let session_id = insert_session(&db);
+
+        let (remaining, link): (i64, Option<i64>) = db
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO messages (session_id, role, content, created_at)
+                     VALUES (?1, 'user', 'merhaba', '2026-08-25T10:00:00Z')",
+                    params![session_id],
+                )?;
+                let message_id = conn.last_insert_rowid();
+                conn.execute(
+                    "INSERT INTO attachments (session_id, message_id, file_name, origin, content, created_at)
+                     VALUES (?1, ?2, 'notlar.md', 'project', 'metin', '2026-08-25T10:00:00Z')",
+                    params![session_id, message_id],
+                )?;
+                conn.execute("DELETE FROM messages WHERE id = ?1", params![message_id])?;
+                conn.query_row(
+                    "SELECT count(*), max(message_id) FROM attachments",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+            })
+            .expect("sorgu calismali");
+
+        assert_eq!(remaining, 1);
+        assert_eq!(link, None, "kopan referans NULL'a cekilmeli");
+    }
+
+    #[test]
+    fn a_message_cannot_belong_to_an_unknown_session() {
+        let db = fresh_db();
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO messages (session_id, role, content, created_at)
+                 VALUES (4242, 'user', 'merhaba', '2026-08-25T10:00:00Z')",
+                [],
+            )
+        })
+        .expect_err("var olmayan oturum referansi reddedilmeli");
+    }
+
+    #[test]
+    fn chat_timestamps_must_be_utc_iso_8601() {
+        let db = fresh_db();
+        let session_id = insert_session(&db);
+
+        for stamp in [
+            "1756108800",
+            "2026-08-25 10:00:00",
+            "2026-08-25T10:00:00+03:00",
+        ] {
+            db.with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO messages (session_id, role, content, created_at)
+                     VALUES (?1, 'user', 'merhaba', ?2)",
+                    params![session_id, stamp],
+                )
+            })
+            .expect_err("UTC ISO-8601 disi zaman damgasi reddedilmeli");
+        }
+    }
+
+    /// Geri alma metin sohbetini kaldirir ama `sessions` satirlarina
+    /// dokunmaz; ileri sarim tablolari ve kolonlari yeniden kurar.
+    #[test]
+    fn migration_six_can_be_rolled_back_without_losing_the_sessions() {
+        let mut connection = Connection::open_in_memory().expect("bellek ici DB");
+        connection
+            .pragma_update(None, "foreign_keys", "ON")
+            .expect("FK zorlamasi acilmali");
+        apply(&mut connection).expect("migration uygulanmali");
+
+        connection
+            .execute_batch(
+                "INSERT INTO sessions (id, started_at, model, created_at, title, modality)
+                 VALUES (1, '2026-08-31T10:00:00Z', 'gpt-4o-mini', '2026-08-31T10:00:00Z', 'Ilk konusma', 'text');
+
+                 INSERT INTO messages (session_id, role, content, created_at)
+                 VALUES (1, 'user', 'merhaba', '2026-08-31T10:00:01Z');
+
+                 INSERT INTO attachments (session_id, file_name, origin, content, created_at)
+                 VALUES (1, 'notlar.md', 'upload', 'metin', '2026-08-31T10:00:02Z');",
+            )
+            .expect("konusma yazilmali");
+
+        migrations()
+            .to_version(&mut connection, 5)
+            .expect("sema 5'e donulebilmeli");
+
+        let leftovers: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM sqlite_master
+                  WHERE type = 'table' AND name IN ('messages', 'attachments')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("sqlite_master okunmali");
+        assert_eq!(leftovers, 0, "down migration tablolari birakmis");
+
+        let chat_columns: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('sessions')
+                  WHERE name IN ('title', 'modality')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("table_info okunmali");
+        assert_eq!(chat_columns, 0, "down migration kolonlari birakmis");
+
+        let (sessions, model): (i64, String) = connection
+            .query_row(
+                "SELECT (SELECT count(*) FROM sessions), model FROM sessions WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("oturum okunmali");
+        assert_eq!(sessions, 1, "geri alma oturum kaydini silmis");
+        assert_eq!(model, "gpt-4o-mini");
+
+        apply(&mut connection).expect("yeniden ileri sarilmali");
+        let version: u32 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("user_version okunmali");
+        assert_eq!(version, EXPECTED_SCHEMA_VERSION);
+    }
+
+    /// Testlerde kullanilan minimal oturum satiri.
+    fn insert_session(db: &crate::db::AsunaDb) -> i64 {
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO sessions (started_at, model, created_at)
+                 VALUES ('2026-08-25T10:00:00Z', 'gpt-realtime-2.1', '2026-08-25T10:00:00Z')",
+                [],
+            )?;
+            Ok(conn.last_insert_rowid())
+        })
+        .expect("oturum yazilmali")
     }
 }

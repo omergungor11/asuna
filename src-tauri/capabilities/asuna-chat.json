@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "asuna-chat",
+  "description": "Metin sohbeti (Chat Shell) yuzeyi. Alti komut acar: konusma listesi (`conversation_list`), konusmanin mesajlari (`message_list`), konusmanin ek dosya KAYITLARI (`attachment_list` — icerik DONMEZ), mesaj gonderme (`chat_send`), dosya ekleme (`attachment_ingest`) ve guncel proje kokunden dosya ekleme (`attachment_from_project`). Baslik yazma (`session_set_title`) BURADA DEGIL: o bir oturum yazimidir ve asuna-session.json'da durur — oturum yazma yetkisi kalkinca baslik yazimi da kapanir. `message_append` BILEREK BURADA DEGIL: o komut `role` parametresi aldigi icin renderer `assistant` rolunde bir satir yazabilir, yani model soylememisken 'Asuna boyle dedi' uydurulabilirdi; sohbetin tek yazma yolu `chat_send`dir ve asistan satirini yalnizca gercek model yaniti uretir. `chat_send` MODEL SECMEZ, PROMPT KURMAZ, GECMIS SECMEZ: model `ASUNA_CHAT_MODEL`den, sistem talimati versiyonlu sabitten, gecmis DB'den gelir ve OpenAI cagrisi kalici API anahtarinin yasadigi Rust tarafinda yapilir — anahtar webview'e hicbir bicimde gecmez ve hicbir hata varyanti anahtar, API govdesi ya da model ID'si tasimaz. Kullanici mesaji ile asistan yaniti TEK transaction'da yazilir; model cagrisi basarisiz olursa konusmaya hicbir sey yazilmaz. `attachment_ingest` renderer'in `File.text()` ile okudugu METNI alir (yeni bir dosya sistemi plugin'i YOK): dosya ADI merkezi blok listesinden gecer (.env ile baslayan adlar, pem/key uzantilari, id_rsa varyantlari, keychain ve credential dosyalari reddedilir), ad bir yol olamaz, ikili/kontrol-karakteri yogun icerik reddedilir, icerik `redact_sensitive_text` ile maskelenir ve 24 000 karakterde GORUNUR bir isaretle kirpilir; girdi tavani 200 000 karakterdir ve asilirsa kirpilmaz, reddedilir. `attachment_from_project` mutlak yol KABUL ETMEZ ve projeyi SECTIRMEZ: hedef her zaman registry'deki guncel projedir, cozum ASU-049 path sandbox'indan gecer (`..` cozulur, symlink canonicalize edilir, kok disina cikan yol tipli olarak reddedilir) ve konusmanin projesi guncel proje degilse istek durust bir hatayla reddedilir. Eklenen dosyalarin icerigi renderer'a GERI DONMEZ: `attachment_list` yalnizca ad/tur/boyut/kaynak tasir. Kapsam ana pencere ile sinirlidir; wildcard izin yoktur.",
+  "platforms": ["macOS"],
+  "windows": ["main"],
+  "permissions": [
+    "allow-conversation-list",
+    "allow-message-list",
+    "allow-attachment-list",
+    "allow-chat-send",
+    "allow-attachment-ingest",
+    "allow-attachment-from-project"
+  ]
+}

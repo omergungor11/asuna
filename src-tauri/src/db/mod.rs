@@ -22,8 +22,11 @@
 //! calisir; birim testleri gercek uygulama veri dizinine **hicbir zaman**
 //! yazmaz.
 
+pub mod attachment_repository;
 pub mod clock;
+pub mod conversation_repository;
 pub mod memory_repository;
+pub mod message_repository;
 pub mod migrations;
 pub mod model;
 pub mod project_repository;
@@ -34,9 +37,11 @@ pub mod store_error;
 pub mod tool_event_repository;
 pub mod transcript;
 
+pub use conversation_repository::ConversationSummary;
 pub use migrations::EXPECTED_SCHEMA_VERSION;
 pub use model::{
-    MemoryKind, MemoryRecord, ProjectRecord, ProjectStatus, SessionEndReason, SessionRecord,
+    AttachmentOrigin, AttachmentRecord, MemoryKind, MemoryRecord, MessageRecord, MessageRole,
+    ProjectRecord, ProjectStatus, SessionEndReason, SessionModality, SessionRecord,
     ToolApprovalState, ToolEventRecord, ToolOutcome, ToolRiskLevel,
 };
 pub use retrieval::{build_bootstrap_context, SessionBootstrapContext};

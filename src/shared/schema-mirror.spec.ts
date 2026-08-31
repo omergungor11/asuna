@@ -29,7 +29,11 @@ import { describe, expect, it } from 'vitest';
 import { toCamelCase } from './contract';
 import { MEMORY_COLUMNS_NOT_MIRRORED, MEMORY_KINDS, MEMORY_RECORD_KEYS } from './memory';
 import { PROJECT_RECORD_KEYS, PROJECT_STATUSES } from './project';
-import { SESSION_END_REASONS, SESSION_RECORD_KEYS } from './session';
+import {
+  SESSION_COLUMNS_NOT_MIRRORED,
+  SESSION_END_REASONS,
+  SESSION_RECORD_KEYS,
+} from './session';
 import {
   TOOL_APPROVAL_STATES,
   TOOL_EVENT_RECORD_KEYS,
@@ -53,6 +57,7 @@ const MIGRATION_FILES = [
   '003_projects.up.sql',
   '004_tool_events.up.sql',
   '005_tool_event_outcome.up.sql',
+  '006_conversations.up.sql',
 ] as const;
 
 function readMigration(name: string): string {
@@ -173,20 +178,49 @@ describe('memories tablosu <-> src/shared/memory.ts', () => {
 });
 
 describe('sessions tablosu <-> src/shared/session.ts', () => {
-  /** `ALTER TABLE ... ADD COLUMN` ile eklenen kolonlar dahil (ASU-033). */
+  /** `ALTER TABLE ... ADD COLUMN` ile eklenen kolonlar dahil (ASU-033, 006). */
   it('kolon adlari sozlesme alanlariyla birebir esleisiyor (sira dahil)', () => {
-    expect(columnsOf('sessions').map(toCamelCase)).toEqual([...SESSION_RECORD_KEYS]);
+    const mirrored = columnsOf('sessions').filter(
+      (column) => !(SESSION_COLUMNS_NOT_MIRRORED as readonly string[]).includes(column),
+    );
+
+    expect(mirrored.map(toCamelCase)).toEqual([...SESSION_RECORD_KEYS]);
+  });
+
+  /**
+   * Istisna listesi gercekten var olan bir kolonu tarif etmeli; yoksa
+   * "unuttugumuz kolon" ile "bilerek disarida biraktigimiz kolon" ayrimi
+   * anlamini kaybeder (`memories` ile ayni test).
+   */
+  it('sozlesme disi birakilan kolonlar semada gercekten var', () => {
+    const columns = columnsOf('sessions');
+    for (const column of SESSION_COLUMNS_NOT_MIRRORED) {
+      expect(columns).toContain(column);
+    }
+    expect([...SESSION_COLUMNS_NOT_MIRRORED]).toEqual(['title', 'modality']);
   });
 
   /**
    * `end_reason` 002'de `ADD COLUMN` ile geldi, 003'te tablo yeniden
-   * yaratilirken govdeye **sonda** yazildi. Ikisi de tablonun sonunu gosterir;
-   * ayna sirasi degismedi.
+   * yaratilirken govdeye **sonda** yazildi; 006'nin `title`/`modality`si onun
+   * **arkasina** eklendi (`ADD COLUMN` her zaman sona koyar). Yani `end_reason`
+   * artik tablonun degil, **aynanin** son kolonu — Rust `SESSION_COLUMNS` ve
+   * TypeScript `SESSION_RECORD_KEYS` sirasi bu.
    */
-  it('ADD COLUMN ile gelen kolon yeniden yaratmadan sonra da sonda', () => {
+  it('aynanin son kolonu end_reason, tablonun son kolonu 006"nin modality"si', () => {
     const columns = columnsOf('sessions');
     expect(columns).toContain('end_reason');
-    expect(columns.at(-1)).toBe('end_reason');
+    expect(columns.at(-1)).toBe('modality');
+
+    const mirrored = columns.filter(
+      (column) => !(SESSION_COLUMNS_NOT_MIRRORED as readonly string[]).includes(column),
+    );
+    expect(mirrored.at(-1)).toBe('end_reason');
+  });
+
+  /** 006: modalite kumesi de semadan okunuyor (`chat.ts` ile bagli). */
+  it('modality degerleri semadaki CHECK kisitiyla birebir', () => {
+    expect(valuesInCheck('modality IN (')).toEqual(['voice', 'text']);
   });
 
   it('endReason degerleri semadaki CHECK kisitiyla birebir', () => {
@@ -318,9 +352,15 @@ describe('tool_events tablosu <-> src/shared/tool-event.ts', () => {
     expect(declaration).toBeDefined();
     expect(declaration).toContain('ON DELETE SET NULL');
 
-    // Hicbir DDL satiri silmeyi yayan bir eylem tanimlamasin. Yorum satirlari
-    // atiliyor: 004'un bas yorumu tam da bu karari anlatirken ifadeyi geciyor.
-    const ddl = schema
+    // Kontrol **bu tablonun** govdesiyle sinirli. Sema genelinde CASCADE
+    // aramak artik yanlis olurdu: migration 006 `messages` ve `attachments`
+    // icin CASCADE'i BILEREK kullaniyor (konusmayi silen kullanici mesajlarini
+    // da silmis olmali). Iki karar birbirinin tersi ve ikisi de dogru; bu test
+    // yalnizca audit defterini koruyor. Yorum satirlari atiliyor: 004'un bas
+    // yorumu tam da bu karari anlatirken ifadeyi geciyor.
+    const body = schema.slice(lastCreateOf('tool_events'));
+    const ddl = body
+      .slice(0, body.indexOf(') STRICT;'))
       .split('\n')
       .filter((line) => !line.trim().startsWith('--'))
       .join('\n');

@@ -80,6 +80,24 @@ export const SESSION_RECORD_KEYS = [
   'endReason',
 ] as const;
 
+/**
+ * Semada olup bu sozlesmeye **bilerek** alinmayan kolonlar
+ * (`MEMORY_COLUMNS_NOT_MIRRORED` ile ayni istisna disiplini).
+ *
+ * `title` ve `modality` migration 006 (Chat Shell) ile geldi ve buraya
+ * alinmiyor — bu bir unutma degil, iki gerekcesi olan bir karar:
+ *
+ * 1. [`SESSION_RECORD_KEYS`] `session_start` / `session_finalize` yanitinin
+ *    tamamini tarif ediyor ve [`parseSessionRecord`] **beklenmeyen alan varsa
+ *    hata** veriyor. Rust tarafi bu iki kolonu `SessionRecord`'a almadi
+ *    (`db::model::SESSION_COLUMNS_NOT_LOADED`); listeye eklemek, gelmeyecek
+ *    bir alani zorunlu kilardi.
+ * 2. Iki kolonu okuyan tek yuzey konusma listesidir ve onun kendi tipi var:
+ *    `src/shared/chat.ts` → `ConversationSummary`. Ayni veriyi iki sozlesmede
+ *    tasimanin faydasi yok.
+ */
+export const SESSION_COLUMNS_NOT_MIRRORED = ['title', 'modality'] as const;
+
 export class SessionContractError extends ContractError {
   public override readonly name = 'SessionContractError';
 }

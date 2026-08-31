@@ -11,6 +11,7 @@ use tauri::Manager;
 
 #[cfg(test)]
 mod acl_regression;
+pub mod chat;
 pub mod commands;
 pub mod config;
 pub mod db;
@@ -99,6 +100,10 @@ pub fn run() {
         // onbellek her cagride bos olur ve `project_context` her seferinde
         // diski yeniden okurdu (ASU-041'in TTL + parmak izi tasarimi olu kalirdi).
         .manage(projects::context::ProjectContextService::new())
+        // Chat Shell: metin sohbeti proxy'si. Kalici API anahtari bu process'te
+        // kalir; `chat_send` modeli/prompt'u renderer'dan ALMAZ. `Arc` cunku
+        // HTTP istemcisi komut cagrilari arasinda paylasilir.
+        .manage(std::sync::Arc::new(chat::ChatService::new()))
         // Webview'e acilan her komut ayri bir yetki yuzeyidir ve kendi
         // capability kaydiyla birlikte eklenir (`capabilities/`).
         .invoke_handler(tauri::generate_handler![
@@ -133,7 +138,20 @@ pub fn run() {
             projects::listing::list_project_dir,
             projects::editor::open_project,
             privacy::get_privacy_settings,
-            privacy::set_privacy_settings
+            privacy::set_privacy_settings,
+            // Chat Shell: metin sohbeti (capabilities/asuna-chat.json).
+            // `chat_send` model secmez, prompt kurmaz; OpenAI cagrisi Rust
+            // tarafinda yapilir. `message_append` BILEREK kayitli degil:
+            // `role` parametresi aldigi icin renderer "assistant" rolunde
+            // mesaj uydurabilirdi — mesajlar yalnizca `chat_send`in
+            // transaction'i uzerinden yazilir.
+            db::conversation_repository::conversation_list,
+            db::message_repository::message_list,
+            db::attachment_repository::attachment_list,
+            db::session_repository::session_set_title,
+            chat::chat_send,
+            chat::attachment_ingest,
+            chat::attachment_from_project
         ])
         .build(app_context())
         .expect("Tauri uygulamasi baslatilamadi");

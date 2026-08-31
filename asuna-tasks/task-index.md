@@ -15,9 +15,28 @@
 | 4 | Project Context | 8 | 7 | 0 | 0 | 1 | 0 |
 | 5 | One Useful Action (Tools) | 14 | 12 | 0 | 0 | 2 | 0 |
 | 6 | Focus Recovery (MVP) | 8 | 0 | 0 | 0 | 8 | 0 |
-| **Total** | | **72** | **52** | **0** | **0** | **20** | **0** |
+| 7 | Chat Shell (pivot) | 8 | 7 | 0 | 0 | 1 | 0 |
+| **Total** | | **80** | **59** | **0** | **0** | **21** | **0** |
 
-**Progress**: 52/72 (72%)
+**Progress**: 59/80 (74%)
+
+> **Phase 7 — Chat Shell pivotu kapandi (2026-08-31): ASU-072..078 DONE.** Kullanici karariyla
+> Asuna ChatGPT/Claude-tarzi bir **kalici konusma** arayuzune donustu; ses silinmedi, **voice mode**
+> olarak kaldi (`VoicePanel` asla unmount edilmez). Karar ve gerekce: `asuna-docs/DECISIONS.md`
+> → **ADR-008** (plan dosyasi bunu "ADR-006" diye anar — numara cakismasi, dogrusu ADR-008).
+> Uygulanan: migration 006 (`messages` + `attachments`, `sessions.title`/`modality`, CASCADE),
+> Rust `chat_send` proxy'si (`OPENAI_API_KEY` Rust'ta kalir; **zorunlu** yeni env
+> `ASUNA_CHAT_MODEL`; non-streaming; kullanici + asistan mesaji **tek transaction**),
+> `attachment_ingest` (ad blocklist + `redact_sensitive_text` + 24k kirpma) ve
+> `attachment_from_project` (mevcut sandbox'li `projects::files::read` cekirdegi, yalnizca **aktif**
+> proje), yeni capability `asuna-chat.json` (`message_append` **bilerek kayitsiz** — renderer
+> asistan mesaji uyduramaz; `session_set_title` `asuna-session.json`'da kalir), TS sozlesmesi
+> (`src/shared/chat.ts` + `chat-service.ts`) ve chat kabugu (sidebar + tarih gruplu konusma listesi
+> + chat-view + composer + proje dosya secici).
+> Gate 3 review (opus reviewer): **0 CRITICAL**, 1 HIGH (ses oturumu rozeti) + 4 MEDIUM + 7 LOW;
+> HIGH/MEDIUM'lar kapatildi, secilen LOW'lar `backlog.md`'ye tasindi. Tester +70 test ekledi ve
+> redaksiyon desen bosluklarini (PEM / `AKIA` / `ghp_` / JWT) buldu — kapatildi.
+> **736+ Rust / 1091+ TS** testi yesil. Acik: **ASU-079** (M6 kabul testi — kullanicida).
 
 > **Phase 5 Wave D kapandi (2026-08-31): ASU-067..070 DONE.** M4 canli testinde gorulen gercek
 > bosluklar icin dort proje farkindaligi tool'u: `list_projects` (risk 0), `list_project_files`
@@ -75,6 +94,7 @@
 | M3 | **Hatiriyor** — oturum kapanir, uygulama yeniden baslar, onceki oturumun karari hatirlanir | 3 | ASU-038 | PENDING |
 | M4 | **Projeleri taniyor + ilk tool** — hangi projede oldugunu soyleyebiliyor, onayli tool calistiriyor, audit'e yaziyor | 4-5 | ASU-046 + ASU-055 + ASU-071 | PENDING |
 | M5 | **"Beni toparla" calisiyor (MVP)** — gercek proje state'inden tek somut sonraki adim uretiliyor | 6 | ASU-062 (PROJECT.md Bolum 33 checklist) | PENDING |
+| M6 | **Metinle de calisiyor** — konusma yaz, yanit gelir, uygulama restart edilir, konusma ve mesajlar yerinde; dosya eklenir (`.env` reddedilir, secret redakte edilir); bir projede konusma baslatilir; ses voice mode olarak calismaya devam eder | 7 | ASU-079 | PENDING |
 
 ## Risks
 
@@ -168,8 +188,24 @@
 | ASU-069 | `register_project` tool (risk 2, her modda onay) | 5 | M | backend | DONE |
 | ASU-070 | `set_current_project` tool (risk 1, onayli) | 5 | S | backend | DONE |
 | ASU-071 | **Wave D sesli kabul testi** — proje farkindaligi tool'lari | 5 | S | test | PENDING |
+| ASU-072 | Migration 006 — `messages` + `attachments` tablolari, `sessions.title`/`modality` | 7 | M | db | COMPLETED |
+| ASU-073 | Rust chat proxy (`chat_send`) + `ASUNA_CHAT_MODEL` konfigurasyonu | 7 | L | backend | COMPLETED |
+| ASU-074 | TS sozlesmesi (`shared/chat.ts`) + `chat-service.ts` | 7 | M | backend | COMPLETED |
+| ASU-075 | Chat kabugu UI — sidebar + chat-view + composer + proje dosya secici | 7 | L | frontend | COMPLETED |
+| ASU-076 | ACL / capability kayitlari (`asuna-chat.json`, build.rs manifest, lib.rs) | 7 | S | backend | COMPLETED |
+| ASU-077 | Test boslugu kapatma — CASCADE, ek sahipligi, redaksiyon desenleri, composer | 7 | M | test | COMPLETED |
+| ASU-078 | Gate 3 review + duzeltmeler (0 CRITICAL / 1 HIGH / 4 MEDIUM / 7 LOW) | 7 | M | review | COMPLETED |
+| ASU-079 | **M6 kabul testi** — restart sonrasi konusma gecmisi + dosya ekleme + projede konusma | 7 | M | test | PENDING |
 
 ---
+
+> **ASU-079** — kabul kriterleri: (1) yeni konusma ac → mesaj yaz → yanit gelir → uygulama restart →
+> konusma listede, mesajlar yerinde; (2) konusmayi sil → mesajlar ve ekler DB'den gercekten gider;
+> (3) `.env` icerikli bir dosya eklenince secret'lar redakte edilmis saklanir, `.env` **adi** reddedilir;
+> (4) proje disi mutlak yol ile proje dosyasi ekleme reddedilir; (5) bir projede konusma baslatilir ve
+> Asuna proje baglamini gorur; (6) mikrofon butonu voice mode'u acar, ses yolu bozulmamistir.
+> **Durum notu: proje askida — kullanici donunce** (2026-08-31; kullanici projeyi askiya aldigini
+> bildirdi, bu test devam karari verilirse ilk adimdir).
 
 > **ASU-066** — uygulama Cmd+Q ile kapatildiginda `session_finalize` (oturum ozeti + hafiza
 > cikarimi) tamamlanmadan process olebilir. Session 1 kapanis notunda **baslik olarak** kaydedildi;

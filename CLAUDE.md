@@ -11,12 +11,15 @@ tool katmanı üzerinden çalıştırır. Amaç "AI'a gitmek" değil; AI'ın ort
 
 ```
 wake → voice conversation → contextual help → memory/tool use → safe session close → idle
+     ↳ metin girişi (chat shell) aynı çekirdeği kullanır: hafıza, proje bağlamı, tool + onay
 ```
 
-**Prime directive: Asuna generic chatbot UI değildir.** Sohbet penceresi, mesaj balonu, "send"
-butonu merkezli bir arayüz kurma. Ses birincildir; UI'nin işi sistemi güvenilir göstermektir
-(listening / connected / speaking / tool usage / approval / error / current project). Voice loop
-çalışmadan büyük dashboard inşa etme.
+**Prime directive: voice loop korunur.** Asuna artık ChatGPT/Claude-tarzı **kalıcı konuşma**
+arayüzüdür (konuşma listesi + mesaj akışı + dosya ekleme + projede konuşma) ve ses bunun içinde
+bir **voice mode**'dur — eski "generic chatbot UI kurma" yasağı ADR-008 ile kaldırıldı. Yerine
+geçen kural: **`VoicePanel` asla unmount edilmez**, ses yolu hiçbir UI değişikliğinde bozulmaz;
+UI durumu güvenilir göstermeye devam eder (listening / connected / speaking / tool usage /
+approval / error / current project). Dashboard'a dönüşme hâlâ non-goal (R7).
 
 - **GitHub**: https://github.com/omergungor11/asuna (public, MIT)
 
@@ -49,18 +52,23 @@ Bu dosya bir **referans kartı**; spec kopyası değil. Detay için `PROJECT.md`
 
 ## Mevcut Durum
 
-**Phase 0 + 1 + 3 (kod) tamam.** M1 geçti (2026-08-24, canlı test). Phase 3 memory katmanı
-(ASU-029..037 + ASU-064/021) yazıldı, Gate 3 review'dan geçti (1 CRITICAL + 8 bulgu düzeltildi).
-296 Rust + 529 TS testi yeşil.
+**Phase 0 + 1 + 3 + 4 + 5 (kod) tamam; Phase 7 — Chat Shell pivotu (kod) tamam** (2026-08-31,
+ADR-008). Metin konuşması kalıcı: migration 006 (`messages` / `attachments`, `sessions.title` +
+`modality`), Rust `chat_send` proxy'si, ChatGPT-tarzı kabuk. Gate 3: 0 CRITICAL.
+736+ Rust / 1091+ TS testi yeşil.
 
 Sırada:
 
 | Ne | Durum |
 |----|-------|
-| ASU-038 — M3 kabul testi ("restart sonrası hatırlama") | Kullanıcının sesli testi bekleniyor |
+| ASU-079 — M6 kabul testi (restart sonrası konuşma geçmişi + dosya ekleme + projede konuşma) | Kullanıcıda; **proje askıda** |
+| ASU-038 / ASU-046 / ASU-055 / ASU-071 — sesli kabul testleri | Kullanıcının tek seanslık test kuyruğu |
 | Phase 2 — wake word | ASU-022+ bloklu: model + ifade seçimi ADR-004'te AÇIK — kullanıcının 30 dk gerçek mikrofon testi (`spike/asu-008b-kws`) ilk adım |
 | Gecikme A/B | `ASUNA_VAD_EAGERNESS=high` aktif; WARP kapalı deneme önerisi açık |
-| Phase 4 — project context | Phase 3 kabulünden sonra |
+
+> **Zorunlu env**: `ASUNA_CHAT_MODEL` (örn. `gpt-4o-mini`) — eksikse uygulama açılışta
+> `ConfigError::Missing` ile durur. `ASUNA_REALTIME_MODEL` / `ASUNA_SUMMARY_MODEL` /
+> `ASUNA_EDITOR_COMMAND` ile aynı desen; kullanıcı kendi `.env`'ine ekler.
 
 Task listesi ve ilerleme → `asuna-tasks/task-index.md`
 
@@ -94,7 +102,10 @@ Bu concern'ler ayrı kalır ve birbirinin içine sızmaz:
 - **React componentleri doğrudan shell komutu çalıştırmaz, doğrudan DB sorgusu atmaz.**
   UI → servis → tool/registry → implementation zinciri korunur.
 - **Model config merkezi.** `ASUNA_REALTIME_MODEL=gpt-realtime-2.1`
-  (dev/ekonomi: `gpt-realtime-2.1-mini`). Model ID'leri asla hard-code edilmez.
+  (dev/ekonomi: `gpt-realtime-2.1-mini`), metin chat için `ASUNA_CHAT_MODEL`.
+  Model ID'leri asla hard-code edilmez.
+- **Metin chat de Rust'tan geçer.** `chat_send` (OpenAI çağrısı + mesaj yazımı tek transaction'da);
+  renderer'ın mesaj yazma yolu yoktur — `message_append` bilerek ACL'e kaydedilmedi (ADR-008).
 
 ### Tool kuralları
 

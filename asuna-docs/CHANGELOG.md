@@ -17,6 +17,72 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added (2026-08-31 — Phase 7: Chat Shell pivotu; ASU-079 / M6 kabul testi bekliyor)
+
+- **Kalici metin konusmasi** — ChatGPT/Claude-tarzi kabuk: sol sidebar'da tarih gruplu konusma
+  listesi (Bugun / Dun / Son 7 gun / Daha eski), orta alanda mesaj akisi, altta composer
+  (Enter = gonder, Shift+Enter = yeni satir). Konusma listesi `session_list`e dokunmadan ayri bir
+  komuttan (`conversation_list`) beslenir; baslik ilk kullanici mesajindan turetilir (ASU-075)
+- Migration `006_conversations` (sema surumu 6): yeni `messages` ve `attachments` tablolari
+  (STRICT), `sessions.title` + `sessions.modality` (`voice` varsayilan). Iki tablo da
+  `session_id` uzerinden **ON DELETE CASCADE** — konusmayi silmek mesajlari ve ekleri gercekten
+  goturur; `session_delete` / `session_clear_all` sozlesmesi degismedi (ASU-072)
+- `chat_send` komutu (Rust): son 40 mesaj + secilen ekler ile OpenAI chat completions cagrisi,
+  **non-streaming**. Kullanici mesaji ve asistan yaniti **tek transaction**'da yazilir — yarim
+  konusma diske dusmez. Yeni **zorunlu** env `ASUNA_CHAT_MODEL` (`.env.example`'da ornek
+  `gpt-4o-mini`); `OPENAI_API_KEY` renderer'a hic girmez (ASU-073)
+- `attachment_ingest` komutu: renderer File API ile okudugu **metni** gonderir (yeni Tauri plugin
+  yok). Rust tarafi dosya **adini** blocklist'ten gecirir (`.env*`, `*.pem`, `*.key`, `id_rsa*`,
+  `*.p12`, `*.keychain`), icerige `redact_sensitive_text` uygular ve 24 000 karaktere kirpar
+  (kirpildigi ciktida yazili). Binary / UTF-8 disi icerik durustce reddedilir (ASU-073)
+- `attachment_from_project` komutu: mevcut sandbox'li `projects::files::read` **cekirdegi**
+  cagrilir — path sandbox, hassas dosya blocklist'i, redaksiyon ve kirpma yeniden kullanilir,
+  kopyalanmaz. V1 kurali: konusmanin projesi **aktif** proje degilse durust hata (ASU-073)
+- `src/shared/chat.ts` + `src/asuna/agent/chat-service.ts`: renderer ile Rust arasindaki tek
+  sozlesme; strict parse, `any` yok. React bilesenleri `invoke` cagirmaz (ASU-074)
+- Yeni capability `asuna-chat.json` — chat komutlari kendi ACL yuzeyinde; `session_set_title`
+  oturum yuzeyinde (`asuna-session.json`) kalir (ASU-076)
+- Composer'da atac butonu + konusma bir projedeyse "Projeden dosya ekle" secicisi (mevcut
+  `list_project_dir` ile gezinilir); mesajlarin ustunde ek cipleri (dosya adi + boyut) (ASU-075)
+
+### Changed (2026-08-31 — Phase 7)
+
+- **Prime directive degisti (ADR-008, karar veren: kullanici).** CLAUDE.md'deki "Asuna generic
+  chatbot UI degildir" yasagi kaldirildi; yerine **"voice loop korunur — `VoicePanel` asla
+  unmount edilmez"** kurali geldi. Ses silinmedi, ChatGPT'deki gibi bir **voice mode**'a donustu
+  (mikrofon butonu mevcut Realtime akisini acar). Gerekce: eski kural bir *sira* kuraliydi
+  ("voice loop kanitlanmadan buyuk UI insa etme") ve o sira tamamlandi; kalan bosluk gunluk
+  kullanimda gorundu — sesle soylenen sey hicbir yerde durmuyor, uzun metin yapistirilamiyor,
+  dosya verilemiyordu
+- **Konusma = mevcut `sessions` satiri**, yeni bir "conversations" tablosu acilmadi: ozet,
+  `end_reason`, `project_id` ve hafiza cikariminin `source_session_id`'si zaten oraya bagli.
+  `session_list` yanit bicimi degistirilmedi (TS tarafi strict parse ediyor) (ASU-072)
+- `session_start` opsiyonel `modality` parametresi aldi (varsayilan `voice`) ve
+  `session_set_title` komutu eklendi — mevcut cagiranlar kirilmadi (ASU-072)
+
+### Security (2026-08-31 — Phase 7 / Gate 3 review)
+
+- **`message_append` bilerek ACL'e kaydedilmedi** (ASU-076): komut Rust tarafinda var ve chat
+  akisi kullaniyor, ama `build.rs` manifestinde/capability'de yok — yani renderer'dan
+  cagrilamaz. Aksi halde UI, model hic cagrilmadan `role: 'assistant'` bir satir yazabilirdi.
+  ASU-050'deki `record_tool_event` sinirinin (append-only, ozet Rust'ta) devami
+- **Redaksiyon siniri konusmanin disinda cizildi** (Gate 3 L1): kullanicinin yazdigi metin ve
+  asistan yaniti **redakte edilmez** — kullanicinin bilerek yazdigi seyi maskelemek onu bozar
+  ("sk-... ile deniyorum" satirini gizlemek kullaniciyi cevapsiz birakir). Dosya girisi tersine
+  redakte **edilir**: kullanici dosyayi icerigini okumadan ekler. Not: konusma metni diskte duz
+  durur (SQLCipher backlog'da)
+- **Redaksiyon desenleri genisletildi** (ASU-077, tester bulgusu): PEM blok basliklari,
+  `AKIA...` (AWS access key), `ghp_...` (GitHub token) ve JWT desenleri `redact_sensitive_text`
+  kapsaminda degildi — eklendi, testlendi
+- **`chat_send` `modality='voice'` oturumunu reddeder** (ADR-008): "sesli konusmaya metinle devam
+  etme" (modalite terfisi) bilincli olarak kapsam disi — ses oturumunun transcript'i opsiyonel
+  oldugu icin terfi edilen konusmanin gecmisi bazen bos olurdu ve model kullanicinin az once
+  konustugunu gormeden cevap verirdi. Sessiz basarisizlik yerine durust ret
+- **Ek sahipligi dogrulanir**: `chat_send`e verilen `attachment_ids` o konusmaya ait degilse
+  cagri reddedilir; baska bir konusmanin eki modele gecemez (ASU-073)
+- Gate 3 sonucu: **0 CRITICAL**, 1 HIGH (ses oturumu rozeti eksikti) + 4 MEDIUM + 7 LOW.
+  HIGH/MEDIUM kapatildi; secilen LOW'lar `asuna-tasks/backlog.md`'ye tasindi (ASU-078)
+
 ### Added (2026-08-31 — Phase 5: Tools, Wave D — proje farkindaligi; ASU-071 sesli kabul bekliyor)
 
 - `list_projects` tool (risk 0): kayitli projeleri ad/kimlik/yol/durum ile listeler, guncel

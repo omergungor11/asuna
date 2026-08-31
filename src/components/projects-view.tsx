@@ -41,7 +41,7 @@ import type { ProjectAddOutcome, ProjectRecord, ProjectRemoveOutcome } from '../
 import type { SessionListItem, SessionPage } from '../shared/session';
 
 import { describeMemoryError } from './memory-text';
-import { ProjectDetail } from './project-detail';
+import { ProjectDetail, type ProjectChatSection } from './project-detail';
 import { ProjectItem } from './project-item';
 import {
   describeAddOutcome,
@@ -95,10 +95,17 @@ interface DetailState {
 
 export interface ProjectsViewProps {
   readonly port?: ProjectsViewPort;
+  /**
+   * Projedeki metin konusmalari (plan-chat-shell.md WP3). Sekme bu veriyi
+   * kendi cekmez: konusma listesi kabukta tek yerde yasar, ayni liste kenar
+   * cubugunda da gorunur — iki kopya iki farkli gercek uretirdi.
+   */
+  readonly chat?: ProjectChatSection;
 }
 
 export function ProjectsView({
   port = DEFAULT_PROJECTS_PORT,
+  chat,
 }: ProjectsViewProps): React.JSX.Element {
   const [projects, setProjects] = useState<readonly ProjectRecord[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -392,6 +399,7 @@ export function ProjectsView({
         lastSessionError={
           detail !== null && detail.key === detailKey ? detail.lastSessionError : null
         }
+        {...(chat === undefined ? {} : { chat })}
       />
     </section>
   );

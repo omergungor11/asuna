@@ -47,7 +47,9 @@
       (PROJECT.md Bolum 17).
 - [ ] **`get_git_status` / `list_recent_project_activity` tool'lari (risk 0)** — Phase 4'te veri
       katmani hazir olacak, tool olarak acilmasi ayri is.
-- [ ] **Konusma gecmisi UI'si** — Oturum listesi, gecmis transcript'lerde arama (PROJECT.md Bolum 21).
+- [x] **Konusma gecmisi UI'si** — Oturum listesi, gecmis transcript'lerde arama (PROJECT.md Bolum 21).
+      **Buyuk kismi Phase 7 / ADR-008 ile geldi** (2026-08-31): sidebar'da tarih gruplu kalici
+      konusma listesi. **Kalan**: gecmis konusmalarda/transcript'lerde **arama**.
 - [ ] **Global kisayol ile aktivasyon** — Wake word'e alternatif; gurultulu ortam veya toplanti icin.
 - [ ] **Maliyet paneli** — Gunluk/haftalik tahmini harcama, oturum basina maliyet, butce uyarisi
       (PROJECT.md Bolum 28). MVP'de sadece ham metadata toplaniyor.
@@ -97,6 +99,47 @@
 - [ ] **Ekran/uygulama duzeyi farkindalik ("Jarvis" katmani)** — kullanicinin o an ne yaptigini
       (aktif uygulama, pencere, belki ekran icerigi) bilme. Buyuk gizlilik/tasarim karari; proje
       farkindaligi (Wave D toollari) bunun guvenli ilk dilimi. (2026-08-31)
+
+### Chat Shell (Phase 7 / ADR-008) sonrasi acilanlar — 2026-08-31
+
+- [ ] **Streaming chat yaniti** — v1 bilerek **non-streaming**: `chat_send` kullanici mesajini ve
+      asistan yanitini tek transaction'da yaziyor, akan yanit icin o islem sinirinin bolunmesi
+      gerekir (yarim mesaj diske dusme riski). Algilanan gecikmenin en gorunur kaynagi.
+      Kaynak: ADR-008 gerekcesi.
+- [ ] **Tek mesaj silme** (Chat Shell Gate 3 / L1) — bugun yalnizca **konusmanin tamami** silinebiliyor
+      (CASCADE). Kullanici yanlislikla hassas bir sey yazdiginda tek cikis yol butun konusmayi
+      silmek; mesaj bazli silme (ve ekli attachment'in birlikte gitmesi) ayri bir komut + UI isi.
+- [ ] **Kalici mini ses durumu gostergesi** (Chat Shell Gate 3 / H1'in devami) — chat artik
+      **varsayilan ekran** oldugu icin acik bir Realtime oturumu kullanicinin bakmadigi bir sekmede
+      kalabiliyor. Rozet HIGH olarak kapatildi; kalici (her ekranda gorunen, tiklaninca voice
+      mode'a goturen) mini gosterge ayri is. Phase 2 tray/overlay isleriyle ayni yuzey.
+- [ ] **`redacted` bayraginin UI'a tasinmasi** (Chat Shell Gate 3 / L4) — attachment kaydinda
+      redaksiyon yapilip yapilmadigi biliniyor ama ek cipinde gosterilmiyor; kullanici Asuna'ya
+      giden metnin degistigini gormuyor. `truncated` ile birlikte tek bir "bu dosya kirpildi /
+      maskelendi" isareti.
+- [ ] **Ek blok sinirlayicisina nonce** (Chat Shell Gate 3 / L2) — prompt icinde ekler sabit bir
+      metin sinirlayicisiyla cerceveleniyor; dosya icerigi ayni sinirlayiciyi tasirsa cerceveyi
+      taklit edebilir (prompt injection yuzeyi, kritik degil cunku tool cagrisi metinden
+      turetilmiyor). Cagri basina rastgele nonce ile kapanir.
+- [ ] **Konusma basina toplam ek tavani** (Chat Shell Gate 3 / L5) — ek basina 24 000 karakter
+      siniri var, **toplam** yok: cok sayida ek eklenen bir konusma her `chat_send`'de buyuk bir
+      istem uretir (maliyet + baglam penceresi). Konusma bazli tavan + kullaniciya gorunur sayac.
+- [ ] **Konusmanin projesine gore kapsamli dosya secici** (Chat Shell V1 kisiti) —
+      `attachment_from_project` bugun yalnizca **aktif** projede calisiyor; baska bir projedeki
+      konusmada "once bu projeyi aktif yap" hatasi doner. Dogru cozum secicinin konusmanin
+      `projectId`'sine gore cozmesi, ki bu `projects::files::read`in aktif-proje varsayimina
+      dokunmayi gerektiriyor (sandbox mantigi — Gate 3 review sart).
+- [ ] **Attachment iptal / detach komutu** — ek eklendikten sonra gonderilmeden vazgecmek
+      (composer'dan cikarmak) ve gonderilmis bir ekin kaydini kaldirmak icin komut yok; bugun
+      kayit `attachment_ingest` aninda olusuyor.
+- [ ] **`project-directory-source.ts` servis katmanina tasinmasi** (Chat Shell Gate 3 / L7) —
+      dosya `src/app/` altinda duruyor ama isi UI degil, veri kaynagi. Yeri
+      `src/asuna/projects/` (mimari sinir: `components` → servis → komut). Mekanik tasima + import
+      guncellemesi.
+- [ ] **Voice → text modalite terfisinin yeniden degerlendirilmesi** — ADR-008'de bilincli olarak
+      reddedildi (ses oturumunun transcript'i opsiyonel oldugu icin terfi edilen konusma bazen bos
+      olurdu). `ASUNA_TRANSCRIPT_PERSIST` acikken guvenli bir terfi yolu tanimlanabilir; karar
+      yeniden acilirsa ADR-008'e ek gerekir.
 
 - [ ] **Wave D Gate 3 dusuk-oncelik bulgulari (L3/L4/L5)** — (L3) koku diskten silinmis projede
       `read_project_file("../..")` kacis sinyali `traversal` yerine `root_missing` donuyor

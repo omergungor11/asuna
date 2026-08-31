@@ -290,6 +290,21 @@ pub const SESSION_COLUMNS: [&str; 14] = [
     "end_reason",
 ];
 
+/// Semada olup [`SessionRecord`]'a **bilerek** alinmayan kolonlar
+/// (`MEMORY_COLUMNS_NOT_LOADED` ile ayni istisna disiplini).
+///
+/// `title` ve `modality` migration 006'da (Chat Shell) geldi ve buraya
+/// alinmiyor — bu bir unutma degil, bir sozlesme karari:
+///
+/// 1. [`SessionRecord`] `session_start` / `session_finalize` yanitinin govdesi
+///    ve `src/shared/session.ts` onu **beklenmeyen alan varsa hata** vererek
+///    ayristiriyor (`assertNoUnexpectedKeys`). Bu tipe alan eklemek, calisan
+///    ses yolunu IPC sinirinde kirardi.
+/// 2. Iki kolonu okuyan tek yer konusma listesidir ve onun kendi projeksiyonu
+///    var: `db::conversation_repository::ConversationSummary`. Ayni veriyi iki
+///    tipte tasimanin bir faydasi yok.
+pub const SESSION_COLUMNS_NOT_LOADED: [&str; 2] = ["title", "modality"];
+
 impl SessionRecord {
     pub fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
         Ok(Self {
@@ -727,6 +742,248 @@ impl ToolEventRecord {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Chat Shell — modalite, mesaj, attachment (migration 006)
+// ---------------------------------------------------------------------------
+
+/// Bir konusmanin **nasil** yurudugu (migration 006).
+///
+/// `sessions` hem ses hem metin konusmasini tasiyor; ikisini ayirt eden tek
+/// yapisal isaret bu. Serbest metin degil: gecersiz bir deger hem IPC sinirinde
+/// (serde) hem DB'de (CHECK) duser.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionModality {
+    /// Realtime ses oturumu — urunun varsayilan yolu ve 006 oncesindeki
+    /// **tek** yol (bu yuzden semadaki DEFAULT da bu).
+    #[default]
+    Voice,
+    /// Metin sohbeti (Chat Shell).
+    Text,
+}
+
+impl SessionModality {
+    /// Tum degerler — sira semadaki CHECK kisiti ile ayni (test ile baglidir).
+    pub const ALL: [Self; 2] = [Self::Voice, Self::Text];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Voice => "voice",
+            Self::Text => "text",
+        }
+    }
+
+    /// Sessiz default **yok**: bilinmeyen deger `None` doner.
+    pub fn parse(raw: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|value| value.as_str() == raw)
+    }
+}
+
+impl ToSql for SessionModality {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(ToSqlOutput::from(self.as_str()))
+    }
+}
+
+impl FromSql for SessionModality {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        let raw = value.as_str()?;
+        Self::parse(raw).ok_or_else(|| FromSqlError::Other("bilinmeyen sessions.modality".into()))
+    }
+}
+
+/// Bir mesajin kimden geldigi (migration 006).
+///
+/// Kume OpenAI chat rollerinin aynisi degil, **kasitli olarak** onun bir alt
+/// kumesi: `system` ve `tool` semada var cunku ileride konusmaya sistem notu ya
+/// da tool ciktisi yazilabilir; bugun `chat_send` yalnizca `user` ve
+/// `assistant` uretir.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageRole {
+    /// Kullanicinin yazdigi mesaj.
+    User,
+    /// Modelin yaniti.
+    Assistant,
+    /// Sistem notu (kullaniciya gosterilebilir bir bilgi satiri).
+    System,
+    /// Bir tool cagrisinin konusmaya dusen ciktisi.
+    Tool,
+}
+
+impl MessageRole {
+    /// Tum degerler — sira semadaki CHECK kisiti ile ayni (test ile baglidir).
+    pub const ALL: [Self; 4] = [Self::User, Self::Assistant, Self::System, Self::Tool];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Assistant => "assistant",
+            Self::System => "system",
+            Self::Tool => "tool",
+        }
+    }
+
+    /// Sessiz default **yok**: bilinmeyen deger `None` doner.
+    pub fn parse(raw: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|role| role.as_str() == raw)
+    }
+}
+
+impl ToSql for MessageRole {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(ToSqlOutput::from(self.as_str()))
+    }
+}
+
+impl FromSql for MessageRole {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        let raw = value.as_str()?;
+        Self::parse(raw).ok_or_else(|| FromSqlError::Other("bilinmeyen messages.role".into()))
+    }
+}
+
+/// `messages` satiri — `metadata_json` **haric**.
+///
+/// Bicim sozlesmesi: `src/shared/chat.ts` → `ChatMessage`. Alan adlari ve
+/// siralari oradaki tiple birebir.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageRecord {
+    pub id: i64,
+    pub session_id: i64,
+    pub role: MessageRole,
+    pub content: String,
+    pub created_at: String,
+}
+
+/// `MessageRecord`'un okudugu kolonlar — `SELECT` listesi ile ayni sira.
+pub const MESSAGE_COLUMNS: [&str; 5] = ["id", "session_id", "role", "content", "created_at"];
+
+/// Semada olup satir tipine **bilerek** alinmayan kolonlar.
+///
+/// `metadata_json` bugun her satirda `'{}'` ve okuyan kimse yok; `embedding`
+/// ile ayni istisna (kolon ileriye donuk aciktir, tasinan bos bir alan degil).
+pub const MESSAGE_COLUMNS_NOT_LOADED: [&str; 1] = ["metadata_json"];
+
+impl MessageRecord {
+    pub fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: row.get("id")?,
+            session_id: row.get("session_id")?,
+            role: row.get("role")?,
+            content: row.get("content")?,
+            created_at: row.get("created_at")?,
+        })
+    }
+
+    pub fn select_columns() -> String {
+        MESSAGE_COLUMNS.join(", ")
+    }
+}
+
+/// Eklenen dosyanin nereden geldigi (migration 006).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttachmentOrigin {
+    /// Kullanici `<input type="file">` ile secti — icerik renderer tarafindan
+    /// okunup Rust'a metin olarak geldi.
+    Upload,
+    /// Kayitli bir proje kokunden okundu (sandbox + blocklist yolundan gecti).
+    Project,
+}
+
+impl AttachmentOrigin {
+    /// Tum degerler — sira semadaki CHECK kisiti ile ayni (test ile baglidir).
+    pub const ALL: [Self; 2] = [Self::Upload, Self::Project];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Upload => "upload",
+            Self::Project => "project",
+        }
+    }
+
+    /// Sessiz default **yok**: bilinmeyen deger `None` doner.
+    pub fn parse(raw: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|origin| origin.as_str() == raw)
+    }
+}
+
+impl ToSql for AttachmentOrigin {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(ToSqlOutput::from(self.as_str()))
+    }
+}
+
+impl FromSql for AttachmentOrigin {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        let raw = value.as_str()?;
+        Self::parse(raw).ok_or_else(|| FromSqlError::Other("bilinmeyen attachments.origin".into()))
+    }
+}
+
+/// `attachments` satiri — `content` **haric**.
+///
+/// GIZLILIK: iceriğin bu tipte olmamasi bir optimizasyon degil, bir kapidir.
+/// Bu tip komut yanitlarinda renderer'a gidiyor; dosya icerigi (redakte edilmis
+/// olsa bile) listeleme yaninda kendiliginden webview'e tasinmamali. Iceriğe
+/// ihtiyaci olan tek yer host tarafindaki `chat_send`'dir ve o,
+/// `attachment_repository::AttachmentPayload` uzerinden okur — `Serialize`
+/// turetmeyen, yani bir komuttan **donemeyen** bir tip.
+///
+/// Bicim sozlesmesi: `src/shared/chat.ts` → `ChatAttachment`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentRecord {
+    pub id: i64,
+    pub session_id: i64,
+    /// `None` = henuz bir mesaja baglanmadi (composer'da bekliyor).
+    pub message_id: Option<i64>,
+    pub file_name: String,
+    /// `None` = tarayici bir tur bildirmedi. Uydurulmaz.
+    pub mime_type: Option<String>,
+    /// **Kaynak** dosyanin boyutu; saklanan (kirpilmis) metnin degil.
+    pub size_bytes: Option<i64>,
+    pub origin: AttachmentOrigin,
+    pub created_at: String,
+}
+
+/// `AttachmentRecord`'un okudugu kolonlar — sema kolon sirasiyla ayni.
+pub const ATTACHMENT_COLUMNS: [&str; 8] = [
+    "id",
+    "session_id",
+    "message_id",
+    "file_name",
+    "mime_type",
+    "size_bytes",
+    "origin",
+    "created_at",
+];
+
+/// Semada olup satir tipine **bilerek** alinmayan kolonlar (yukaridaki
+/// gizlilik gerekcesi).
+pub const ATTACHMENT_COLUMNS_NOT_LOADED: [&str; 1] = ["content"];
+
+impl AttachmentRecord {
+    pub fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: row.get("id")?,
+            session_id: row.get("session_id")?,
+            message_id: row.get("message_id")?,
+            file_name: row.get("file_name")?,
+            mime_type: row.get("mime_type")?,
+            size_bytes: row.get("size_bytes")?,
+            origin: row.get("origin")?,
+            created_at: row.get("created_at")?,
+        })
+    }
+
+    pub fn select_columns() -> String {
+        ATTACHMENT_COLUMNS.join(", ")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -800,16 +1057,25 @@ mod tests {
     #[test]
     fn session_columns_cover_the_table() {
         let db = AsunaDb::open_in_memory().expect("DB acilmali");
-        let mut actual = table_columns(&db, "sessions");
-        actual.sort();
+        let actual = table_columns(&db, "sessions");
+        let mut actual_sorted = actual.clone();
+        actual_sorted.sort();
 
         let mut expected: Vec<String> = SESSION_COLUMNS
             .iter()
+            .chain(SESSION_COLUMNS_NOT_LOADED.iter())
             .map(|name| (*name).to_owned())
             .collect();
         expected.sort();
 
-        assert_eq!(actual, expected);
+        assert_eq!(actual_sorted, expected);
+
+        // Chat Shell kolonlari semada duruyor ama satir tipine alinmiyor
+        // (bkz. `SESSION_COLUMNS_NOT_LOADED` gerekcesi).
+        for column in SESSION_COLUMNS_NOT_LOADED {
+            assert!(actual.contains(&column.to_owned()));
+            assert!(!SESSION_COLUMNS.contains(&column));
+        }
     }
 
     /// Sema ile Rust enum'u ayni `end_reason` kumesini tanimali (ASU-033).
@@ -1212,5 +1478,154 @@ mod tests {
         assert!(!object.contains_key("project_id"));
         assert!(!object.contains_key("embedding"));
         assert_eq!(json["kind"], "tool_state");
+    }
+
+    // --- Chat Shell (migration 006) -----------------------------------------
+
+    #[test]
+    fn session_modality_matches_the_schema_check_constraint() {
+        let from_schema = migrations::modalities_declared_in_schema();
+        let from_enum: Vec<String> = SessionModality::ALL
+            .iter()
+            .map(|value| value.as_str().to_owned())
+            .collect();
+        assert_eq!(from_enum, from_schema);
+        // Varsayilan semadaki DEFAULT ile ayni olmali.
+        assert_eq!(SessionModality::default(), SessionModality::Voice);
+    }
+
+    #[test]
+    fn message_role_matches_the_schema_check_constraint() {
+        let from_schema = migrations::message_roles_declared_in_schema();
+        let from_enum: Vec<String> = MessageRole::ALL
+            .iter()
+            .map(|role| role.as_str().to_owned())
+            .collect();
+        assert_eq!(from_enum, from_schema);
+    }
+
+    #[test]
+    fn attachment_origin_matches_the_schema_check_constraint() {
+        let from_schema = migrations::attachment_origins_declared_in_schema();
+        let from_enum: Vec<String> = AttachmentOrigin::ALL
+            .iter()
+            .map(|origin| origin.as_str().to_owned())
+            .collect();
+        assert_eq!(from_enum, from_schema);
+    }
+
+    #[test]
+    fn unknown_chat_enum_values_are_rejected() {
+        assert_eq!(SessionModality::parse("sesli"), None);
+        assert_eq!(SessionModality::parse("Voice"), None);
+        assert_eq!(MessageRole::parse("model"), None);
+        assert_eq!(MessageRole::parse("User"), None);
+        assert_eq!(AttachmentOrigin::parse("indirme"), None);
+        assert!(serde_json::from_str::<MessageRole>("\"developer\"").is_err());
+        assert!(serde_json::from_str::<SessionModality>("\"video\"").is_err());
+    }
+
+    #[test]
+    fn message_columns_cover_the_table() {
+        let db = AsunaDb::open_in_memory().expect("DB acilmali");
+        let actual = table_columns(&db, "messages");
+
+        let mut expected: Vec<String> = MESSAGE_COLUMNS
+            .iter()
+            .chain(MESSAGE_COLUMNS_NOT_LOADED.iter())
+            .map(|name| (*name).to_owned())
+            .collect();
+        expected.sort();
+
+        let mut actual_sorted = actual.clone();
+        actual_sorted.sort();
+        assert_eq!(actual_sorted, expected);
+
+        assert!(actual.contains(&"metadata_json".to_owned()));
+        assert!(!MESSAGE_COLUMNS.contains(&"metadata_json"));
+    }
+
+    /// **GIZLILIK kapisi**: `content` semada var ama satir tipine alinmiyor;
+    /// attachment listesi renderer'a dosya icerigi tasimaz.
+    #[test]
+    fn attachment_columns_cover_the_table_without_the_content() {
+        let db = AsunaDb::open_in_memory().expect("DB acilmali");
+        let actual = table_columns(&db, "attachments");
+
+        let mut expected: Vec<String> = ATTACHMENT_COLUMNS
+            .iter()
+            .chain(ATTACHMENT_COLUMNS_NOT_LOADED.iter())
+            .map(|name| (*name).to_owned())
+            .collect();
+        expected.sort();
+
+        let mut actual_sorted = actual.clone();
+        actual_sorted.sort();
+        assert_eq!(actual_sorted, expected);
+
+        assert!(actual.contains(&"content".to_owned()));
+        assert!(!ATTACHMENT_COLUMNS.contains(&"content"));
+    }
+
+    /// Bicim sozlesmesi `src/shared/chat.ts`: alan adlari birebir bunlar.
+    #[test]
+    fn chat_records_serialize_with_the_contract_field_names() {
+        let message = MessageRecord {
+            id: 7,
+            session_id: 3,
+            role: MessageRole::Assistant,
+            content: "Merhaba.".to_owned(),
+            created_at: "2026-08-31T10:00:00Z".to_owned(),
+        };
+        let json = serde_json::to_value(&message).expect("serialize");
+        let mut keys: Vec<&str> = json
+            .as_object()
+            .expect("JSON nesnesi")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["content", "createdAt", "id", "role", "sessionId"]);
+        assert_eq!(json["role"], "assistant");
+
+        let attachment = AttachmentRecord {
+            id: 9,
+            session_id: 3,
+            message_id: None,
+            file_name: "notlar.md".to_owned(),
+            mime_type: Some("text/markdown".to_owned()),
+            size_bytes: Some(1_024),
+            origin: AttachmentOrigin::Project,
+            created_at: "2026-08-31T10:00:00Z".to_owned(),
+        };
+        let json = serde_json::to_value(&attachment).expect("serialize");
+        let mut keys: Vec<&str> = json
+            .as_object()
+            .expect("JSON nesnesi")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "createdAt",
+                "fileName",
+                "id",
+                "messageId",
+                "mimeType",
+                "origin",
+                "sessionId",
+                "sizeBytes",
+            ]
+        );
+        assert_eq!(json["origin"], "project");
+        assert!(
+            !json
+                .as_object()
+                .expect("JSON nesnesi")
+                .contains_key("content"),
+            "attachment yaniti dosya icerigi tasimamali"
+        );
     }
 }

@@ -87,6 +87,17 @@ fn main() {
             // kullanicinin kendi ayarlari okunur/yazilir.
             "get_privacy_settings",
             "set_privacy_settings",
+            // Chat Shell: metin sohbeti (capabilities/asuna-chat.json).
+            // `chat_send` model secmez, prompt kurmaz; OpenAI cagrisi Rust
+            // tarafinda yapilir. `message_append` BILEREK yok: `role`
+            // parametresi aldigi icin renderer asistan satiri uydurabilirdi.
+            "conversation_list",
+            "message_list",
+            "attachment_list",
+            "session_set_title",
+            "chat_send",
+            "attachment_ingest",
+            "attachment_from_project",
         ]));
 
     if let Err(error) = tauri_build::try_build(attributes) {

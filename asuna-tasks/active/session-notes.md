@@ -247,3 +247,87 @@ task'lari task-index'e islenmedi** (o oturum kendi kaydini yapar).
 
 **Uygulama KAPALI** — chat kabugu oturumu commit'ini atip `composer.spec.tsx` fixture'ini
 duzeltince acilacak (o ana kadar typecheck kirmizi).
+
+## 2026-08-31 — Session 3 (Chat Shell pivotu, paralel oturum)
+
+### Karar: PIVOT (kullanici, 2026-08-31)
+
+Asuna ChatGPT/Claude-tarzi bir **kalici konusma** arayuzune donustu. CLAUDE.md'nin "generic
+chatbot UI kurma" prime directive'i **degistirildi**; ses silinmedi, **voice mode** olarak kaldi
+(`VoicePanel` asla unmount edilmez). Karar + gerekce + degerlendirilen alternatifler:
+`asuna-docs/DECISIONS.md` → **ADR-008**.
+**Numara notu:** `asuna-plans/plan-chat-shell.md` bu karari "ADR-006 olacak" diye anar; ADR-006 ve
+ADR-007 2026-08-24'te alinmisti, dogru numara **ADR-008**. Plan icindeki referans eski.
+
+### Yapilanlar — ASU-072..078 DONE
+
+- [x] **ASU-072** migration 006: `messages` + `attachments` (STRICT), `sessions.title`/`modality`,
+      `session_id` uzerinden **CASCADE**. Yeni "conversations" tablosu **acilmadi** — konusma
+      mevcut `sessions` satiridir (ozet/`end_reason`/`project_id`/`source_session_id` zaten orada).
+- [x] **ASU-073** Rust `chat.rs`: `chat_send` (son 40 mesaj + ekler, non-streaming, kullanici +
+      asistan mesaji **tek transaction**), `attachment_ingest` (ad blocklist +
+      `redact_sensitive_text` + 24k kirpma), `attachment_from_project` (mevcut sandbox'li
+      `projects::files::read` **cekirdegi** — kopyalama yok; V1: yalnizca **aktif** proje).
+      Yeni **zorunlu** env `ASUNA_CHAT_MODEL`.
+- [x] **ASU-074** TS sozlesmesi: `src/shared/chat.ts` + `src/asuna/agent/chat-service.ts`.
+- [x] **ASU-075** UI kabugu: sidebar (tarih gruplu konusma listesi) + `chat-view` + `composer` +
+      `project-file-picker`. `VoicePanel` monte kaliyor.
+- [x] **ASU-076** ACL: yeni capability `asuna-chat.json`; **`message_append` bilerek kayitsiz**
+      (renderer asistan mesaji uyduramaz), `session_set_title` `asuna-session.json`'da.
+- [x] **ASU-077** tester: +70 test; redaksiyon desen bosluklari bulundu (PEM / `AKIA` / `ghp_` /
+      JWT) ve kapatildi.
+- [x] **ASU-078** Gate 3: **0 CRITICAL**, 1 HIGH (ses oturumu rozeti) + 4 MEDIUM + 7 LOW;
+      HIGH/MEDIUM kapatildi, secilen LOW'lar backlog'a. **736+ Rust / 1091+ TS** testi yesil.
+
+### Paralel oturum koordinasyonu (iki oturum ayni repoda)
+
+- **Wave D (ASU-067..070) ve migration 007 diger oturumun isiydi**; bu oturum onlara dokunmadi.
+  ASU-071 numarasi Wave D sesli kabul testine gitti (commit `c9f24be`), bu yuzden Chat Shell
+  task'lari **ASU-072**'den basliyor.
+- Anlasma: dosya sinirlari + `git add -A` degil **dosya listesiyle** stage (Wave D commit'i
+  `df16a11` bir kez commit'lenmemis `pub mod chat` satirini sizdirdi, `56ebd69` geri aldi).
+
+### Kullaniciyi bekleyenler
+
+- [ ] **`.env`'e `ASUNA_CHAT_MODEL=gpt-4o-mini` satiri** — hook `.env`'e dokunamiyor; satir yoksa
+      uygulama acilista `ConfigError::Missing` ile durur (`ASUNA_SUMMARY_MODEL` /
+      `ASUNA_EDITOR_COMMAND` ile ayni desen).
+- [ ] **ASU-079 — M6 kabul testi**: restart sonrasi konusma gecmisi + dosya ekleme (`.env` adi
+      reddi, secret redaksiyonu) + projede konusma + voice mode'un bozulmadigi.
+- [ ] Onceki kuyruk duruyor: ASU-071 (A12..A18), ASU-055 (A1..A11), ASU-038, ASU-046, KWS gercek
+      mikrofon testi, `ASUNA_EDITOR_COMMAND=code`.
+
+### Proje durumu — ASKIDA
+
+Kullanici, paralel oturuma (**asuna-81**) projeyi askiya aldigini iletti ("beklenen seviyede
+gelisme olmadi"). Bu oturumun kapanisi **toparla-ve-commit'le** modunda yapildi: Chat Shell isi
+tamamlandi ve commit'lendi, **yeni is acilmadi**. Chat Shell tarafinda proje devam ederse ilk
+adim **ASU-079 (M6 kabul testi)**.
+Kaynak: kullanici → asuna-81 oturumu → orchestrator, 2026-08-31.
+Askiya alma kararinin teshisi ve genel devam listesi asagida: *"Session 2 kapanis: PROJE ASKIYA
+ALINDI"*.
+
+## 2026-08-31 — Session 2 kapanis: PROJE ASKIYA ALINDI
+
+Kullanici karari: "beklenen seviyede gelistirme yapilamadi" — sesli deneyim hedeflenen
+"Jarvis" hissine ulasmadi. Somut sikayetler: Asuna surekli dosya yolu soruyor, aktif proje
+klasorunu kendiliginden okumuyor.
+
+**Teknik teshis (cozulmemis ama anlasilmis):** Wave C/D toollari testlerden gecti; sorun
+buyuk olcude PROMPT katmaninda — `core.v2`'de "# Tools" bolumu yok, model toollari nasil
+zincirleyecegini (once list_projects/list_project_files, sonra read_project_file; kullaniciya
+yol sormak yerine kesfet) bilmiyor. Backend agent bunu Wave C'de isaretlemisti (core.v3
+karari orchestrator'a birakildi); sesli deneyim tam bu eksige takildi. Ikinci etken:
+dev'de her rebuild mikrofon iznini dusurdu (TCC + imzasiz debug binary), test akisi surekli
+kesildi — RUNBOOK'a islendi/islenecek.
+
+**Askidaki durum:** main temiz ve push'lu (c9f24be'ye kadar benim tarafim). Chat Shell
+(asuna-dd oturumu) kendi duzeltmelerini tek commit'te toplayip push'layacak (ASU-072+).
+730 Rust / 834+ TS testi yesil. 52/72 task DONE. M1 kapali; M3/M4 sesli kabulleri yarim
+(oturum 10'da hafiza cikarimi calisti — 4 kayit; restart-hatirlama adimi tamamlanamadi).
+
+**Devam edilirse ilk adimlar (oncelik sirasiyla):**
+1. `core.v3` prompt — "# Tools" bolumu: kesfet-once-sor, tool zincirleme, aktif proje varsayimi.
+2. Dev mikrofon izni kalici cozumu (stabil imza / RUNBOOK adimi).
+3. M3+M4 sesli kabullerin tek seansta bitirilmesi (testing.md A1..A18 hazir).
+4. ASU-066 (Cmd+Q finalize yarisi), pricing cached_tokens kalemi, Gate 3 L3/L4/L5.
