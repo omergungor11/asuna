@@ -20,6 +20,8 @@ import {
   type UseAsunaSessionOptions,
 } from './use-asuna-session';
 import { MicrophoneAccessError, type MicrophoneProbe } from '../audio/microphone-access';
+import { ToolToggleStore } from '../tools';
+import { NO_TOOL_ARGUMENTS, type AsunaToolDefinition, type ToolResult } from '../tools/types';
 import { SessionRecorder } from '../memory/session-service';
 import type { FrontendConfig } from '../config/frontend-config';
 import { AsunaLogger, type LogEntry } from '../observability';
@@ -58,6 +60,10 @@ interface FakeService extends AsunaSessionPort {
   readonly rejections: string[];
   /** Oturum kaydini acan/kapatan kayitci — sessionId korelasyonu icin. */
   readonly recorder: SessionRecorder;
+  /** Servise **baglanirken** verilen tool listesi (ASU-054 suzme kaniti). */
+  readonly toolNames: readonly string[];
+  /** Servisin her cagrida soracagi kapi (ASU-054). */
+  readonly isToolEnabled: (toolName: string) => boolean;
 }
 
 interface HarnessOptions {
@@ -156,6 +162,12 @@ function createHarness(harnessOptions: HarnessOptions = {}): Harness {
         // ASU-048/050: servis oturum kimligini buradan okur; testler ayni
         // nesneyi gorup korelasyonu olcebilsin diye disari veriliyor.
         recorder: context.recorder,
+        // ASU-054: hook'un servise verdigi liste ve kapi. Kapali bir tool'un
+        // modele hic verilmedigi ancak buradan olculebilir.
+        toolNames: context.tools
+          .filter((tool) => context.isToolEnabled(tool.name))
+          .map((tool) => tool.name),
+        isToolEnabled: context.isToolEnabled,
       };
 
       services.push(service);
@@ -1197,5 +1209,302 @@ describe('useAsunaSession — tool onayi', () => {
     });
 
     expect(result.current.pendingApproval).toBeNull();
+  });
+});
+
+describe('useAsunaSession — tool gorunurlugu ve acma/kapama (ASU-054)', () => {
+  const TOOLS: readonly AsunaToolDefinition[] = [
+    {
+      name: 'get_current_project',
+      description: 'Kullanicinin su an uzerinde calistigi kayitli projeyi dondurur.',
+      risk: 0,
+      requiresApproval: false,
+      timeoutMs: 5_000,
+      parameters: NO_TOOL_ARGUMENTS,
+      execute: (): Promise<ToolResult> => Promise.resolve({ ok: true, summary: 'oldu' }),
+    },
+    {
+      name: 'open_project',
+      description: 'Kayitli projeyi ayarlanmis kod editorunde acar; onay ister.',
+      risk: 1,
+      requiresApproval: true,
+      timeoutMs: 5_000,
+      parameters: NO_TOOL_ARGUMENTS,
+      execute: (): Promise<ToolResult> => Promise.resolve({ ok: true, summary: 'acildi' }),
+    },
+  ];
+
+  function toolHarness(): Harness & { readonly toggles: ToolToggleStore } {
+    const toggles = new ToolToggleStore();
+    const base = createHarness();
+    return {
+      ...base,
+      toggles,
+      options: { ...base.options, tools: TOOLS, toolToggles: toggles },
+    };
+  }
+
+  it('registry"den turetilmis tool listesini donduruyor', async () => {
+    const harness = toolHarness();
+    const { result } = renderHook(() => useAsunaSession(harness.options));
+
+    // Onay modu config'ten okunuyor; mount effect'inin cozulmesini bekle.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(result.current.tools.map((tool) => tool.name)).toEqual([
+      'get_current_project',
+      'open_project',
+    ]);
+    expect(result.current.tools[0]).toEqual({
+      name: 'get_current_project',
+      description: TOOLS[0]?.description,
+      risk: 0,
+      approval: 'not_required',
+      enabled: true,
+    });
+    // Risk 1 `safe` modda onay ister (ASU-048 matrisi).
+    expect(result.current.tools[1]?.approval).toBe('always');
+  });
+
+  /**
+   * Config okunana kadar **en siki** politika gosterilir: "bu onaysiz calisir"
+   * diye yanlis bir soz vermek, kullanicinin gozunde tool'u zararsiz gosterir.
+   */
+  it('config okunamazsa en siki politikayi gosteriyor', async () => {
+    const base = createHarness({
+      loadConfig: (): Promise<FrontendConfig> => Promise.reject(new Error('config yok')),
+    });
+    const options: UseAsunaSessionOptions = { ...base.options, tools: TOOLS };
+    const { result } = renderHook(() => useAsunaSession(options));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(result.current.tools.map((tool) => tool.approval)).toEqual([
+      'not_required',
+      'always',
+    ]);
+  });
+
+  it('setToolEnabled listeyi guncelliyor', async () => {
+    const harness = toolHarness();
+    const { result } = renderHook(() => useAsunaSession(harness.options));
+
+    await act(async () => {
+      result.current.setToolEnabled('open_project', false);
+      await Promise.resolve();
+    });
+
+    expect(result.current.tools.map((tool) => tool.enabled)).toEqual([true, false]);
+    // Kapali tool ekrandan **kaybolmaz**; kullanici geri acabilmeli.
+    expect(result.current.tools).toHaveLength(2);
+
+    await act(async () => {
+      result.current.setToolEnabled('open_project', true);
+      await Promise.resolve();
+    });
+    expect(result.current.tools.map((tool) => tool.enabled)).toEqual([true, true]);
+  });
+
+  /** **Kabul kriteri**: kapali tool modele **verilmez**. */
+  it('kapali tool servise verilen listeden dusuyor', async () => {
+    const harness = toolHarness();
+    const { result } = renderHook(() => useAsunaSession(harness.options));
+
+    await act(async () => {
+      result.current.setToolEnabled('open_project', false);
+      await Promise.resolve();
+    });
+    await flush(() => {
+      result.current.start();
+    });
+
+    expect(harness.service().toolNames).toEqual(['get_current_project']);
+  });
+
+  /**
+   * Acik bir oturumun ortasinda kapatma modelin listesini degistirmez (SDK'ya
+   * verilen set sabit); bu yuzden servis her cagrida kapiyi yeniden sorar ve
+   * cevap **aninda** degisir.
+   */
+  it('oturum aciktayken kapatma kapiyi hemen etkiliyor', async () => {
+    const harness = toolHarness();
+    const { result } = renderHook(() => useAsunaSession(harness.options));
+
+    await flush(() => {
+      result.current.start();
+    });
+    const service = harness.service();
+    expect(service.isToolEnabled('open_project')).toBe(true);
+
+    await act(async () => {
+      result.current.setToolEnabled('open_project', false);
+      await Promise.resolve();
+    });
+
+    expect(service.isToolEnabled('open_project')).toBe(false);
+  });
+});
+
+describe('useAsunaSession — tool sonucu dokumde (ASU-054)', () => {
+  it('tool sonucunu ozet satiri olarak ekliyor', async () => {
+    const harness = createHarness();
+    const { result } = renderHook(() => useAsunaSession(harness.options));
+    await flush(() => {
+      result.current.start();
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      harness.service().emit({
+        type: 'tool_result',
+        toolName: 'read_project_file',
+        risk: 0,
+        outcome: 'succeeded',
+        approvalState: 'not_required',
+        summary: 'README.md okundu (2.1 KB, kirpildi)',
+      });
+    });
+
+    const line = result.current.transcript.at(-1);
+    expect(line?.role).toBe('tool');
+    expect(line?.text).toBe('README.md okundu (2.1 KB, kirpildi)');
+    expect(line?.status).toBe('completed');
+    expect(line?.interrupted).toBe(false);
+    expect(line?.role === 'tool' && line.outcome).toBe('succeeded');
+    expect(line?.role === 'tool' && line.toolName).toBe('read_project_file');
+  });
+
+  /** Reddedilen aksiyon da gorunur: "oldu mu, olmadi mi?" sorusu kalmamali. */
+  it('calismayan cagriyi da yaziyor', async () => {
+    const harness = createHarness();
+    const { result } = renderHook(() => useAsunaSession(harness.options));
+    await flush(() => {
+      result.current.start();
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      harness.service().emit({
+        type: 'tool_result',
+        toolName: 'open_project',
+        risk: 1,
+        outcome: 'not_run',
+        approvalState: 'denied',
+        summary: 'Reddedildi: kullanici onaylamadi.',
+      });
+    });
+
+    const line = result.current.transcript.at(-1);
+    expect(line?.role === 'tool' && line.outcome).toBe('not_run');
+    expect(line?.role === 'tool' && line.approvalState).toBe('denied');
+  });
+
+  /** Mevcut `user`/`assistant` tuketicileri kirilmiyor: satirlar bir arada. */
+  it('konusma satirlariyla ayni akista, sirasi korunarak duruyor', async () => {
+    const harness = createHarness();
+    const { result } = renderHook(() => useAsunaSession(harness.options));
+    await flush(() => {
+      result.current.start();
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      harness.service().emit({
+        type: 'transcript',
+        entry: {
+          itemId: 'item_1',
+          role: 'user',
+          text: 'README ne diyor?',
+          status: 'completed',
+        },
+      });
+      harness.service().emit({
+        type: 'tool_result',
+        toolName: 'read_project_file',
+        risk: 0,
+        outcome: 'succeeded',
+        approvalState: 'not_required',
+        summary: 'README.md okundu (2.1 KB)',
+      });
+      harness.service().emit({
+        type: 'transcript',
+        entry: {
+          itemId: 'item_2',
+          role: 'assistant',
+          text: 'Projenin amaci...',
+          status: 'completed',
+        },
+      });
+    });
+
+    expect(result.current.transcript.map((line) => line.role)).toEqual([
+      'user',
+      'tool',
+      'assistant',
+    ]);
+    // Tool satirinin kimligi konusma item'lariyla carpismiyor.
+    const ids = result.current.transcript.map((line) => line.itemId);
+    expect(new Set(ids).size).toBe(3);
+  });
+
+  /**
+   * Tool satirlari **kalici dokume girmez**: `transcript_lines` sozlesmesi
+   * yalnizca `user`/`assistant` tanir ve tool cagrilari kendi defterinde
+   * (`tool_events`) yasar. Ayni olayi iki yere yazmak, birinin silinip
+   * otekinin kalmasi demekti.
+   */
+  it('kalici oturum kaydina yazilmiyor', async () => {
+    const finalized: SessionFinalizeInput[] = [];
+    const harness = createHarness();
+    const options: UseAsunaSessionOptions = {
+      ...harness.options,
+      createSessionRecorder: (): SessionRecorder =>
+        new SessionRecorder({
+          start: (): Promise<SessionWriteResult> =>
+            Promise.resolve({
+              status: 'recorded',
+              session: { id: 1 } as unknown as SessionRecord,
+            }),
+          finalize: (_sessionId, input): Promise<SessionWriteResult> => {
+            finalized.push(input);
+            return Promise.resolve({
+              status: 'recorded',
+              session: { id: 1 } as unknown as SessionRecord,
+            });
+          },
+        }),
+    };
+
+    const { result } = renderHook(() => useAsunaSession(options));
+    await flush(() => {
+      result.current.start();
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      harness.service().emit({
+        type: 'transcript',
+        entry: { itemId: 'item_1', role: 'user', text: 'merhaba', status: 'completed' },
+      });
+      harness.service().emit({
+        type: 'tool_result',
+        toolName: 'read_project_file',
+        risk: 0,
+        outcome: 'succeeded',
+        approvalState: 'not_required',
+        summary: 'README.md okundu (2.1 KB)',
+      });
+    });
+
+    await flush(() => {
+      result.current.stop();
+    });
+
+    const roles = finalized.at(-1)?.transcript?.map((line) => line.role) ?? [];
+    expect(roles).toEqual(['user']);
   });
 });

@@ -21,15 +21,22 @@ import { useEffect, useRef, useState } from 'react';
 
 import type { TranscriptLine } from '../asuna/agent/use-asuna-session';
 
+import { TOOL_OUTCOME_LABELS, riskAttribute } from './tool-text';
+
 /** DOM'a basilan azami satir. Bellekteki sinir `MAX_TRANSCRIPT_LINES`. */
 export const VISIBLE_LINE_COUNT = 60;
 
 /** Bu mesafeden yakinsa kullanici "altta" sayilir (px). */
 const STICK_THRESHOLD_PX = 24;
 
+/**
+ * `Record` bilincli: dokume yeni bir rol eklenirse (ASU-054'te `tool` eklendi)
+ * etiketi yazmayi unutmak derleme hatasi olur, ekranda etiketsiz satir degil.
+ */
 const ROLE_LABELS: Readonly<Record<TranscriptLine['role'], string>> = {
   user: 'Sen',
   assistant: 'Asuna',
+  tool: 'Araç',
 };
 
 export interface TranscriptViewProps {
@@ -75,21 +82,45 @@ export function TranscriptView({ lines }: TranscriptViewProps): React.JSX.Elemen
       {visible.length === 0 ? (
         <p className="asuna-transcript__empty">Henüz konuşma yok.</p>
       ) : (
-        visible.map((line) => (
-          <p
-            key={line.itemId}
-            className="asuna-transcript__line"
-            data-role={line.role}
-            data-status={line.status}
-          >
-            <span className="asuna-transcript__role">{ROLE_LABELS[line.role]}:</span>{' '}
-            <span className="asuna-transcript__text">{line.text}</span>
-            {line.status === 'in_progress' && (
-              <span className="asuna-transcript__partial"> …</span>
-            )}
-            {line.interrupted && <span className="asuna-transcript__cut"> — kesildi</span>}
-          </p>
-        ))
+        visible.map((line) =>
+          // Tool satiri (ASU-054): konusma satirlarindan ayirt edilebilir olmali.
+          // Kullanici Asuna'nin ne calistirdigini, hangi risk seviyesinde
+          // calistirdigini ve **sonucunu** dokumde gorur. Sonuc metni de
+          // etiketlenir: "hata" satiri basarili bir satirla ayni gorunmez.
+          line.role === 'tool' ? (
+            <p
+              key={line.itemId}
+              className="asuna-transcript__line"
+              data-role="tool"
+              data-status={line.status}
+              data-outcome={line.outcome}
+              data-risk={riskAttribute(line.risk)}
+            >
+              <span className="asuna-transcript__role">
+                {ROLE_LABELS.tool} · {line.toolName}:
+              </span>{' '}
+              <span className="asuna-transcript__text">{line.text}</span>
+              <span className="asuna-transcript__outcome">
+                {' '}
+                — {TOOL_OUTCOME_LABELS[line.outcome]}
+              </span>
+            </p>
+          ) : (
+            <p
+              key={line.itemId}
+              className="asuna-transcript__line"
+              data-role={line.role}
+              data-status={line.status}
+            >
+              <span className="asuna-transcript__role">{ROLE_LABELS[line.role]}:</span>{' '}
+              <span className="asuna-transcript__text">{line.text}</span>
+              {line.status === 'in_progress' && (
+                <span className="asuna-transcript__partial"> …</span>
+              )}
+              {line.interrupted && <span className="asuna-transcript__cut"> — kesildi</span>}
+            </p>
+          ),
+        )
       )}
     </div>
   );

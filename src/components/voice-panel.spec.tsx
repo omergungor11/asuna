@@ -22,7 +22,11 @@ import { MicrophoneAccessError, type MicrophoneProbe } from '../asuna/audio/micr
 import type { FrontendConfig } from '../asuna/config/frontend-config';
 import { AsunaLogger } from '../asuna/observability';
 import type { CurrentProjectPort } from '../asuna/projects/use-current-project';
-import { VoiceStateMachine } from '../asuna/state/voice-state-machine';
+import {
+  VoiceStateMachine,
+  type VoiceState,
+  type VoiceTransitionReason,
+} from '../asuna/state/voice-state-machine';
 import type { ProjectRecord } from '../shared/project';
 
 import { VoicePanel } from './voice-panel';
@@ -102,6 +106,89 @@ function createOptions(probe?: () => Promise<MicrophoneProbe>): UseAsunaSessionO
         getState: () => context.stateMachine.getState(),
       };
     },
+  };
+}
+
+/** ASU-053 onay istegi — kartin gostermesi gereken tum alanlarla. */
+const APPROVAL_REQUEST: AsunaRealtimeEvent = {
+  type: 'tool_approval_requested',
+  requestId: 'req-7',
+  toolName: 'open_project',
+  description: 'Kayıtlı bir projeyi yapılandırılmış editörde açar.',
+  risk: 1,
+  argumentsPreview: 'projectId=asuna',
+  timeoutMs: 60_000,
+};
+
+interface LiveHarness {
+  readonly options: UseAsunaSessionOptions;
+  /** Servis event'i yayinlar (hook reducer'ini besler). */
+  readonly emit: (event: AsunaRealtimeEvent) => void;
+  /** Durum makinesini surer — gercekte bunu servis yapar. */
+  readonly transition: (to: VoiceState, reason: VoiceTransitionReason) => void;
+  /** Servise ulasan onay/red kimlikleri: karar **kimlikle** verilmeli. */
+  readonly approvals: readonly string[];
+  readonly rejections: readonly string[];
+}
+
+/**
+ * Canli bir oturumu taklit eden kosum takimi: event yayinlanabilir, durum
+ * suruilebilir ve onay cagrilari kaydedilir. Gercek SDK'ya dokunulmaz.
+ */
+function createLiveHarness(): LiveHarness {
+  const machine = new VoiceStateMachine();
+  const approvals: string[] = [];
+  const rejections: string[] = [];
+  const listeners = new Set<AsunaRealtimeEventListener>();
+
+  const publish = (event: AsunaRealtimeEvent): void => {
+    for (const listener of [...listeners]) {
+      listener(event);
+    }
+  };
+
+  const options: UseAsunaSessionOptions = {
+    ...createOptions(),
+    stateMachine: machine,
+    createService: (context): AsunaSessionPort => ({
+      connect: (): Promise<void> => {
+        context.stateMachine.transition('CONNECTING', 'REALTIME_CONNECTING');
+        context.stateMachine.transition('LISTENING', 'REALTIME_CONNECTED');
+        publish({ type: 'connected', model: context.config.realtimeModel });
+        return Promise.resolve();
+      },
+      disconnect: (): void => undefined,
+      interrupt: (): void => undefined,
+      approveToolCall: (requestId: string): void => {
+        approvals.push(requestId);
+      },
+      rejectToolCall: (requestId: string): void => {
+        rejections.push(requestId);
+      },
+      subscribe: (listener): (() => void) => {
+        listeners.add(listener);
+        return (): void => {
+          listeners.delete(listener);
+        };
+      },
+      getState: () => context.stateMachine.getState(),
+    }),
+  };
+
+  return {
+    options,
+    emit: (event): void => {
+      act(() => {
+        publish(event);
+      });
+    },
+    transition: (to, reason): void => {
+      act(() => {
+        machine.transition(to, reason);
+      });
+    },
+    approvals,
+    rejections,
   };
 }
 
@@ -251,6 +338,81 @@ describe('VoicePanel', () => {
     // Tool bitince satir bosalir: biten bir is "hala calisiyor" gibi durmaz.
     emit({ type: 'tool_call_completed', toolName: 'get_current_project' });
     expect(screen.queryByText('get_current_project')).not.toBeInTheDocument();
+  });
+
+  /**
+   * ASU-053: onay gerektiren bir tool cagrisi kart olmadan **calismaz**; kart
+   * kullanicinin kapisi. Panelin disina portal edilmesi de kasitli: baska bir
+   * sekme acikken Konusma paneli `hidden` olur, istek gorunmez kalmamali.
+   */
+  it('onay istegini panelin disinda, kart olarak gosterir', async () => {
+    const harness = createLiveHarness();
+    render(<VoicePanel options={harness.options} projectPort={NO_PROJECTS} />);
+    await click('Talk to Asuna');
+
+    harness.transition('ASSISTANT_THINKING', 'ASSISTANT_RESPONSE_STARTED');
+    harness.transition('AWAITING_APPROVAL', 'TOOL_APPROVAL_REQUESTED');
+    harness.emit(APPROVAL_REQUEST);
+
+    const card = screen.getByRole('dialog', { name: 'Araç onayı' });
+    expect(card).toHaveTextContent('open_project');
+    expect(card).toHaveTextContent('Risk 1 · geri alınabilir');
+    expect(card).toHaveTextContent('projectId=asuna');
+    // Durum rozeti de ayni seyi soyler: iki gosterge birbirini dogrular.
+    expect(screen.getByText('Onay bekliyor')).toBeInTheDocument();
+    // Portal hedefi `document.body`: panel `hidden` olsa da kart kaybolmaz.
+    expect(card.parentElement).toBe(document.body);
+  });
+
+  it('onay karari servise requestId ile gider', async () => {
+    const harness = createLiveHarness();
+    render(<VoicePanel options={harness.options} projectPort={NO_PROJECTS} />);
+    await click('Talk to Asuna');
+
+    harness.transition('ASSISTANT_THINKING', 'ASSISTANT_RESPONSE_STARTED');
+    harness.transition('AWAITING_APPROVAL', 'TOOL_APPROVAL_REQUESTED');
+    harness.emit(APPROVAL_REQUEST);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Onayla: open_project' }));
+    expect(harness.approvals).toEqual(['req-7']);
+    expect(harness.rejections).toEqual([]);
+
+    harness.emit({
+      type: 'tool_approval_resolved',
+      requestId: 'req-7',
+      toolName: 'open_project',
+      outcome: 'approved',
+    });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('reddetme de ayni kimlikle gider', async () => {
+    const harness = createLiveHarness();
+    render(<VoicePanel options={harness.options} projectPort={NO_PROJECTS} />);
+    await click('Talk to Asuna');
+
+    harness.transition('ASSISTANT_THINKING', 'ASSISTANT_RESPONSE_STARTED');
+    harness.transition('AWAITING_APPROVAL', 'TOOL_APPROVAL_REQUESTED');
+    harness.emit(APPROVAL_REQUEST);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reddet: open_project' }));
+
+    expect(harness.rejections).toEqual(['req-7']);
+    expect(harness.approvals).toEqual([]);
+  });
+
+  /** ASU-054: "tool calisirken TOOL_PENDING durumu ve tool adi gorunuyor". */
+  it('TOOL_PENDING durumunda hem rozet hem tool adi gorunur', async () => {
+    const harness = createLiveHarness();
+    render(<VoicePanel options={harness.options} projectPort={NO_PROJECTS} />);
+    await click('Talk to Asuna');
+
+    harness.transition('ASSISTANT_THINKING', 'ASSISTANT_RESPONSE_STARTED');
+    harness.transition('TOOL_PENDING', 'TOOL_CALL_STARTED');
+    harness.emit({ type: 'tool_call_started', toolName: 'read_project_file' });
+
+    expect(screen.getByText('Araç çalışıyor')).toBeInTheDocument();
+    expect(screen.getByText('read_project_file')).toBeInTheDocument();
   });
 
   it('sohbet arayuzu degil: metin girisi ve gonder butonu yok', () => {

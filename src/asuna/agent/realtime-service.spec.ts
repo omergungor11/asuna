@@ -15,6 +15,7 @@ import type {
   RealtimeSessionSignal,
   RealtimeSessionSignalListener,
   RealtimeSessionSpec,
+  ToolRuntimeBindings,
 } from './realtime-session-port';
 import {
   AsunaRealtimeService,
@@ -32,6 +33,7 @@ import { TOOL_APPROVAL_MODES, type FrontendConfig } from '../config/frontend-con
 import { buildAsunaInstructions } from '../prompts';
 import { VoiceStateMachine, type VoiceState } from '../state/voice-state-machine';
 import { resolveApproval } from '../tools/approval-policy';
+import type { ToolResultReport } from '../tools/registry';
 import { NO_TOOL_ARGUMENTS, type AsunaToolDefinition, type ToolResult } from '../tools/types';
 import type { ToolAuditInput } from '../../shared/tool-event';
 
@@ -1016,6 +1018,8 @@ describe('AsunaRealtimeService — onay akisi (ASU-048)', () => {
         arguments: { path: 'README.md' },
         approvalState: 'denied',
         resultSummary: TOOL_DENIED_MODEL_MESSAGE,
+        // ASU-051: onay alinamadi, `execute` hic cagrilmadi.
+        outcome: 'not_run',
       },
     ]);
     // Reddedilen tool calismaz; model cevabina doner.
@@ -1323,5 +1327,305 @@ describe('AsunaToolDefinition -> SDK tool adaptoru', () => {
 
     expect(output).not.toContain('sources');
     expect(output).not.toContain('{');
+  });
+});
+
+describe('AsunaRealtimeService — tool acma/kapama ve sonuc gorunurlugu (ASU-054)', () => {
+  const READ_ONLY: AsunaToolDefinition = {
+    name: 'get_current_project',
+    description: 'Kullanicinin su an uzerinde calistigi kayitli projeyi dondurur.',
+    risk: 0,
+    requiresApproval: false,
+    timeoutMs: 5_000,
+    parameters: NO_TOOL_ARGUMENTS,
+    execute: (): Promise<ToolResult> => Promise.resolve({ ok: true, summary: 'oldu' }),
+  };
+
+  /** **Kabul kriteri**: kapali tool modele **verilmez**. */
+  it('kapali tool SDK oturumuna verilen listeden dusuyor', async () => {
+    const harness = createHarness({
+      service: {
+        tools: [READ_ONLY, RISKY_TOOL],
+        isToolEnabled: (name): boolean => name !== RISKY_TOOL.name,
+      },
+    });
+
+    await harness.service.connect();
+
+    expect(harness.sessions.at(-1)?.spec.tools.map((tool) => tool.name)).toEqual([
+      READ_ONLY.name,
+    ]);
+  });
+
+  /**
+   * Ikinci katman: kapi calisma zamaninda da bagli. Liste suzulmus olsa bile
+   * `executeTool` her cagrida yeniden sorar — acik bir oturumun ortasinda
+   * kapatilan tool icin tek koruma bu.
+   */
+  it('kapi calisma zamani baglantilarina da geciriliyor', async () => {
+    let enabled = true;
+    const harness = createHarness({
+      service: { tools: [READ_ONLY], isToolEnabled: (): boolean => enabled },
+    });
+
+    await harness.service.connect();
+    const runtime = harness.sessions.at(-1)?.spec.toolRuntime;
+
+    expect(runtime?.isToolEnabled?.(READ_ONLY.name)).toBe(true);
+    enabled = false;
+    // Ayni oturum, ayni baglanti: cevap **aninda** degisiyor.
+    expect(runtime?.isToolEnabled?.(READ_ONLY.name)).toBe(false);
+  });
+
+  it('kanca verilmezse tum tool"lar acik kaliyor', async () => {
+    const harness = createHarness({ service: { tools: [READ_ONLY, RISKY_TOOL] } });
+
+    await harness.service.connect();
+
+    expect(harness.sessions.at(-1)?.spec.tools).toHaveLength(2);
+  });
+
+  /**
+   * Reddedilen aksiyon da **gorunur**: transcript'ten dusen bir ret,
+   * kullaniciyi "oldu mu, olmadi mi?" sorusuyla birakirdi
+   * (PROJECT.md Bolum 19).
+   */
+  it('reddedilen onay icin `tool_result` yayinliyor', async () => {
+    const harness = createApprovalHarness();
+    await harness.service.connect();
+    requestApproval(harness);
+    harness.events.length = 0;
+
+    harness.service.rejectToolCall('call_1');
+
+    expect(harness.events).toContainEqual({
+      type: 'tool_result',
+      toolName: RISKY_TOOL.name,
+      risk: 2,
+      outcome: 'not_run',
+      approvalState: 'denied',
+      summary: TOOL_DENIED_MODEL_MESSAGE,
+    });
+  });
+
+  it('zaman asiminda da `tool_result` yayinliyor', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createApprovalHarness();
+      await harness.service.connect();
+      requestApproval(harness);
+      harness.events.length = 0;
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(harness.events).toContainEqual({
+        type: 'tool_result',
+        toolName: RISKY_TOOL.name,
+        risk: 2,
+        outcome: 'not_run',
+        approvalState: 'timeout',
+        summary: TOOL_APPROVAL_TIMEOUT_MODEL_MESSAGE,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+/**
+ * `toSdkTool` -> `executeTool` **dikisi** (Gate 3 C1/H1 regresyonu).
+ *
+ * Neden ayri bir describe: `ToolRuntimeBindings` alanlarinin hepsi opsiyonel,
+ * yani bir kancayi `executeTool`'a gecirmeyi unutmak **derleme hatasi vermez**.
+ * Sessizce olan sey su: kapatma kapisi `undefined` gorulur ("her tool acik"),
+ * sonuc kancasi `undefined` gorulur ("kimseye haber verme"). Ikisi de guvenlik
+ * ve gorunurluk sozlerinin tam tersi. Zincirin uclari ayri ayri test edilmisti;
+ * kirilan yer **aradaki tek satirdi**. Bu testler o satiri yerine cakiyor.
+ */
+describe('toSdkTool — calisma zamani kancalarinin dikisi (ASU-054)', () => {
+  const TOOL: AsunaToolDefinition = {
+    name: 'read_project_file',
+    description: 'Kayitli proje kokundeki bir dosyayi okur ve icerigini dondurur.',
+    risk: 0,
+    requiresApproval: false,
+    timeoutMs: 5_000,
+    parameters: NO_TOOL_ARGUMENTS,
+    execute: (): Promise<ToolResult> =>
+      Promise.resolve({
+        ok: true,
+        summary: '# Asuna\nSesli companion.',
+        auditSummary: 'README.md okundu (26 B)',
+      }),
+  };
+
+  /**
+   * Tool'u **SDK'nin cagirdigi gibi** cagirir.
+   *
+   * `tool()` bizim verdigimiz `execute` fonksiyonunu disari `invoke` adiyla
+   * acar ve ona argumanlari **ham JSON metni** olarak verir; parse + sema
+   * dogrulamasi SDK'nin icinde olur. Test bu yuzden `invoke` uzerinden gidiyor:
+   * uretimde calisan yol tam olarak bu ve dikisin kirilmis olmasi ancak burada
+   * gorulur. `runContext` bizim `execute`'umuzda kullanilmiyor (`_runContext`),
+   * SDK de onu yalnizca ileri tasiyor — bu yuzden `undefined` gecilebilir.
+   */
+  function invokerOf(
+    runtime: ToolRuntimeBindings,
+    definition = TOOL,
+  ): (argumentsJson?: string) => Promise<string> {
+    const invoke = toSdkTool(definition, runtime).invoke as unknown as (
+      runContext: unknown,
+      input: string,
+    ) => Promise<string>;
+    return (argumentsJson = '{}'): Promise<string> => invoke(undefined, argumentsJson);
+  }
+
+  /**
+   * **C1 regresyonu.** Kapali tool acik oturumun ortasinda cagrildiginda
+   * calismamali. Risk 0 oldugu icin onay kapisi devrede degil — tek koruma bu.
+   */
+  it('kapali tool SDK yolundan da calismiyor', async () => {
+    const execute = vi.fn<() => Promise<ToolResult>>(() =>
+      Promise.resolve({ ok: true, summary: 'oldu' }),
+    );
+    const audits: ToolAuditInput[] = [];
+
+    const output = await invokerOf(
+      {
+        approvalMode: 'always',
+        isToolEnabled: (): boolean => false,
+        onAudit: (input): void => void audits.push(input),
+      },
+      { ...TOOL, execute },
+    )();
+
+    expect(execute).not.toHaveBeenCalled();
+    // Model reddi **oldugu gibi** goruyor: "yaptim" diyemez.
+    expect(output.startsWith(TOOL_FAILURE_PREFIX)).toBe(true);
+    // Reddedilen cagri sessizce dusmuyor, deftere geciyor.
+    expect(audits).toHaveLength(1);
+    expect(audits[0]).toMatchObject({
+      toolName: 'read_project_file',
+      approvalState: 'not_requested',
+      outcome: 'not_run',
+    });
+  });
+
+  it('acik tool SDK yolundan calisiyor (kanca kapiyi kilitlemiyor)', async () => {
+    const execute = vi.fn<() => Promise<ToolResult>>(() =>
+      Promise.resolve({ ok: true, summary: 'oldu' }),
+    );
+
+    const output = await invokerOf(
+      { approvalMode: 'always', isToolEnabled: (): boolean => true },
+      { ...TOOL, execute },
+    )();
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(output).toBe('oldu');
+  });
+
+  /**
+   * **H1 regresyonu.** Basarili cagri da transcript'e dusmeli; `tool_result`
+   * yalnizca onay reddi/timeout yolundan gelseydi "Asuna ne yapti?" sorusunun
+   * cevabi calisan cagrilarda **bos** olurdu.
+   */
+  it('basarili cagri sonuc kancasini tam bir kez tetikliyor', async () => {
+    const reports: ToolResultReport[] = [];
+
+    await invokerOf({
+      approvalMode: 'always',
+      onToolResult: (report): void => void reports.push(report),
+    })();
+
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toEqual({
+      toolName: 'read_project_file',
+      risk: 0,
+      outcome: 'succeeded',
+      approvalState: 'not_required',
+      // Transcript satiri **icerik gormez**: `auditSummary` kullanilir.
+      summary: 'README.md okundu (26 B)',
+    });
+    expect(reports[0]?.summary).not.toContain('Sesli companion');
+  });
+
+  /** Basarisiz cagri da gorunur; "sessizce olmadi" diye bir durum yok. */
+  it('basarisiz cagri `failed` olarak raporlaniyor', async () => {
+    const reports: ToolResultReport[] = [];
+
+    await invokerOf(
+      {
+        approvalMode: 'always',
+        onToolResult: (report): void => void reports.push(report),
+      },
+      {
+        ...TOOL,
+        execute: (): Promise<ToolResult> =>
+          Promise.resolve({ ok: false, summary: 'okunamadi', errorKind: 'not_found' }),
+      },
+    )();
+
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.outcome).toBe('failed');
+  });
+
+  /** Kancalar verilmezse eski davranis aynen surer (geriye donuk uyum). */
+  it('kanca verilmediginde tool calismaya devam ediyor', async () => {
+    const output = await invokerOf({ approvalMode: 'always' })();
+    expect(output).toContain('Sesli companion');
+  });
+
+  /**
+   * Ucdan uca: **servisin** kurdugu `toolRuntime` gercekten kapatiyor mu?
+   * Yukaridaki testler `toSdkTool`'u dogrudan cagiriyor; bu test zinciri
+   * `AsunaRealtimeService` -> `spec.toolRuntime` -> `toSdkTool` -> `executeTool`
+   * boyunca kosuyor.
+   */
+  it('servisin urettigi runtime ile kapatma ucdan uca calisiyor', async () => {
+    const execute = vi.fn<() => Promise<ToolResult>>(() =>
+      Promise.resolve({ ok: true, summary: 'oldu' }),
+    );
+    let enabled = true;
+    const audits: ToolAuditInput[] = [];
+    const harness = createHarness({
+      service: {
+        tools: [{ ...TOOL, execute }],
+        isToolEnabled: (): boolean => enabled,
+        recordToolEvent: (input): void => void audits.push(input),
+      },
+    });
+
+    await harness.service.connect();
+    const runtime = harness.sessions.at(-1)?.spec.toolRuntime;
+    expect(runtime).toBeDefined();
+
+    enabled = false;
+    const output = await invokerOf(runtime!, { ...TOOL, execute })();
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(output.startsWith(TOOL_FAILURE_PREFIX)).toBe(true);
+    expect(audits.at(-1)).toMatchObject({ outcome: 'not_run' });
+  });
+
+  /**
+   * Ayni zincirin gorunurluk ucu: servisin runtime'i uzerinden calisan basarili
+   * bir cagri `tool_result` event'ine donusuyor.
+   */
+  it('servisin urettigi runtime basarili cagriyi event"e ceviriyor', async () => {
+    const harness = createHarness({ service: { tools: [TOOL] } });
+    await harness.service.connect();
+    const runtime = harness.sessions.at(-1)?.spec.toolRuntime;
+    harness.events.length = 0;
+
+    await invokerOf(runtime!)();
+
+    expect(harness.events).toContainEqual({
+      type: 'tool_result',
+      toolName: 'read_project_file',
+      risk: 0,
+      outcome: 'succeeded',
+      approvalState: 'not_required',
+      summary: 'README.md okundu (26 B)',
+    });
   });
 });

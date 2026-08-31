@@ -1,8 +1,11 @@
-import { Suspense, lazy, useState } from 'react';
+import { Suspense, lazy, useMemo, useState } from 'react';
 
+import type { UseAsunaSessionOptions } from '../asuna/agent/use-asuna-session';
+import { asunaToolRegistry, ToolToggleStore } from '../asuna/tools';
 import { MemoryView } from '../components/memory-view';
 import { ProjectsView } from '../components/projects-view';
 import { SettingsView } from '../components/settings-view';
+import { ToolsView } from '../components/tools-view';
 import { VoicePanel } from '../components/voice-panel';
 
 /**
@@ -22,6 +25,7 @@ const TABS = [
   { id: 'conversation', label: 'Konuşma' },
   { id: 'projects', label: 'Projeler' },
   { id: 'memory', label: 'Hafıza' },
+  { id: 'tools', label: 'Araçlar' },
   { id: 'settings', label: 'Ayarlar' },
 ] as const;
 
@@ -30,8 +34,9 @@ type TabId = (typeof TABS)[number]['id'];
 /**
  * Uygulama kabugu.
  *
- * Kabuk bilerek ince: hicbir servis cagrisi burada yok, yalnizca hangi panelin
- * gorunur oldugunu tutar.
+ * Kabuk bilerek ince: burada servis **cagrisi** yok, yalnizca hangi panelin
+ * gorunur oldugu ve paylasilan tool anahtar seti tutulur (kompozisyon koku —
+ * ayni store hem ses oturumuna hem Araclar sekmesine gider).
  *
  * # Sekme kurali: ses paneli ASLA unmount edilmez
  *
@@ -42,6 +47,29 @@ type TabId = (typeof TABS)[number]['id'];
  */
 export function App(): React.JSX.Element {
   const [tab, setTab] = useState<TabId>('conversation');
+
+  /**
+   * Tool tanimlari + anahtarlari (ASU-054) — kabuk **kompozisyon kokudur**.
+   *
+   * Ikisi de burada bir kez kurulur ve **ayni ornek** iki yere verilir: ses
+   * oturumuna (modele giden liste ve `executeTool` kapisi bunlari okur) ve
+   * Araclar sekmesine.
+   *
+   * - Ayri **store** olsaydi ekranda "Kapalı" gorunen bir tool calismaya devam
+   *   ederdi.
+   * - Ayri **liste** olsaydi (sekme registry'yi kendi okusaydi) oturuma
+   *   daraltilmis bir liste verildigi anda sekme, modele acik olmayan
+   *   tool'lari "Açık" gosterirdi.
+   *
+   * Ikisi de `useState` ile dondurulur: her render'da yeni bir store,
+   * kullanicinin kapattigi tool'u sessizce geri acardi.
+   */
+  const [toolDefinitions] = useState(() => asunaToolRegistry.list());
+  const [toolToggles] = useState(() => new ToolToggleStore());
+  const sessionOptions = useMemo<UseAsunaSessionOptions>(
+    () => ({ toolToggles, tools: toolDefinitions }),
+    [toolToggles, toolDefinitions],
+  );
 
   return (
     <main className="asuna-shell">
@@ -73,7 +101,7 @@ export function App(): React.JSX.Element {
         className="asuna-shell__panel"
         hidden={tab !== 'conversation'}
       >
-        <VoicePanel />
+        <VoicePanel options={sessionOptions} />
       </div>
 
       {/* Projeler de yalnizca acikken monte olur: kapali sekme proje listesi
@@ -98,6 +126,21 @@ export function App(): React.JSX.Element {
           className="asuna-shell__panel"
         >
           <MemoryView />
+        </div>
+      )}
+
+      {/* Araclar sekmesi de yalnizca acikken monte olur: kapali sekme denetim
+          defterini sorgulamaz (ASU-054). Onay karti bu sekmeden bagimsizdir —
+          ses panelinden `document.body`'ye portal edilir, yani buradayken de
+          gorunur (ASU-053). */}
+      {tab === 'tools' && (
+        <div
+          id="asuna-panel-tools"
+          role="tabpanel"
+          aria-labelledby="asuna-tab-tools"
+          className="asuna-shell__panel"
+        >
+          <ToolsView definitions={toolDefinitions} toggles={toolToggles} />
         </div>
       )}
 

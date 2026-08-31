@@ -5,13 +5,33 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import type { TranscriptLine } from '../asuna/agent/use-asuna-session';
+import type {
+  SpokenTranscriptLine,
+  ToolTranscriptLine,
+} from '../asuna/agent/use-asuna-session';
 
 import { TranscriptView, VISIBLE_LINE_COUNT } from './transcript-view';
 
+/** Tool satiri (ASU-054) — dokumun `role: 'tool'` varyanti. */
+function toolLine(
+  overrides: Partial<ToolTranscriptLine> & { readonly itemId: string },
+): ToolTranscriptLine {
+  return {
+    role: 'tool',
+    toolName: 'read_project_file',
+    text: 'README.md okundu (2 KB).',
+    status: 'completed',
+    interrupted: false,
+    outcome: 'succeeded',
+    risk: 0,
+    approvalState: 'not_required',
+    ...overrides,
+  };
+}
+
 function line(
-  overrides: Partial<TranscriptLine> & { readonly itemId: string },
-): TranscriptLine {
+  overrides: Partial<SpokenTranscriptLine> & { readonly itemId: string },
+): SpokenTranscriptLine {
   return {
     role: 'user',
     text: 'merhaba',
@@ -150,6 +170,79 @@ describe('TranscriptView', () => {
     );
 
     expect(log.scrollTop).toBe(1_000);
+  });
+
+  /**
+   * ASU-054: "tool sonucu (basari/hata + kisa ozet) transcript akisinda
+   * gorunuyor". Satir konusma satirlarindan ayirt edilebilir olmali.
+   */
+  it('tool satirini ayri bir satir olarak gosterir', () => {
+    render(
+      <TranscriptView
+        lines={[
+          line({ itemId: 'u1', text: 'readme"de ne yaziyor' }),
+          toolLine({ itemId: 't1' }),
+        ]}
+      />,
+    );
+
+    const row = screen.getByText('README.md okundu (2 KB).').closest('p');
+
+    expect(row).toHaveAttribute('data-role', 'tool');
+    expect(row).toHaveAttribute('data-outcome', 'succeeded');
+    expect(row).toHaveTextContent('Araç · read_project_file:');
+    expect(row).toHaveTextContent('başarılı');
+  });
+
+  it('basarisiz tool cagrisini basarili gibi gostermez', () => {
+    render(
+      <TranscriptView
+        lines={[
+          toolLine({
+            itemId: 't2',
+            text: 'Dosya bulunamadı.',
+            outcome: 'failed',
+          }),
+        ]}
+      />,
+    );
+
+    const row = screen.getByText('Dosya bulunamadı.').closest('p');
+
+    expect(row).toHaveAttribute('data-outcome', 'failed');
+    expect(row).toHaveTextContent('hata');
+  });
+
+  /** Calismayan cagri "basarili" gibi gorunmez (`not_run` != `succeeded`). */
+  it('hic calismayan cagriyi ayri etiketler', () => {
+    render(
+      <TranscriptView
+        lines={[
+          toolLine({
+            itemId: 't3',
+            text: 'Onay verilmediği için çalıştırılmadı.',
+            outcome: 'not_run',
+            approvalState: 'denied',
+            risk: 1,
+          }),
+        ]}
+      />,
+    );
+
+    const row = screen.getByText('Onay verilmediği için çalıştırılmadı.').closest('p');
+
+    expect(row).toHaveAttribute('data-outcome', 'not_run');
+    expect(row).toHaveAttribute('data-risk', '1');
+    expect(row).toHaveTextContent('çalışmadı');
+  });
+
+  it('tool ciktisi duz metin olarak basilir', () => {
+    const { container } = render(
+      <TranscriptView lines={[toolLine({ itemId: 't4', text: '<b>enjekte</b>' })]} />,
+    );
+
+    expect(screen.getByText('<b>enjekte</b>')).toBeInTheDocument();
+    expect(container.querySelector('b')).toBeNull();
   });
 
   it('sohbet arayuzu degil: metin girisi yok', () => {

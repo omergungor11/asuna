@@ -24,6 +24,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useReducer,
   useRef,
   useState,
@@ -45,7 +46,11 @@ import { AsunaRealtimeService } from './realtime-service';
 import { registerWindowCloseHandler } from './window-lifecycle';
 import { probeMicrophoneAccess, type MicrophoneProbe } from '../audio/microphone-access';
 import { loadFrontendConfig } from '../config/config.service';
-import { describeTurnDetection, type FrontendConfig } from '../config/frontend-config';
+import {
+  describeTurnDetection,
+  type FrontendConfig,
+  type ToolApprovalMode,
+} from '../config/frontend-config';
 import { buildSessionInstructions } from '../memory/bootstrap-context';
 import { fetchPrivacySettings } from '../memory/privacy-service';
 import { SessionRecorder, type SessionOutcome } from '../memory/session-service';
@@ -64,9 +69,11 @@ import type {
   VoiceStateMachine,
   VoiceTransitionReason,
 } from '../state/voice-state-machine';
-import { asunaToolRegistry } from '../tools';
-import type { ToolRisk } from '../tools/types';
+import { asunaToolRegistry, buildToolSummaries, ToolToggleStore } from '../tools';
+import type { AsunaToolDefinition, ToolRisk } from '../tools/types';
 import type { SessionUsageInput, TranscriptLineInput } from '../../shared/session';
+import type { ToolApprovalState, ToolOutcome } from '../../shared/tool-event';
+import type { ToolSummary } from '../../shared/tools';
 
 // ---------------------------------------------------------------------------
 // Servis sinirlari
@@ -93,6 +100,16 @@ export interface AsunaSessionPort {
 export interface AsunaSessionContext {
   readonly config: FrontendConfig;
   readonly stateMachine: VoiceStateMachine;
+  /**
+   * Modele acilabilecek tool'larin tam listesi (ASU-047 registry ciktisi).
+   * Hangisinin **acik** oldugu ayri bir soru — [`isToolEnabled`].
+   */
+  readonly tools: readonly AsunaToolDefinition[];
+  /**
+   * Tool bu oturumda acik mi (ASU-054)? Servis bunu iki yerde kullanir:
+   * baglanirken listeyi suzer, her cagrida kapiyi yeniden sorar.
+   */
+  readonly isToolEnabled: (toolName: string) => boolean;
   /**
    * Acik oturum kaydi (ASU-032). Servis buradan **yalnizca** aktif oturumun
    * kimligini okur (`tool_events.session_id` korelasyonu, ASU-048/050); kaydi
@@ -210,19 +227,58 @@ export class TurnLatencyTracker {
 // ---------------------------------------------------------------------------
 
 /**
- * Ekranda gorunen tek dokum satiri.
+ * Konusulan bir dokum satiri (kullanici ya da Asuna).
  *
  * `TranscriptEntry`'den tek farki `interrupted`: kesilen cevabin nerede kesildigini
  * kullanici gormeli (ASU-017). Bu bilgi item'in kendisinde degil, ayri bir event'te
  * (`agent_interrupted`) geliyor.
  */
-export interface TranscriptLine {
+export interface SpokenTranscriptLine {
   readonly itemId: string;
   readonly role: 'user' | 'assistant';
   readonly text: string;
   readonly status: 'in_progress' | 'completed' | 'incomplete';
   readonly interrupted: boolean;
 }
+
+/**
+ * Tool cagrisinin dokumdeki izi (ASU-054).
+ *
+ * PROJECT.md Bolum 19: "The user should never wonder whether the agent is
+ * silently modifying the computer." Bir tool calistiginda konusma akisinda bir
+ * satir kalir — calisan da, **reddedilen de**.
+ *
+ * # `text` icerik tasimaz
+ *
+ * Kaynagi `ToolResult.auditSummary` (yoksa `summary`): "README.md okundu
+ * (2.1 KB, kirpildi)" gibi tek satirlik bir ozet. Dosya icerigi transcript'e
+ * **girmez** — ne ekranda dokulur ne de bir kopyasi bellekte tutulur.
+ *
+ * # Neden `status` ve `interrupted` de var
+ *
+ * Mevcut tuketiciler (`transcript-view`) satirlari ayirmadan `text`/`status`
+ * okuyor. Alanlari sabit degerlerle tasimak, `role` ayrimini yapmayan bir
+ * bilesenin kirilmamasini saglar; ayrimi yapan bilesen `role === 'tool'` ile
+ * kendi gosterimini kurar.
+ */
+export interface ToolTranscriptLine {
+  readonly itemId: string;
+  readonly role: 'tool';
+  readonly toolName: string;
+  /** Kisa ozet — **dosya icerigi degil**. */
+  readonly text: string;
+  /** Tool satiri bir kez ve tamamlanmis olarak yazilir; guncellenmez. */
+  readonly status: 'completed';
+  readonly interrupted: false;
+  /** Calisti mi, calistiysa basardi mi? (`tool_events.outcome` ile ayni kume.) */
+  readonly outcome: ToolOutcome;
+  /** `null` = tool registry'de bulunamadi; risk seviyesi uydurulmaz. */
+  readonly risk: ToolRisk | null;
+  readonly approvalState: ToolApprovalState;
+}
+
+/** Ekranda gorunen tek dokum satiri. */
+export type TranscriptLine = SpokenTranscriptLine | ToolTranscriptLine;
 
 /**
  * Bellekte tutulan azami satir sayisi.
@@ -260,6 +316,34 @@ function upsertTranscript(
       text: entry.text,
       status: entry.status,
       interrupted: entry.status === 'incomplete',
+    },
+  ];
+
+  return appended.length > MAX_TRANSCRIPT_LINES
+    ? appended.slice(appended.length - MAX_TRANSCRIPT_LINES)
+    : appended;
+}
+
+/**
+ * Tool sonucunu dokume ekler (ASU-054).
+ *
+ * `itemId` deterministik olarak uretilir (event ani + tool adi + o anki satir
+ * sayisi): reducer saf kalir, modul duzeyinde bir sayac tutulmaz ve ayni
+ * event iki kez islenirse ayni kimlik cikar.
+ */
+function appendToolLine(
+  lines: readonly TranscriptLine[],
+  line: Omit<ToolTranscriptLine, 'itemId' | 'role' | 'status' | 'interrupted'>,
+  atMs: number,
+): readonly TranscriptLine[] {
+  const appended: readonly TranscriptLine[] = [
+    ...lines,
+    {
+      itemId: `tool:${line.toolName}:${atMs.toString()}:${lines.length.toString()}`,
+      role: 'tool',
+      status: 'completed',
+      interrupted: false,
+      ...line,
     },
   ];
 
@@ -320,9 +404,17 @@ export class TranscriptCollector {
     this.lines = upsertTranscript(this.lines, entry);
   }
 
-  /** Kalici kayda uygun hale getirir: bos metinli (henuz gelmemis) satirlar atilir. */
+  /**
+   * Kalici kayda uygun hale getirir: bos metinli (henuz gelmemis) satirlar atilir.
+   *
+   * Tool satirlari **kalici dokume girmez**: `transcript_lines` sozlesmesi
+   * (`shared/session.ts`) yalnizca `user`/`assistant` tanir ve tool cagrilarinin
+   * kalici kaydi ayri bir defterde tutulur (`tool_events`, ASU-050). Ayni olayi
+   * iki yere yazmak, birinin silinip otekinin kalmasi demekti.
+   */
   public toInput(): TranscriptLineInput[] {
     return this.lines
+      .filter((line): line is SpokenTranscriptLine => line.role !== 'tool')
       .filter((line) => line.text.trim().length > 0)
       .map((line) => {
         const at = this.firstSeen.get(line.itemId);
@@ -494,6 +586,25 @@ function reduceRealtimeEvent(
     case 'tool_call_completed':
       return { ...state, activeTool: null };
 
+    // ASU-054: calisan da, reddedilen de dokumde gorunur. `activeTool` burada
+    // temizlenmiyor — SDK'nin `tool_end` sinyali onu zaten kapatir ve
+    // reddedilen cagrida `tool_approval_resolved` yapiyor.
+    case 'tool_result':
+      return {
+        ...state,
+        transcript: appendToolLine(
+          state.transcript,
+          {
+            toolName: event.toolName,
+            text: event.summary,
+            outcome: event.outcome,
+            risk: event.risk,
+            approvalState: event.approvalState,
+          },
+          atMs,
+        ),
+      };
+
     // Barge-in: kullanici sozu kesti, sunucu uretilen sesi durdurdu. Gorsel tepki
     // olmazsa kullanici "duydu mu?" diye tekrar konusur (ASU-016).
     case 'agent_interrupted':
@@ -566,6 +677,13 @@ export interface UseAsunaSessionOptions {
    * varsayilan `session_start` / `session_finalize` komutlarini cagirir.
    */
   readonly createSessionRecorder?: () => SessionRecorder;
+  /**
+   * Modele acilabilecek tool'lar. Varsayilan `asunaToolRegistry.list()`;
+   * testler kendi listesini verir.
+   */
+  readonly tools?: readonly AsunaToolDefinition[];
+  /** Oturum-yerel acma/kapama kaydi (ASU-054). Varsayilan: yeni bos bir kayit. */
+  readonly toolToggles?: ToolToggleStore;
 }
 
 export interface AsunaSession {
@@ -618,6 +736,33 @@ export interface AsunaSession {
   readonly approveTool: (requestId: string) => void;
   /** Bekleyen tool onayini reddeder; model reddi ogrenir. */
   readonly rejectTool: (requestId: string) => void;
+  /**
+   * Kayitli tool'lar ve durumlari (ASU-054, `src/shared/tools.ts`).
+   *
+   * Registry'den turetilir; `approval` alani ASU-048 matrisinin **ayni**
+   * fonksiyonundan (`resolveApproval`) gelir, ikinci bir tablo yok. Yani
+   * Tools sekmesinde yazan politika ile cagri aninda uygulanan politika
+   * ayrisamaz.
+   *
+   * `ASUNA_TOOL_APPROVAL_MODE` okunana kadar **en siki** mod varsayilir
+   * (`always`): bilinmeyen bir moda gevsek bir politika yazmak, kullaniciya
+   * "bu onaysiz calisir" diye yanlis bir soz vermek olurdu.
+   */
+  readonly tools: readonly ToolSummary[];
+  /**
+   * Tool'u bu oturum icin acar/kapatir (ASU-054).
+   *
+   * Kapatma **oturum-yereldir** (bellekte; kalici ayar degil) ve iki katmanda
+   * birden etkilidir: kapali tool bir sonraki baglantida modele verilen
+   * listeden dusurulur, ayrica **su anki** oturumda cagrilirsa `executeTool`
+   * kapisi reddeder ve `tool_events` defterine `not_run` olarak yazar. Gizli
+   * bir calistirma yolu yok.
+   *
+   * **Acik bir oturum sirasinda** yapilan bir kapatma modelin gordugu listeyi
+   * degistirmez (SDK'ya verilen tool seti oturum boyunca sabit); etkisi bu
+   * oturumda "cagri reddedilir", bir sonraki oturumda "tool hic gorunmez".
+   */
+  readonly setToolEnabled: (toolName: string, enabled: boolean) => void;
 }
 
 interface ResolvedDeps {
@@ -631,6 +776,8 @@ interface ResolvedDeps {
   readonly registerCloseHandler: (handler: () => void) => () => void;
   readonly recorder: SessionRecorder;
   readonly transcriptCollector: TranscriptCollector;
+  readonly toolDefinitions: readonly AsunaToolDefinition[];
+  readonly toolToggles: ToolToggleStore;
 }
 
 function defaultCreateService(context: AsunaSessionContext): AsunaSessionPort {
@@ -642,10 +789,11 @@ function defaultCreateService(context: AsunaSessionContext): AsunaSessionPort {
     // oturumun ilk saniyelerinde henuz yoktur; o aralikta `null` yazilir —
     // uydurulmus bir korelasyon kimligi yanlis zincir uretirdi.
     resolveSessionId: (): number | null => context.recorder.currentSessionId,
-    // ASU-047: liste registry'den gelir — "hangi yetenekler acik?" sorusunun
-    // tek cevabi orasi. Hepsi risk 0 / onaysiz; MVP kurali "once salt okuma"
-    // (PROJECT.md Bolum 17).
-    tools: asunaToolRegistry.list(),
+    // ASU-047: liste registry'den gelir — "hangi yetenekler kayitli?" sorusunun
+    // tek cevabi orasi. ASU-054: hangilerinin **acik** oldugu kullanicinin
+    // oturum-yerel karari; servis listeyi baglanirken suzer.
+    tools: context.tools,
+    isToolEnabled: context.isToolEnabled,
     // ASU-035: oturum acilmadan once Stage A baglami cekilir ve talimata
     // enjekte edilir. Hafiza kapali/bozuksa `buildSessionInstructions` durust
     // bir "hatirlamiyorum" satiriyla doner — konusma bloklanmaz.
@@ -678,6 +826,10 @@ function resolveDeps(options: UseAsunaSessionOptions): ResolvedDeps {
         },
       }),
     transcriptCollector: new TranscriptCollector(),
+    // Kayitli tool listesi mount aninda dondurulur: oturum ortasinda degisen
+    // bir liste, modelin gordugu yetenekler ile UI'in gosterdigini ayirirdi.
+    toolDefinitions: options.tools ?? asunaToolRegistry.list(),
+    toolToggles: options.toolToggles ?? new ToolToggleStore(),
     loadConfig: options.loadConfig ?? loadFrontendConfig,
     createService: options.createService ?? defaultCreateService,
     probeMicrophone:
@@ -698,6 +850,14 @@ export function useAsunaSession(options: UseAsunaSessionOptions = {}): AsunaSess
 
   const [facts, dispatch] = useReducer(reduceSession, INITIAL_FACTS);
   const [busy, setBusy] = useState(false);
+  /**
+   * `ASUNA_TOOL_APPROVAL_MODE` — Tools sekmesindeki politika sutunu icin.
+   *
+   * Baslangic degeri **en siki** mod: config okunana kadar "bu onaysiz calisir"
+   * diye bir soz vermiyoruz (`executeTool` da ayni varsayilani kullanir).
+   * Config process omru boyunca onbelleklendigi icin bu okuma tektir.
+   */
+  const [toolApprovalMode, setToolApprovalMode] = useState<ToolApprovalMode>('always');
 
   const serviceRef = useRef<AsunaSessionPort | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
@@ -786,6 +946,7 @@ export function useAsunaSession(options: UseAsunaSessionOptions = {}): AsunaSess
         case 'error':
         case 'tool_call_started':
         case 'tool_call_completed':
+        case 'tool_result':
         case 'tool_approval_requested':
         case 'tool_approval_resolved':
         case 'unexpected_signal':
@@ -893,6 +1054,7 @@ export function useAsunaSession(options: UseAsunaSessionOptions = {}): AsunaSess
         case 'turn_ended':
         case 'tool_call_started':
         case 'tool_call_completed':
+        case 'tool_result':
         case 'tool_approval_requested':
         case 'tool_approval_resolved':
         case 'unexpected_signal':
@@ -934,6 +1096,11 @@ export function useAsunaSession(options: UseAsunaSessionOptions = {}): AsunaSess
         config,
         stateMachine: deps.machine,
         recorder: deps.recorder,
+        tools: deps.toolDefinitions,
+        // Fonksiyon olarak veriliyor, anlik deger olarak degil: servis her
+        // cagrida **guncel** cevabi alsin. Oturum ortasinda kapatilan bir tool
+        // sonraki cagrida reddedilir.
+        isToolEnabled: (toolName: string): boolean => deps.toolToggles.isEnabled(toolName),
       });
       // Tek abonelik: servis hook'un omru boyunca yasar, her baglantida yeniden
       // abone olunmaz (ASU-018 listener leak kontrolu).
@@ -1049,6 +1216,40 @@ export function useAsunaSession(options: UseAsunaSessionOptions = {}): AsunaSess
     [deps],
   );
 
+  /**
+   * Kapatilmis tool adlari — dis kaynak (`ToolToggleStore`) tek dogru yer.
+   *
+   * Snapshot dondurulmus bir dizi ve degismedigi surece **ayni referans**;
+   * bu yuzden asagidaki `useMemo` dogrudan ona baglanabiliyor ve hook paralel
+   * bir kopya tutmuyor (`state` ile ayni ilke).
+   */
+  const disabledTools = useSyncExternalStore(
+    useCallback(
+      (onStoreChange: () => void) => deps.toolToggles.subscribe(onStoreChange),
+      [deps.toolToggles],
+    ),
+    useCallback(() => deps.toolToggles.disabledNames, [deps.toolToggles]),
+    useCallback(() => deps.toolToggles.disabledNames, [deps.toolToggles]),
+  );
+
+  const tools = useMemo(
+    () =>
+      buildToolSummaries(
+        deps.toolDefinitions,
+        toolApprovalMode,
+        (toolName) => !disabledTools.includes(toolName),
+      ),
+    [deps.toolDefinitions, disabledTools, toolApprovalMode],
+  );
+
+  const setToolEnabled = useCallback(
+    (toolName: string, enabled: boolean): void => {
+      deps.toolToggles.setEnabled(toolName, enabled);
+      deps.log.info(enabled ? 'Tool acildi.' : 'Tool kapatildi.', { tool: toolName });
+    },
+    [deps],
+  );
+
   const rejectTool = useCallback(
     (requestId: string): void => {
       const service = serviceRef.current;
@@ -1060,6 +1261,40 @@ export function useAsunaSession(options: UseAsunaSessionOptions = {}): AsunaSess
     },
     [deps],
   );
+
+  /**
+   * Onay politikasi modunu okur (ASU-054 Tools sekmesi).
+   *
+   * Oturum baslatmaktan **bagimsiz**: kullanici hic konusmadan da hangi
+   * tool'un onay isteyecegini gorebilmeli. `loadFrontendConfig` process omru
+   * boyunca onbellekli, yani `start()` sonradan cagrildiginda ikinci bir IPC
+   * turu olusmaz.
+   *
+   * Hata **yutulmuyor ama yukseltilmiyor**: mod en siki degerinde kalir ve
+   * gercek hata `start()` yolunda kullaniciya gosterilir (ASU-019). Burada
+   * ekrani hataya bogmak, ses akisiyla ilgisi olmayan bir okuma icin fazla.
+   */
+  useEffect(() => {
+    let cancelled = false;
+
+    deps.loadConfig().then(
+      (config) => {
+        if (!cancelled) {
+          configRef.current ??= config;
+          setToolApprovalMode(config.toolApprovalMode);
+        }
+      },
+      (error: unknown) => {
+        deps.log.debug('Tool onay modu okunamadi; en siki mod varsayiliyor.', {
+          detail: error instanceof Error ? error.message : String(error),
+        });
+      },
+    );
+
+    return (): void => {
+      cancelled = true;
+    };
+  }, [deps]);
 
   /**
    * Kapanis kancalari (ASU-018).
@@ -1101,5 +1336,7 @@ export function useAsunaSession(options: UseAsunaSessionOptions = {}): AsunaSess
     stop,
     approveTool,
     rejectTool,
+    tools,
+    setToolEnabled,
   };
 }

@@ -1,9 +1,11 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
+import type * as ToolAuditModule from '../asuna/tools/audit';
 import type * as ProjectContextModule from '../asuna/projects/project-context';
 import type * as ProjectRegistryModule from '../asuna/projects/project-registry';
 import type { DbStatus } from '../shared/db-status';
+import type { ToolEventPage } from '../shared/tool-event';
 import type { PrivacySettings } from '../shared/privacy';
 import type { ProjectRecord } from '../shared/project';
 
@@ -36,6 +38,15 @@ vi.mock('../asuna/memory/privacy-service', () => ({
   PRIVACY_COMMANDS: { get: 'get_privacy_settings', set: 'set_privacy_settings' },
   fetchPrivacySettings: (): Promise<PrivacySettings> => Promise.resolve(PRIVACY),
   updatePrivacySettings: (): Promise<PrivacySettings> => Promise.resolve(PRIVACY),
+}));
+
+// ASU-054: Araclar sekmesi acildiginda gercek `tool_event_list` komutu
+// cagrilmasin. Defter bos donuyor — ekranin kendisi test ediliyor, veri degil.
+const EMPTY_EVENTS: ToolEventPage = { events: [], limit: 25, limitMax: 200, total: 0 };
+
+vi.mock('../asuna/tools/audit', async (importOriginal) => ({
+  ...(await importOriginal<typeof ToolAuditModule>()),
+  listToolEvents: (): Promise<ToolEventPage> => Promise.resolve(EMPTY_EVENTS),
 }));
 
 // ASU-045: proje kaydi da ayri bir IPC yuzeyi. Hem Projeler sekmesi hem de ses
@@ -113,6 +124,27 @@ describe('App', () => {
     expect(conversation?.querySelector('.asuna-panel')).not.toBeNull();
     // Gizli panelde bile guncel proje yazili: overlay'e cikacak deger bu.
     expect(conversation).toHaveTextContent('Asuna');
+  });
+
+  /** ASU-054: denetim defteri kendi sekmesinde; ses paneli yine monte kalir. */
+  it('araclar sekmesi denetim defterini acar, ses panelini yikmaz', async () => {
+    render(<App />);
+
+    expect(document.getElementById('asuna-panel-tools')).toBeNull();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Araçlar' }));
+
+    expect(await screen.findByText('Bu filtreye uyan araç çağrısı yok.')).toBeInTheDocument();
+    // Defterin salt okunur oldugu ekranda yazili.
+    expect(
+      screen.getByText(
+        'Denetim defteri salt okunurdur: kayıtlar uygulamadan silinemez, düzenlenemez.',
+      ),
+    ).toBeInTheDocument();
+
+    const conversation = document.getElementById('asuna-panel-conversation');
+    expect(conversation).toHaveAttribute('hidden');
+    expect(conversation?.querySelector('.asuna-panel')).not.toBeNull();
   });
 
   /** ASU-037: gizlilik kontrolleri kendi sekmesinde, ses paneli yine monte. */

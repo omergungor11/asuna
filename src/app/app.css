@@ -750,3 +750,298 @@ body,
   overflow-wrap: anywhere;
   opacity: 0.85;
 }
+
+/* --- Tool onay karti (ASU-053) --------------------------------------------
+   Ayri overlay penceresi yok: kart `document.body`'ye portal edilir, bu yuzden
+   konumlandirma `fixed`. Sekme degistirmek onay istegini gizlemez. Renkler
+   `.asuna-status` noktalariyla ayni paletten: sari = beklemede, kirmizi = riskli. */
+
+.asuna-tool-approval {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(460px, calc(100vw - 24px));
+  padding: 10px 12px;
+  font-size: 0.85rem;
+  background: #1a1710;
+  border: 1px solid #ffd166;
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 45%);
+  transform: translateX(-50%);
+  user-select: text;
+}
+
+.asuna-tool-approval:focus {
+  outline: 1px solid #ffd166;
+  outline-offset: 2px;
+}
+
+.asuna-tool-approval[data-risk='2'],
+.asuna-tool-approval[data-risk='3'],
+.asuna-tool-approval[data-risk='unknown'] {
+  background: #1d1315;
+  border-color: #ff6b6b;
+}
+
+.asuna-tool-approval__lead {
+  margin: 0;
+  font-size: 0.78rem;
+  opacity: 0.8;
+}
+
+.asuna-tool-approval__tool {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.95rem;
+  overflow-wrap: anywhere;
+}
+
+.asuna-tool-approval__description {
+  margin: 0;
+}
+
+.asuna-tool-approval__facts {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  font-size: 0.78rem;
+}
+
+.asuna-tool-approval__fact {
+  display: flex;
+  gap: 6px;
+}
+
+.asuna-tool-approval__fact dt {
+  min-width: 78px;
+  opacity: 0.65;
+}
+
+.asuna-tool-approval__fact dt::after {
+  content: ':';
+}
+
+.asuna-tool-approval__fact dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.asuna-tool-approval__countdown {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.asuna-tool-approval__hint {
+  margin: 0;
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+
+.asuna-tool-approval__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.asuna-tool-approval__actions button {
+  padding: 6px 12px;
+  font: inherit;
+  color: inherit;
+  background: #1b1f2a;
+  border: 1px solid #2a2f3d;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.asuna-tool-approval__actions button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.asuna-tool-approval__notice {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  z-index: 100;
+  margin: 0;
+  padding: 6px 12px;
+  font-size: 0.8rem;
+  background: #12151d;
+  border: 1px solid #2a2f3d;
+  border-radius: 999px;
+  transform: translateX(-50%);
+}
+
+/* --- Araclar sekmesi (ASU-054) — "ne yapabilir" + "ne yapti". --- */
+
+.asuna-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(640px, 100%);
+  font-size: 0.85rem;
+  user-select: text;
+}
+
+.asuna-tools__heading {
+  margin: 8px 0 0;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.asuna-tools__note {
+  margin: 0;
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+
+.asuna-tools__notice {
+  margin: 0;
+  padding: 6px 8px;
+  background: #241417;
+  border: 1px solid #4a2126;
+  border-radius: 6px;
+}
+
+.asuna-tools__list,
+.asuna-tools__events {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.asuna-tools__events {
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.asuna-tools__item,
+.asuna-tools__event {
+  padding: 8px 10px;
+  background: #12151d;
+  border: 1px solid #22262f;
+  border-radius: 6px;
+}
+
+.asuna-tools__item[data-enabled='false'] {
+  opacity: 0.6;
+}
+
+.asuna-tools__item[data-risk='2'],
+.asuna-tools__item[data-risk='3'],
+.asuna-tools__event[data-risk='2'],
+.asuna-tools__event[data-risk='3'] {
+  border-color: #4a2126;
+}
+
+.asuna-tools__event[data-outcome='failed'] {
+  border-left: 2px solid #ff6b6b;
+}
+
+.asuna-tools__event[data-outcome='succeeded'] {
+  border-left: 2px solid #4cc38a;
+}
+
+.asuna-tools__item-head,
+.asuna-tools__event-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+
+.asuna-tools__name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+
+.asuna-tools__badge {
+  padding: 0 6px;
+  font-size: 0.7rem;
+  background: #1b1f2a;
+  border-radius: 999px;
+  opacity: 0.85;
+}
+
+.asuna-tools__description,
+.asuna-tools__event-args,
+.asuna-tools__event-result {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.asuna-tools__event-args,
+.asuna-tools__event-result {
+  font-size: 0.78rem;
+  opacity: 0.85;
+}
+
+.asuna-tools__event-meta {
+  margin: 4px 0 0;
+  font-size: 0.72rem;
+  opacity: 0.6;
+}
+
+.asuna-tools__switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 0.78rem;
+}
+
+.asuna-tools__filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+}
+
+.asuna-tools__filter select {
+  padding: 4px 6px;
+  font: inherit;
+  color: inherit;
+  background: #12151d;
+  border: 1px solid #2a2f3d;
+  border-radius: 6px;
+}
+
+.asuna-tools__more {
+  align-self: flex-start;
+  padding: 6px 12px;
+  font: inherit;
+  color: inherit;
+  background: #1b1f2a;
+  border: 1px solid #2a2f3d;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+/* Tool satiri (ASU-054): dokumde konusma satirlarindan ayrilir. */
+
+.asuna-transcript__line[data-role='tool'] {
+  padding-left: 6px;
+  border-left: 2px solid #5a6070;
+  opacity: 0.9;
+}
+
+.asuna-transcript__line[data-role='tool'][data-outcome='succeeded'] {
+  border-left-color: #4cc38a;
+}
+
+.asuna-transcript__line[data-role='tool'][data-outcome='failed'] {
+  border-left-color: #ff6b6b;
+}
+
+.asuna-transcript__outcome {
+  opacity: 0.75;
+}

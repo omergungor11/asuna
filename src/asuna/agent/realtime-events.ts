@@ -14,6 +14,7 @@ import type { AsunaRealtimeErrorInfo } from './realtime-errors';
 import type { VoiceState } from '../state/voice-state-machine';
 import type { ApprovalOutcome } from '../tools/approval-policy';
 import type { ToolRisk } from '../tools/types';
+import type { ToolApprovalState, ToolOutcome } from '../../shared/tool-event';
 
 /** Konusma dokumunun tek bir satiri. */
 export interface TranscriptEntry {
@@ -76,6 +77,30 @@ export type AsunaRealtimeEvent =
   /** Bir tool calismaya basladi (ASU-044'ten beri gercek). */
   | { readonly type: 'tool_call_started'; readonly toolName: string }
   | { readonly type: 'tool_call_completed'; readonly toolName: string }
+  /**
+   * Bir tool cagrisi **sonuclandi** (ASU-054).
+   *
+   * `tool_call_completed`ten farki: o SDK'nin "cagri bitti" sinyali ve yalnizca
+   * tool adini tasir; bu ise cagrinin **ne olduğunu** tasir — calisti mi,
+   * basardi mi, onaydan gecti mi ve tek satirlik ozeti ne.
+   *
+   * `summary` bilerek `ToolResult.auditSummary` (yoksa `summary`) degeridir:
+   * dosya icerigi gibi uzun ciktilar transcript'e **girmez**, yalnizca
+   * "README.md okundu (2.1 KB, kirpildi)" turu bir satir gorunur.
+   *
+   * Calismayan cagrilar da yayinlanir (`outcome: 'not_run'`): reddedilen,
+   * zaman asimina ugrayan ve kapatilmis tool cagrilari kullanicidan gizlenmez
+   * (PROJECT.md Bolum 19).
+   */
+  | {
+      readonly type: 'tool_result';
+      readonly toolName: string;
+      readonly risk: ToolRisk | null;
+      readonly outcome: ToolOutcome;
+      readonly approvalState: ToolApprovalState;
+      /** Kisa, **icerik tasimayan** ozet. */
+      readonly summary: string;
+    }
   /**
    * Bir tool cagrisi **kullanici onayi bekliyor** (ASU-048).
    *

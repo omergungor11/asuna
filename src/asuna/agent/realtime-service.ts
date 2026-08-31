@@ -70,7 +70,7 @@ import {
   resolveApproval,
   type ApprovalOutcome,
 } from '../tools/approval-policy';
-import { executeTool, type ToolApprovalGate } from '../tools/registry';
+import { executeTool, type ToolApprovalGate, type ToolResultReport } from '../tools/registry';
 import type { AsunaToolDefinition, ToolContext, ToolResult, ToolRisk } from '../tools/types';
 import type { ToolAuditInput } from '../../shared/tool-event';
 
@@ -289,6 +289,14 @@ export function toSdkTool(
           approvalMode: runtime.approvalMode,
           ...(runtime.approvalGate === undefined ? {} : { approvalGate: runtime.approvalGate }),
           ...(runtime.onAudit === undefined ? {} : { onAudit: runtime.onAudit }),
+          // ASU-054 dikisi: kapatma kapisi ve sonuc kancasi **buradan** gecer.
+          // Baglanmadiklarinda `executeTool` onlari `undefined` gorur ve sessizce
+          // "her tool acik, kimseye haber verme" davranisina duser — yani kapali
+          // bir tool acik oturumda calismaya devam eder ve transcript'e hicbir
+          // satir dusmez. Iki alan da opsiyonel oldugu icin derleyici bunu
+          // yakalayamaz; `sdk-tool-wiring` testleri dikisi yerine cakiyor.
+          ...(runtime.isToolEnabled === undefined ? {} : { isEnabled: runtime.isToolEnabled }),
+          ...(runtime.onToolResult === undefined ? {} : { onResult: runtime.onToolResult }),
           ...(details?.signal === undefined ? {} : { signal: details.signal }),
         });
       } catch (error) {
@@ -580,6 +588,17 @@ export interface AsunaRealtimeServiceOptions {
    */
   readonly recordToolEvent?: (input: ToolAuditInput) => void;
   /**
+   * Tool bu oturumda **acik mi** (ASU-054)?
+   *
+   * Iki yerde kullanilir: (a) `connect()` sirasinda modele verilen liste
+   * suzulur, (b) her cagrida `executeTool` kapisi yeniden sorar. Ikincisi acik
+   * bir oturumun ortasinda kapatilan tool icin gerekli — SDK'ya verilen liste
+   * o oturum boyunca sabittir.
+   *
+   * Verilmezse tum tool'lar acik sayilir (mevcut davranis degismez).
+   */
+  readonly isToolEnabled?: (toolName: string) => boolean;
+  /**
    * Onay penceresi (ms). Varsayilan [`APPROVAL_TIMEOUT_MS`]; testler kisaltir.
    * Sure dolunca istek **reddedilir** — bu bir urun karari, kullanici tercihi degil.
    */
@@ -732,6 +751,8 @@ export class AsunaRealtimeService {
 
   private readonly recordToolEvent: (input: ToolAuditInput) => void;
 
+  private readonly isToolEnabled: (toolName: string) => boolean;
+
   private readonly approvalTimeoutMs: number;
 
   /** Cevap bekleyen onay istekleri: `requestId` -> istek. */
@@ -796,6 +817,7 @@ export class AsunaRealtimeService {
         // Burada `void`: audit yazimi tool sonucunu ya da onay akisini bekletmez.
         void recordToolEvent(input);
       });
+    this.isToolEnabled = options.isToolEnabled ?? ((): boolean => true);
     this.approvalTimeoutMs = options.approvalTimeoutMs ?? APPROVAL_TIMEOUT_MS;
     this.idleState = options.idleState ?? 'BOOTING';
     this.onListenerError = options.onListenerError ?? defaultListenerErrorHandler;
@@ -1036,8 +1058,27 @@ export class AsunaRealtimeService {
       approvalGate: this.approvalGate,
       onAudit: this.recordToolEvent,
       resolveSessionId: this.resolveSessionId,
+      isToolEnabled: this.isToolEnabled,
+      onToolResult: this.publishToolResult,
     };
   }
+
+  /**
+   * Cagri sonucunu UI'a duyurur (ASU-054).
+   *
+   * Ok fonksiyonu alan: `toolRuntime` getter'i her cagrida yeni bir nesne
+   * uretiyor, ama bu referans sabit kaliyor.
+   */
+  private readonly publishToolResult = (report: ToolResultReport): void => {
+    this.publish({
+      type: 'tool_result',
+      toolName: report.toolName,
+      risk: report.risk,
+      outcome: report.outcome,
+      approvalState: report.approvalState,
+      summary: report.summary,
+    });
+  };
 
   private readonly approvalGate: ToolApprovalGate = (definition): Promise<ApprovalOutcome> =>
     Promise.resolve(this.consumeApproval(definition.name) ? 'approved' : 'denied');
@@ -1100,6 +1141,17 @@ export class AsunaRealtimeService {
     summary: string,
   ): void {
     this.writeApprovalAudit(pending, outcome, summary);
+    // Calismayan cagri da **gorunur** olur (ASU-054): reddedilen bir aksiyonun
+    // transcript'ten dusmesi, kullaniciyi "oldu mu, olmadi mi?" sorusuyla
+    // birakirdi. Risk bilinmiyorsa uydurulmuyor (`null`).
+    this.publish({
+      type: 'tool_result',
+      toolName: pending.toolName,
+      risk: pending.risk,
+      outcome: 'not_run',
+      approvalState: outcome,
+      summary,
+    });
     // Reddedilen tool calismaz: model cevabina doner (durum tablosunda
     // `AWAITING_APPROVAL -> ASSISTANT_THINKING` "reddedildi" kenari).
     this.applyTransition('ASSISTANT_THINKING', 'TOOL_CALL_COMPLETED', 'tool_approval_resolved');
@@ -1135,6 +1187,8 @@ export class AsunaRealtimeService {
       ...(pending.rawArguments === undefined ? {} : { arguments: pending.rawArguments }),
       approvalState,
       resultSummary: summary,
+      // Onay alinamadi: `execute` **hic** cagrilmadi, yan etki ihtimali yok.
+      outcome: 'not_run',
     });
   }
 
@@ -1263,7 +1317,11 @@ export class AsunaRealtimeService {
       voice: this.config.realtimeVoice,
       transcription,
       turnDetection: toTurnDetectionSpec(this.config),
-      tools: this.tools,
+      // ASU-054: kapali tool modele **verilmez**. Liste oturum acilisinda
+      // donduruluyor (SDK'ya verilen tool seti oturum boyunca sabit), yani
+      // oturum ortasinda yapilan bir kapatma modelin listesini degistirmez —
+      // o cagriyi `executeTool` kapisi reddeder ve deftere yazar.
+      tools: this.tools.filter((definition) => this.isToolEnabled(definition.name)),
       toolRuntime: this.toolRuntime,
     };
 
@@ -1427,7 +1485,11 @@ export class AsunaRealtimeService {
   /** Ayni item'in degismeyen halini tekrar yaymaz (`history_updated` tam snapshot yollar). */
   private publishTranscripts(entries: readonly TranscriptEntry[]): void {
     for (const entry of entries) {
-      const fingerprint = `${entry.status} ${entry.text}`;
+      // Ayirac `\x1f` (unit separator) ve **kacis dizisi olarak** yazili:
+      // ham bir kontrol baytini kaynaga gommek dosyayi `grep`/`file` icin
+      // ikili gosterir ve taramalar onu sessizce atlar. Calisma zamaninda
+      // uretilen metin ayni; secim yalnizca kaynagin duz metin kalmasi icin.
+      const fingerprint = `${entry.status}\x1f${entry.text}`;
       if (this.publishedTranscripts.get(entry.itemId) === fingerprint) {
         continue;
       }

@@ -12,7 +12,7 @@
 import type { AsunaRealtimeErrorInfo } from './realtime-errors';
 import type { RealtimeUsageSnapshot, TranscriptEntry } from './realtime-events';
 import type { ToolApprovalMode, VadEagerness } from '../config/frontend-config';
-import type { ToolApprovalGate } from '../tools/registry';
+import type { ToolApprovalGate, ToolResultReport } from '../tools/registry';
 import type { AsunaToolDefinition } from '../tools/types';
 import type { ToolAuditInput } from '../../shared/tool-event';
 
@@ -44,6 +44,23 @@ export interface ToolRuntimeBindings {
    * acilmadi) — uydurulmaz.
    */
   readonly resolveSessionId?: () => number | null;
+  /**
+   * Tool bu oturumda **acik mi** (ASU-054)?
+   *
+   * Verilmezse tum tool'lar acik sayilir. Kapali bir tool modele verilen
+   * listeden zaten dusurulur; bu kanca o listenin eskidigi ani (acik oturumun
+   * ortasinda kapatma) yakalar. Gizli bir calisma yolu birakmamak icin
+   * `executeTool` her cagrida yeniden sorar.
+   */
+  readonly isToolEnabled?: (toolName: string) => boolean;
+  /**
+   * Cagri bittiginde (calissin ya da calismasin) cagrilan kanca — ASU-054
+   * transcript satirinin kaynagi.
+   *
+   * Audit'ten **ayri**: audit kalici deftere yazar ve hafiza kapaliyken hic
+   * yazilmaz; bu kanca canli gorunurluk icin her zaman calisir.
+   */
+  readonly onToolResult?: (report: ToolResultReport) => void;
 }
 
 /**

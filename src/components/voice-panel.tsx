@@ -11,6 +11,8 @@
  * uzerinden olur, alt bilesenler saf sunumdur (props in, event out).
  */
 
+import { createPortal } from 'react-dom';
+
 import { useAsunaSession, type UseAsunaSessionOptions } from '../asuna/agent/use-asuna-session';
 import { describeSessionOutcome } from '../asuna/memory/session-service';
 import {
@@ -22,6 +24,7 @@ import { ErrorNotice } from './error-notice';
 import { MicIndicator } from './mic-indicator';
 import { describeCurrentProject } from './project-text';
 import { TalkButton } from './talk-button';
+import { ToolApprovalCard } from './tool-approval-card';
 import { TranscriptView } from './transcript-view';
 import { VoiceStatusBadge } from './voice-status-badge';
 
@@ -42,6 +45,22 @@ export function VoicePanel({ options, projectPort }: VoicePanelProps): React.JSX
 
   return (
     <section className="asuna-panel" aria-label="Asuna ses oturumu">
+      {/* Onay karti panelin **disina** cikar (ASU-053).
+          Ayri bir overlay penceresi henuz yok (`tauri.conf.json` tek pencere),
+          bu yuzden kart `document.body`'ye portal edilir ve sabit konumda
+          durur: Hafiza/Projeler/Ayarlar sekmesine gecildiginde Konusma paneli
+          `hidden` olur ama onay istegi ekranda kalir. Aksi halde kullanici
+          sekme degistirdi diye kapi gorunmez olur, istek sessizce zaman
+          asimina ugrardi. */}
+      {createPortal(
+        <ToolApprovalCard
+          approval={session.pendingApproval}
+          onApprove={session.approveTool}
+          onReject={session.rejectTool}
+        />,
+        document.body,
+      )}
+
       <div className="asuna-panel__row">
         <VoiceStatusBadge state={session.state} />
         <MicIndicator active={session.micActive} />
