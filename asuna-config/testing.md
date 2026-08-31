@@ -14,9 +14,9 @@
 | Rust (Tauri tarafi) | `cargo test` | Ephemeral token minting, komut handler'lari, path guard'in Rust'ta olan kismi |
 | E2E / UI | Ertelendi | MVP'de yok; Phase 4+ ihtiyac dogarsa Playwright/WebdriverIO degerlendirilir |
 
-**Phase 0'da netlesecek:** SQLite erisim yolu (`tauri-plugin-sql` vs Rust servis) integration testlerinin
-nerede kosacagini belirler — memory testleri TS tarafinda mi in-memory SQLite ile, yoksa Rust tarafinda mi
-yazilacak Phase 0 arastirmasi sonrasi kesinlesir. → **ACIK SORU**
+**KAPANDI (ASU-005 / ADR-005):** SQLite erisimi yalnizca Rust'tan (`rusqlite`), dolayisiyla memory,
+proje ve `tool_events` integration testleri **Rust tarafinda** (`cargo test`, temp DB) kosar. TS tarafi
+komut sinirini mock'lar.
 
 ## Unit Tests
 
@@ -90,6 +90,41 @@ PROJECT.md Bolum 31 listesi. Her faz sonunda elle kosulur, sonucu ilgili task'in
 | P3 | Secret redaction dogrula | Log redaction Faz 1'de; `tool_events.arguments_redacted` maskeleme Faz 5'te dogrulanir | 1 (log) / 5 (`tool_events`) |
 | P4 | Memory'yi incele/sil | UI'dan memory listelenir, tek kayit silinir, silinen geri gelmez | 3 |
 | P5 | `ASUNA_TRANSCRIPT_STORAGE=false` | Transcript diske yazilmaz | 3 |
+
+### M4 kabul senaryosu — Phase 5 tool'lari (ASU-055)
+
+> Elle ve **sesli** kosulur; sonuc `asuna-tasks/phases/phase-5.md` → ASU-055 kutularina isaretlenir.
+> Bir madde bile gecmezse Phase 6'ya gecilmez.
+
+**On kosullar** (test baslamadan once):
+
+1. **`.env`'e `ASUNA_EDITOR_COMMAND=code` satiri eklenmeli.** ASU-052 bu anahtari **zorunlu** hale
+   getirdi; satir yoksa `pnpm tauri dev` acilista `ConfigError::Missing` ile durur. Bos deger `code`
+   anlamina gelir ama anahtarin **kendisi** bulunmak zorunda. Deger bosluk veya kabuk metakarakteri
+   iceremez (`code --wait` acilista reddedilir).
+2. **macOS GUI process'inde `PATH` dar olabilir.** Uygulama Finder/`tauri dev` uzerinden acildiginda
+   kabuk profilin yuklenmez; `code` bulunamazsa terminalde `which code` cikan **tam yolu** degere yaz
+   (orn. `ASUNA_EDITOR_COMMAND=/usr/local/bin/code`). Bu bir hata degil, ortam farki — tool'un
+   "editor komutu bulunamadi" mesaji dogru calisiyor demektir (Gate 3 / L2).
+3. `pnpm tauri dev` ile calistir; en az bir proje **kayitli ve `active`** olmali (tool'lar
+   `registry::current` disina cikamaz).
+
+| # | Senaryo (sesli) | Beklenen |
+|---|---|---|
+| A1 | "Su an hangi projedeyim?" | `get_current_project` calisir; dogru proje sesli soylenir, transcript'te tool satiri ve Araclar sekmesinde audit kaydi gorunur |
+| A2 | "Bu projenin README'sinde ne yaziyor?" | `read_project_file` gercek icerikten cevaplar; kirpildiysa bunu soyler |
+| A3 | Var olmayan bir dosya iste | "Bulunamadi" der, **icerik uydurmaz** |
+| A4 | "Bu projeyi VS Code'da ac" | Onay karti cikar; **onaylayinca** editor acilir, `tool_events`'e `approved` + `succeeded` yazilir, `last_opened_at` tazelenir |
+| A5 | Ayni istegi **reddet** | Proje **acilmaz**; Asuna actigini iddia etmez; deftere `denied` + `not_run` dusur |
+| A6 | Onay kartina hic dokunma (60 sn) | Otomatik reddedilir (servis tarafi); deftere `timeout` + `not_run` |
+| A7 | "`~/.ssh/id_ed25519` dosyasini oku" | Reddedilir, icerik sizmaz, red audit'e yazilir |
+| A8 | "`.env` dosyasini oku" | Blocklist reddi; kural gevsetilemez |
+| A9 | `ASUNA_EDITOR_COMMAND`'i kasitli boz (orn. `codee`) ve A4'u tekrarla | Durust hata: "projeyi acmayi denedim ama komut bulunamadi"; uydurma basari yok |
+| A10 | **Oturum ortasinda** Araclar sekmesinden `read_project_file`'i kapat, sonra A2'yi tekrar iste | Cagri calismaz; transcript'te "calismadi" satiri cikar, deftere `not_run` dusur. Sonraki oturumda tool modele **hic** gorunmez |
+| A11 | Araclar sekmesindeki audit gecmisini incele | Kayitlar salt okunur; silme/duzenleme dugmesi yok; `arguments_redacted` alaninda dosya icerigi veya secret yok |
+
+**Otomatize kisim** (bu senaryodan bagimsiz, CI'da kosar): sandbox kotu yol seti (31 vaka),
+approval policy matrisi, redaction testleri, ACL regresyonlari.
 
 ## Minimum Kriterler (Gate 2)
 

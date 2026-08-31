@@ -17,6 +17,55 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added (2026-08-31 — Phase 5: Tools, Wave A+B+C; M4 kabul testi bekliyor)
+
+- `AsunaToolDefinition` + tool registry: sozlesme kayit aninda zorlanir (snake_case ad,
+  timeout 1..120 000 ms, risk 2/3 icin zorunlu onay), calistirma tek yoldan
+  (`executeTool` — sema dogrulamasi + timeout + `AbortSignal` + yapisal `ToolResult`) (ASU-047)
+- Risk/approval politikasi: risk x mod matrisi tek fonksiyonda (`resolveApproval`); risk 2/3
+  konfigurasyonla atlanamaz, onay 60 sn'de cozulmezse varsayilan **reddet** (ASU-048)
+- Path sandbox + hassas dosya blocklist (Rust): leksik `..` cozumu → `canonicalize`,
+  tipli `SandboxViolation`, 256 KiB tavani, binary reddi; 31 kotu yol vakasi (ASU-049)
+- `tool_events` tablosu + audit logger (migration 004): her cagri — onaylanan, reddedilen,
+  hata veren, timeout olan — yazilir; argumanlar host tarafinda ozetlenip redakte edilir;
+  append-only (ASU-050)
+- `read_project_file` tool (risk 0): kayitli proje root'u icinde okuma, sandbox + blocklist,
+  once redaksiyon sonra 6000 karakter kirpma; `truncated`/`redacted` bayraklari ciktida
+  goruntulenir, modele yalnizca proje-goreli yol doner. "Kacis denendi" / "dosya turu kapali" /
+  "bulunamadi" ayri ayri sunulur — model icerik uydurmaya davet edilmez (ASU-051)
+- `open_project` tool (risk 1): projeyi konfigure edilmis editorde acar; yeni **zorunlu**
+  `ASUNA_EDITOR_COMMAND` anahtari (bos = `code`), alt process `Command::new(cmd).arg(path)` ile
+  shell'siz kurulur, `last_opened_at` yalnizca process gercekten baslatilinca tazelenir (ASU-052)
+- Onay karti (`AWAITING_APPROVAL`): tool adi, insan diliyle ne yapilacagi, risk seviyesi,
+  redakte edilmis argumanlar ve geri sayim; karar `requestId` ile verilir, kart `document.body`'ye
+  portal edilir — sekme degistirilse de ekranda kalir (ASU-053)
+- "Araclar" sekmesi: modele acik tool listesi (risk + onay politikasi), tool basina oturum-yerel
+  ac/kapa, salt-okunur audit gecmisi + oturum filtresi (ASU-054)
+- Transcript'te `role: 'tool'` satiri + `TOOL_PENDING` gorunurlugu: calisan tool'un adi, sonucu
+  ve `outcome` etiketi akista gorunur; dosya icerigi transcript'e girmez (ASU-054)
+- `tool_events.outcome` kolonu (migration 005, sema surumu 5): `succeeded` / `failed` /
+  `not_run`. "Calisti mi" (`approval_state`) ile "basardi mi" ayri eksenler; eski satirlar
+  `NULL` kalir, geriye donuk doldurma yapilmaz (ASU-051)
+- `ToolResult.auditSummary`: modele giden metin ile deftere/transcript'e giden ozet tip
+  duzeyinde ayrildi — dosya icerigi audit'e girmez (ASU-051)
+
+### Security (2026-08-31 — Phase 5 Gate 3 review)
+
+- **Kazara onay yolu kapatildi** (ASU-053 / Gate 3 M1): onay karti acildiginda odak **"Reddet"**
+  butonunda; tek klavye kisayolu `Esc` = reddet, **onaylayan kisayol yok**. Ilk surumde Enter
+  onayliyordu ve kart tam kullanici Enter'a basarken acilirsa risk 1+ bir aksiyon refleksle
+  onaylanabiliyordu. Onay artik yalnizca kasitli bir eylemle verilir.
+- **Tool kapatma dikisi tamir edildi** (ASU-054 / Gate 3 C1+H1): `toSdkTool` icindeki
+  `executeTool` cagrisi calisma zamani kancalarini (`isToolEnabled`, `onToolResult`)
+  gecirmiyordu — acik bir oturumun ortasinda kapatilan tool calismaya devam ediyor ve basarili
+  cagrilar transcript'e hic dusmuyordu. Kapatma artik iki katmanli: baglanista liste suzulur,
+  her cagrida `isEnabled` yeniden sorulur (reddedilen cagri `not_run` olarak deftere gecer).
+  7 yeni "dikis" testi tool'u uretimdeki yoldan (ham JSON argumanla) cagiriyor.
+- Tool tanim listesi ve toggle anahtar seti kompozisyon kokunde (App) tek kez kurulur ve ayni
+  ornekler hem oturuma hem "Araclar" sekmesine verilir (Gate 3 M2) — ekranda "Kapali" gorunen
+  bir tool'un calisiyor olmasi mumkun degil.
+
+
 ### Added (2026-08-25 — Phase 3: Memory, kod tamam; M3 kabul testi bekliyor)
 
 - SQLite bootstrap + migration altyapisi, `memories`/`sessions` semasi (ASU-029/030)

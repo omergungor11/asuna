@@ -21,6 +21,16 @@
 - [ ] **Hafiza listesinde sunucu tarafi sayfalama** (Gate 3 / MEDIUM-5) — `memory_list` en fazla 200
       kayit donuyor; UI su an tavana carptigini yalnizca metinle soyluyor. `hasMore`/`total`
       alanlari ve offset destegi backend isi.
+- [ ] **Onay istegi icin ayri overlay penceresi** (ASU-053 acik kriteri, 2026-08-31) — kart su an
+      `document.body`'ye portal ediliyor, yani sekme degisse de gorunur; ama `tauri.conf.json` tek
+      pencere (`main`) tanimladigi icin **ana pencere kapaliyken** onay istegi hic gorunmuyor.
+      Wake word ile arka planda tetiklenen bir tool'da bu, kullanicinin farkina varmadigi bir
+      60 sn'lik zaman asimi demek. Overlay/tray penceresiyle birlikte degerlendirilmeli (Phase 2
+      ASU-027 ve Phase 6 overlay isleriyle ayni yuzey).
+- [ ] **`TRANSCRIPTION_MODEL` config'e tasinmali** (Gate 3 / LOW-3, pre-existing) —
+      `realtime-service.ts` icinde `gpt-4o-mini-transcribe` hard-code. CLAUDE.md "model ID'leri
+      asla hard-code edilmez" kuralinin acik ihlali; `ASUNA_REALTIME_MODEL` deseniyle ayni
+      sekilde `.env` anahtarina cikarilmali.
 - [ ] **Stage B — semantic retrieval / embeddings** — Yeterli hafiza birikince Stage A deterministik
       retrieval yetmez (PROJECT.md Bolum 13). SQLite vektor eklentisi vs kucuk yerel vektor DB karari
       ADR gerektirir. Tetikleyici: ~200+ hafiza kaydi veya "hatirlamiyor" sikayeti.

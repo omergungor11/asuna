@@ -97,3 +97,66 @@ testi yesil, hepsi push'lu. Uygulama KAPALI (agent rebuild'leri pencereyi acip k
 **Islenecek acik konular:** ASU-066 (Cmd+Q finalize yarisi — task-index'e HENUZ islenmedi),
 gecikme A/B (eagerness=high aktif, WARP kapali denenmedi), API key rotasyonu onerisi,
 `docs/architecture/tools.md`'ye onay akisi bolumu (ASU-048 ekleyemedi — dosya kilitliydi).
+
+## 2026-08-31 — Session 2 (Phase 5 Wave C)
+
+### Yapilanlar
+
+**Phase 5 Wave C — ASU-051..054 DONE** (opus agent dalgasi + Gate 3 review + duzeltmeler)
+
+- [x] **ASU-051 `read_project_file`** (risk 0): Rust `projects/files.rs`; ASU-049 sandbox'i +
+      blocklist, **once redaksiyon sonra 6000 karakter kirpma**, modele yalnizca
+      `SandboxedPath::relative()` doner, `truncated`/`redacted` bayraklari ciktida yazili.
+      "Kacis denendi" / "dosya turu kapali" / "bulunamadi" tipli olarak ayri sunulur.
+- [x] **ASU-052 `open_project`** (risk 1): Rust `projects/editor.rs`; yeni **zorunlu**
+      `ASUNA_EDITOR_COMMAND` (bos = `code`, bosluk/metakarakter **acilista** reddedilir),
+      `Command::new(cmd).arg(path)` — shell yok, `env_remove(OPENAI_API_KEY)`, hedef yalnizca
+      `active` current proje, `last_opened_at` **spawn'dan sonra** tazelenir.
+- [x] **Migration 005**: `tool_events.outcome` (`succeeded`/`failed`/`not_run`, NULL'lu, geriye
+      donuk doldurma YOK), sema surumu 5. `ToolResult.auditSummary` alani: modele giden metin ile
+      deftere gideni tip duzeyinde ayirdi.
+- [x] **ASU-053 onay karti**: karar `requestId` ile, geri sayim UI'da ama **zaman asimini servis
+      tetikler**, kart `document.body`'ye portal — her sekmede gorunur.
+- [x] **ASU-054 Araclar sekmesi**: tool listesi + oturum-yerel toggle, salt-okunur audit gecmisi
+      (oturum filtresi sunucuda), transcript'te `role: 'tool'` satiri, `TOOL_PENDING` gorunurlugu.
+- [x] Dokumantasyon bugune getirildi: `task-index` (dashboard yeniden hesaplandi, ASU-066 acildi),
+      `CHANGELOG` Phase 5 blogu, `docs/architecture/tools.md` (Bolum 3 "Onay akisi" eklendi,
+      audit/gorunurluk/TODO gercekle eslendi), `asuna-config/testing.md` ASU-055 manuel senaryosu.
+
+### Gate 3 review (opus reviewer)
+
+1 CRITICAL + 2 HIGH + 3 MEDIUM + 3 LOW. Kapatilanlar: **C1/H1** (toggle dikisi — `toSdkTool`
+`executeTool`'a `isToolEnabled`/`onToolResult` gecirmiyordu; kapali tool acik oturumda calisiyor
+ve basarili cagrilar transcript'e hic dusmuyordu), **M1** (kazara onay yolu: odak "Reddet"te,
+onaylayan kisayol yok), **M2** (tanim listesi + toggle seti tek kaynak, App'ten prop),
+**M3**, **L1**. Temiz bulunanlar: sandbox butunlugu, enjeksiyon yuzeyi, ACL 4 adim (+8 regresyon
+testi), audit outcome etiketleri.
+
+**Ders:** uclari ayri ayri test etmek yetmiyor — **dikisi** test etmek gerek. Zincirin iki ucu
+testliydi, aradaki tek satir eksikti ve derleyici yakalayamadi (tum binding alanlari opsiyonel).
+7 yeni dikis testi tool'u uretimdeki yoldan (ham JSON argumanla) cagiriyor.
+
+**Durum:** typecheck / lint / clippy / fmt temiz, **907 TS + 592 Rust** testi yesil. Commit YOK.
+
+### Kullaniciyi bekleyenler (tek seansta, `pnpm tauri dev`)
+
+- [ ] **Gate 3 H2 — ACIK, tek satir**: repo kokundeki `.env`'e `ASUNA_EDITOR_COMMAND=code` ekle.
+      Yoksa uygulama acilista `ConfigError::Missing` ile durur. `code` bulunamazsa
+      `which code` ciktisindaki tam yolu yaz (macOS GUI process'inde PATH dar olabilir).
+- [ ] **ASU-055** sesli maddeler — senaryo `asuna-config/testing.md` → "M4 kabul senaryosu"
+      (A1..A11: proje sorusu, README okuma, uydurmama, onay/red/timeout, `.ssh` + `.env` reddi,
+      bozuk editor komutu, oturum ortasinda tool kapatma, audit salt-okunurlugu).
+- [ ] **ASU-038** (M3 restart sonrasi hatirlama) + **ASU-046** (Phase 4 proje sesli testi) —
+      ayni seansta kapatilabilir.
+- [ ] **KWS gercek mikrofon testi (~30 dk)** — `spike/asu-008b-kws` branch'i. **Phase 2 kilidi**;
+      ADR-004'teki model + ifade secimi buna bagli.
+
+### Acik kalanlar
+
+- **ASU-066** artik `task-index.md`'de (Phase 3, backend, M, PENDING): Cmd+Q ile cikista
+  `session_finalize` (ozet + cikarim) tamamlanmadan process olebilir. Detay kod incelemesi ister.
+- **Gecikme A/B**: `ASUNA_VAD_EAGERNESS=high` aktif; **Cloudflare WARP kapali** deneme henuz
+  yapilmadi (WebRTC yolu suphelisi).
+- **API key rotasyonu** onerisi duruyor — anahtar gelistirme boyunca `.env`'de dolasti
+  (RUNBOOK → Incident).
+- **Overlay penceresi yok** → onay istegi ana pencere kapaliyken gorunmuyor (backlog).

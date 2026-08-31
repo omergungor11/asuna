@@ -11,13 +11,26 @@
 | 0 | Arastirma + Scaffold | 11 | 11 | 0 | 0 | 0 | 0 |
 | 1 | Realtime Voice (dikey dilim) | 11 | 11 | 0 | 0 | 0 | 0 |
 | 2 | Wake Word | 8 | 1 | 0 | 0 | 7 | 0 |
-| 3 | Memory | 11 | 10 | 0 | 0 | 1 | 0 |
-| 4 | Project Context | 8 | 6 | 0 | 0 | 2 | 0 |
-| 5 | One Useful Action (Tools) | 9 | 2 | 0 | 0 | 7 | 0 |
+| 3 | Memory | 12 | 10 | 0 | 0 | 2 | 0 |
+| 4 | Project Context | 8 | 7 | 0 | 0 | 1 | 0 |
+| 5 | One Useful Action (Tools) | 9 | 8 | 0 | 0 | 1 | 0 |
 | 6 | Focus Recovery (MVP) | 8 | 0 | 0 | 0 | 8 | 0 |
-| **Total** | | **66** | **41** | **0** | **0** | **25** | **0** |
+| **Total** | | **67** | **48** | **0** | **0** | **19** | **0** |
 
-**Progress**: 41/66 (62%)
+**Progress**: 48/67 (72%)
+
+> **Phase 5 Wave C kapandi (2026-08-31): ASU-051..054 DONE.** Iki yeni tool acildi —
+> `read_project_file` (risk 0, ASU-049 sandbox'i + blocklist, once redaksiyon sonra 6000 karakter
+> kirpma) ve `open_project` (risk 1, `ASUNA_EDITOR_COMMAND`, shell'siz alt process). Onay karti
+> (`tool-approval-card.tsx`) ve "Araclar" sekmesi (tool listesi + oturum-yerel toggle + salt-okunur
+> audit gecmisi) baglandi; migration 005 `tool_events.outcome` kolonunu ekledi (sema surumu 5).
+> Gate 3 review (opus reviewer): 1 CRITICAL + 2 HIGH + 3 MEDIUM + 3 LOW; C1/H1/M1/M2/M3/L1
+> kapatildi. 907 TS + 592 Rust testi yesil.
+> Kararlar: `asuna-docs/DECISIONS.md` → "Phase 5 kararlari".
+> Acik maddeler: **ASU-055** (sesli/manuel M4 kabul testi — kullanicida), Gate 3 **H2** (kullanicinin
+> `.env` dosyasina `ASUNA_EDITOR_COMMAND=code` satiri eklenmeli, yoksa uygulama acilista
+> `ConfigError::Missing` ile durur), onay istegi icin **ayri overlay penceresi yok**
+> (ASU-053 son kriteri → `backlog.md`).
 
 > Phase 3 implementasyonu ASU-035 ile kapandi (2026-08-25): ASU-029..ASU-037 DONE.
 > Gate 3 review bulgulari duzeltildi (2026-08-25): calisma zamani gizlilik kapisi oturum
@@ -118,10 +131,10 @@
 | ASU-048 | Risk / approval policy katmani | 5 | M | backend | DONE |
 | ASU-049 | Path sandbox + hassas dosya blocklist | 5 | M | backend | DONE |
 | ASU-050 | `tool_events` tablosu + audit logger | 5 | M | db | DONE |
-| ASU-051 | `read_project_file` tool (risk 0, sandbox'li) | 5 | M | backend | PENDING |
-| ASU-052 | `open_project` tool (risk 1) | 5 | M | backend | PENDING |
-| ASU-053 | Approval UI (AWAITING_APPROVAL) | 5 | M | frontend | PENDING |
-| ASU-054 | Tool call gorunurlugu (TOOL_PENDING) | 5 | M | frontend | PENDING |
+| ASU-051 | `read_project_file` tool (risk 0, sandbox'li) | 5 | M | backend | DONE |
+| ASU-052 | `open_project` tool (risk 1) | 5 | M | backend | DONE |
+| ASU-053 | Approval UI (AWAITING_APPROVAL) | 5 | M | frontend | DONE |
+| ASU-054 | Tool call gorunurlugu (TOOL_PENDING) | 5 | M | frontend | DONE |
 | ASU-055 | **M4 kabul testi** + guvenlik unit testleri | 5 | M | test | PENDING |
 | ASU-056 | `tasks` tablosu + `TaskService` | 6 | M | db | PENDING |
 | ASU-057 | Aktif task + blocker retrieval | 6 | M | backend | PENDING |
@@ -133,8 +146,13 @@
 | ASU-063 | README + RUNBOOK + v0.1.0 release | 6 | M | docs | PENDING |
 | ASU-064 | Realtime gecikme ayari — turn detection konfigurasyonu + olcum | 1 | S | backend | COMPLETED |
 | ASU-065 | Oturum ozeti + transcript temizligi — silme aksiyonu (M3 blokaji, one cekildi) | 3 | M | full-stack | COMPLETED |
+| ASU-066 | Cmd+Q finalize yarisi — cikista `session_finalize` tamamlanmadan process olebilir | 3 | M | backend | PENDING |
 
 ---
+
+> **ASU-066** — uygulama Cmd+Q ile kapatildiginda `session_finalize` (oturum ozeti + hafiza
+> cikarimi) tamamlanmadan process olebilir. Session 1 kapanis notunda **baslik olarak** kaydedildi;
+> kapsam ve cozum icin kod incelemesi gerekiyor — detay henuz yok.
 
 <!-- Yeni phase eklerken asuna-tasks/templates/task-template.md formatini kullan.
      Planlanmamis fikirler -> asuna-tasks/backlog.md

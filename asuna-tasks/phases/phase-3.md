@@ -697,3 +697,27 @@ gecmesi ASU-065'e bagli hale geldi.
   Bunu engellemek "bu konuyu bir daha ogrenme" gibi bir kara liste gerektirirdi — MVP kapsami
   disi ve muhtemelen istenmeyen bir davranis (kullanici fikrini degistirebilir).
 
+
+---
+
+## ASU-066: Cmd+Q Finalize Yarisi
+
+**Scope**: backend | **Boyut**: M | **Durum**: PENDING | **Bagimlilik**: ASU-033, ASU-034
+
+### Aciklama
+
+Uygulama Cmd+Q ile kapatildiginda `session_finalize` (oturum ozeti uretimi + hafiza cikarimi)
+tamamlanmadan process olebilir — kapanis isi asenkron ve bir model cagrisi iceriyor.
+Sonuc: o oturumdan hicbir kalici hafiza cikmaz ve kullanici bunu **fark etmez**.
+
+Session 1 kapanis notunda **baslik olarak** kaydedildi. Kapsam, gercekten yarisan yollar ve
+cozum (kapanisi geciktirme / kapanis oncesi guard / yarim kalan oturumu bir sonraki aciliste
+tamamlama) **kod incelemesi gerektiriyor** — detay henuz yok, burada uydurulmayacak.
+
+### Acceptance Criteria
+
+- [ ] Kod incelemesiyle yarisin gercek yeri ve kosullari yazili olarak tespit edilmis
+- [ ] Cikista finalize tamamlanana kadar kapanis bekletiliyor **veya** yarim kalan oturum
+      bir sonraki aciliste tamamlaniyor (secilen yaklasim gerekcesiyle birlikte)
+- [ ] Kullanici kapanisin bittigini gorebiliyor (sessiz bekleme yok)
+- [ ] Testte: finalize bitmeden gelen kapanis sinyali kayit kaybina yol acmiyor

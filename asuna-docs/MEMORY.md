@@ -14,9 +14,14 @@
 - **Phase 1 TAMAM** (ASU-011..020) — realtime voice dikey dilimi calisiyor.
   **M1 canli testte gecti (2026-08-24)**: Turkce anlasildi, barge-in sorunsuz, temiz kapanis.
   Acik: **ASU-064** — fark edilir gecikme, turn detection ayari + olcum.
-- **Phase 2 (wake word)**: kismen bloklu — ADR-004'te model + ifade secimi ACIK
-  (gercek mikrofon testi kullaniciyi bekliyor). ASU-021 (interface + fake provider) bloklu degil.
-- **Phase 3 (memory)**: hazir, ADR-005 accepted. Plan: `asuna-plans/plan-phase-3-memory.md`.
+- **Phase 2 (wake word)**: bloklu — ADR-004'te model + ifade secimi ACIK
+  (gercek mikrofon testi kullaniciyi bekliyor). ASU-021 (interface + fake provider) DONE.
+- **Phase 3 (memory) kod TAMAM** (ASU-029..037 + ASU-065) — M3 sesli kabul (ASU-038) bekliyor.
+  Acik: **ASU-066** (Cmd+Q finalize yarisi).
+- **Phase 4 (project context) kod TAMAM** (ASU-039..045) — ASU-046 sesli kabul bekliyor.
+- **Phase 5 (tools) kod TAMAM** (ASU-047..054, 2026-08-31): registry + approval matrisi + path
+  sandbox + `tool_events` audit + `read_project_file` / `open_project` + onay karti + Araclar
+  sekmesi. **ASU-055** (M4 sesli kabul) bekliyor; senaryo `asuna-config/testing.md`'de.
 - Katman mimarileri: `docs/architecture/{voice,memory,tools,security}.md`.
 
 ## Important Patterns
@@ -44,7 +49,7 @@
 ## Known Issues / Gotchas
 - **SQLite'a erisim yalnizca Rust'tan** (ADR-005 accepted): `rusqlite` + dar `#[tauri::command]`'lar.
   Renderer SQL yazmaz, DB yolunu vermez. `tauri-plugin-sql` olcumle elendi.
-- **Yeni `#[tauri::command]` = 3 adim**, atlanirsa **sessiz red**: `build.rs` `AppManifest`
+- **Yeni `#[tauri::command]` = 4 adim**, atlanirsa **sessiz red**: `build.rs` `AppManifest`
   listesi + `src-tauri/permissions/` izni + capability, ayrica capability identifier'i
   `tauri.conf.json → app.security.capabilities` dizisine de eklenir.
 - **CSP `pnpm tauri dev`'de uygulanmaz.** `connect-src` hatasi sadece paketlenmis build'de
@@ -56,6 +61,12 @@
 - **OpenAI API kredisi ≠ ChatGPT aboneligi.** Kredi yoksa `insufficient_quota` **tum**
   endpoint'lerde doner (token minting dahil) — 401 gibi gorunmez. Cozum: Billing → Add to
   credit balance. Gelistirmede `gpt-realtime-2.1-mini` kullan.
+- **`ASUNA_EDITOR_COMMAND` zorunlu anahtar** (ASU-052): `.env`'de satir yoksa uygulama acilista
+  `ConfigError::Missing` ile durur. Bos deger = `code`; deger bosluk/metakarakter iceremez.
+  macOS GUI process'inde PATH dar olabilir — gerekirse `which code` tam yolu yazilir.
+- **Uclari degil dikisi test et** (Phase 5 Gate 3 / C1): zincirin iki ucu ayri ayri testliydi,
+  aradaki tek satir (`toSdkTool` → `executeTool` kanca gecisi) eksikti ve tum binding alanlari
+  opsiyonel oldugu icin derleyici yakalamadi. Sessiz sonuc: kapali tool calisiyordu.
 - **Kullanicinin makinesinde Cloudflare WARP acik** — WebRTC gecikmesinin suphelisi;
   ASU-064 olcumunde once WARP kapali/acik karsilastirilir.
 - Wake word icin API anahtari/ucret yok (sherpa-onnx, Apache-2.0). KWS model dosyalari indirilir;

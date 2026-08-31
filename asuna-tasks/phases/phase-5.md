@@ -274,79 +274,291 @@ kendisine bagli. Sonra `redact_sensitive_text` + 512 karakter tavani.
 okuyan test), `EXPOSED_COMMANDS` icinde `tool_event` iceren yalnizca iki komut var (statik test),
 ACL'de `tool_event_delete` vb. deny-by-default ile duser (regresyon testi).
 
-### ASU-051 / ASU-052 icin acik nokta
+### ASU-051 / ASU-052 icin acik nokta — **KAPANDI** (migration 005)
 
 12.2'nin kolon listesinde **yapisal bir basari/hata alani yok**; `result_summary` metni ikisini de
 tasiyor. `approval_state` "calisti mi"yi soyler ama "calisti ve basarili miydi"yi soylemez.
-ASU-051/052 audit satirindan bunu ayirt etmek isterse migration 005 ile
-`outcome TEXT CHECK (outcome IN ('succeeded','failed','not_run'))` eklenmeli — sema degisikligi
-oldugu icin **orchestrator karari**.
+
+Orchestrator karari alindi (DECISIONS.md "Phase 5 kararlari") ve ASU-051 kapsaminda uygulandi:
+migration 005 `tool_events.outcome TEXT CHECK (outcome IS NULL OR outcome IN
+('succeeded','failed','not_run'))`. Sema surumu **5**.
+
+- **NULL'a izin var ve geriye donuk doldurma YOK.** 004 doneminde yazilmis satirlarda bu bilgi
+  yoktu ve cikarilamaz (`approved` bir satirin basarili bittigini soylemez). 002'nin `end_reason`
+  doldurmasindan farki tam da bu: orada durum kaydin kendisinden okunabiliyordu.
+- **Iki eksen bagimsiz.** `approved` + `failed` gecerli ve sik: kullanici izin verdi, is calisti
+  ve patladi. Kumeler kesismiyor (`ToolApprovalState` ile `ToolOutcome`) — bir satiri okurken
+  hangi sorunun cevabini gordugumuz belirsiz kalmasin diye testle kilitli.
+- **`failed` ile `not_run` ayrimi yan etki sorusudur.** Tool CALISTI ve yapamadiysa `failed`
+  (sandbox reddi, timeout, editor bulunamadi); `execute` HIC cagrilmadiysa `not_run` (sema reddi,
+  onay reddi/zaman asimi, kapatilmis tool, baslamadan iptal).
+- Zincir: `.sql` → Rust `ToolOutcome` → `shared/tool-event.ts` `TOOL_OUTCOMES`; ucu de testle
+  bagli (`migrations::outcomes_declared_in_schema`, `schema-mirror.spec.ts`).
 
 ---
 
 ## ASU-051: `read_project_file` Tool (Risk 0, Sandbox'li)
 
-**Scope**: backend | **Boyut**: M | **Durum**: PENDING | **Bagimlilik**: ASU-049, ASU-050
+**Scope**: backend | **Boyut**: M | **Durum**: DONE (UI baglandi; sesli maddeler ASU-055'te) | **Bagimlilik**: ASU-049, ASU-050
 
 ### Acceptance Criteria
-- [ ] Tool kayitli proje root'u icindeki bir dosyayi okuyor
-- [ ] ASU-049 sandbox'i ve blocklist'i uyguluyor
-- [ ] Buyuk dosya kirpiliyor ve kirpildigi cikti'da belirtiliyor
+- [x] Tool kayitli proje root'u icindeki bir dosyayi okuyor
+- [x] ASU-049 sandbox'i ve blocklist'i uyguluyor
+- [x] Buyuk dosya kirpiliyor ve kirpildigi cikti'da belirtiliyor
 - [ ] Cikti UI'da gorunuyor (hangi dosya okundu)
-- [ ] Her cagri `tool_events`'e yaziliyor
+      — **veri yolu hazir**: `tool_result` event'i + `TranscriptLine` `role: 'tool'` varyanti;
+      ekranin kendisi ASU-054'un (frontend) isi
+- [x] Her cagri `tool_events`'e yaziliyor
 - [ ] Sesli test: "Bu projenin README'sinde ne yaziyor?" gercek icerikten cevapliyor
 - [ ] Var olmayan dosyada Asuna icerik uydurmuyor
+      — mekanizma yerinde ve test edildi (`not_found` ayri kod + ozet "UYDURMA" diyor);
+      **davranis** kanitini sesli test verecek
+
+### Uygulama Notlari
+
+**Kok secimini renderer yapmaz.** Komut `project_id` **almaz**: hedef her zaman
+`registry::current`. Sozlesmede `project_id` parametresi vardi, bilerek daraltildi —
+renderer'in kayitli kokler arasinda dolasabilmesi, sandbox'in kapattigi yuzeyi
+yandan acardi. Model de secim yapamaz: sema tek alanli (`path`) ve `strictObject`.
+
+**Kirpma butcesi karakter, 6 000.** Donen metin **modele** gidiyor, dolayisiyla butce
+bayt degil karakter. Deger `context::MAX_TOTAL_CONTEXT_CHARS` ile ayni: "modele bir
+seferde ne kadar metin gider" sorusunun bu repoda zaten kabul edilmis cevabi. Sandbox
+tavaninin (256 KiB) cok altinda — okuma reddi ile kirpma birbirinin yerine gecmiyor
+(ASU-049 sozlesmesi). Kirpma sessiz degil: `truncated` + gercek `sizeBytes` + model
+ciktisinda "tamamini gormedin" uyarisi.
+
+**Icerik redaksiyondan geciyor.** Blok listesi hassas **dosyalari** kapatir ama siradan
+bir kaynak dosyasina gomulmus token'i kapatmaz; donen metin `redact_sensitive_text`ten
+gecer ve bir sey maskelendiyse `redacted: true` bunu **soyler** (sessizce degistirilmis
+icerik, "gordugum sey bu muydu?" sorusunu cevapsiz birakirdi).
+
+**`ToolResult.auditSummary` eklendi (yeni alan).** Bu tool modele **icerik** verir; ayni
+metnin `tool_events.result_summary`e dusmesi migration 004'un acikca yasakladigi seydi
+("dosya icerigi audit'e girmez"). Host 512 karakterde kirptigi icin sizinti kucuk olurdu
+ama yine de sizintiydi. Yeni alan ayrimi tip duzeyinde aciyor: deftere (ve ASU-054
+transcript satirina) ne yazilacagi tool'un bilincli karari, uzunluk tavaninin yan etkisi
+degil. Verilmezse `summary` kullanilir — mevcut tool'larin davranisi degismedi.
+
+**Uc ret ayri sunuluyor.** `escapeAttempt` (host'un karari, renderer hesaplamaz) →
+"ERISIM REDDEDILDI"; `blocklisted` → "bu dosya turu kapali, kural gevsetilemez";
+`not_found` → "BULUNAMADI, icerik UYDURMA". Ucunu tek bir "okuyamadim" kovasina
+indirgemek, modelin en olasi kacamagini (icerik uydurmak) davet ederdi.
+
+**`approval_state` sandbox'in onerdigi degil registry'nin karari.** `SandboxAuditOutcome`
+`not_requested` oneriyor (o sozlesme Rust tarafinda calisan bir tool runner varsayimiyla
+yazilmisti); gerceklesen mimaride tool risk 0 ve onay **gerekmedi**, yani dogru etiket
+`not_required`. Sandbox'in `result_summary`si oldugu gibi kullaniliyor (redaksiyondan
+gecmis, yol tasimayan tek satir). Sandbox reddi `outcome: 'failed'` — tool **calisti** ve
+okuyamadi; `not_run` demek yan etkisi olabilecek bir cagriyi "hic olmadi" saymak olurdu.
 
 ---
 
 ## ASU-052: `open_project` Tool (Risk 1)
 
-**Scope**: backend | **Boyut**: M | **Durum**: PENDING | **Bagimlilik**: ASU-048, ASU-050
+**Scope**: backend | **Boyut**: M | **Durum**: DONE (onay karti baglandi; sesli maddeler ASU-055'te) | **Bagimlilik**: ASU-048, ASU-050
 
 ### Aciklama
 PROJECT.md Bolum 32 Phase 5'in acik hedefi: "open current project in editor".
 
 ### Acceptance Criteria
-- [ ] Kayitli bir projeyi konfigure edilmis editorde aciyor (varsayilan VS Code)
-- [ ] Editor komutu konfigurabilir; bulunamazsa **durust hata**:
+- [x] Kayitli bir projeyi konfigure edilmis editorde aciyor (varsayilan VS Code)
+- [x] Editor komutu konfigurabilir; bulunamazsa **durust hata**:
       "Projeyi acmayi denedim ama VS Code komutu bulunamadi" (PROJECT.md Bolum 30)
 - [ ] Risk 1 -> safe modda onay UI'si cikiyor
-- [ ] Sadece kayitli proje yollari acilabiliyor (keyfi yol acilamiyor)
-- [ ] Basari/hatasi `tool_events`'e yaziliyor
-- [ ] `last_opened_at` guncelleniyor
-- [ ] Shell enjeksiyonuna kapali (yol arguman olarak gecirilir, string birlestirme ile komut kurulmaz)
+      — **politika + event yerinde ve test edildi** (`resolveApproval` her modda
+      `needs_approval`, `tool_approval_requested` yayinlaniyor); kartin kendisi ASU-053
+- [x] Sadece kayitli proje yollari acilabiliyor (keyfi yol acilamiyor)
+- [x] Basari/hatasi `tool_events`'e yaziliyor
+- [x] `last_opened_at` guncelleniyor
+- [x] Shell enjeksiyonuna kapali (yol arguman olarak gecirilir, string birlestirme ile komut kurulmaz)
+
+### Uygulama Notlari
+
+**Renderer hicbir sey secemez.** Komut argument **almaz**: ne acilacak yol, ne proje,
+ne editor. Hedef `registry::current` (yalnizca `active`), komut `ASUNA_EDITOR_COMMAND`.
+Modelin "hangi programi calistirayim?" diye bir parametresi olsaydi bu, adi
+`open_project` olan bir genel komut calistiricisi olurdu (PROJECT.md Bolum 18).
+
+**Shell yok — iki katmanda.** (a) Alt process `Command::new(editor).arg(path)` ile,
+**arguman vektoru** olarak kurulur; komut metni string birlestirmeyle uretilmez. Test
+gercek bir alt process kosturur: dizin adi `proje; rm -rf $HOME && echo pwned` iken
+sahte editor **tek** arguman gorur ve dizindeki kanit dosyasi yerinde kalir.
+(b) `ASUNA_EDITOR_COMMAND` bosluk ya da kabuk metakarakteri iceremez — `code --wait`
+gibi bir deger **acilista** reddedilir. Ikincisi guvenlik icin gerekli degil (kabuk
+yok, calisamazdi); amaci belirsizligi kapatmak: kullanici sessizce "code --wait" adinda
+bir dosya aranmasini degil, net bir hata gormeli.
+
+**Cocuga anahtar mirasi kapali.** `.env` okuyucusu `std::env::set_var` cagirmadigi icin
+`OPENAI_API_KEY` zaten process environment'inda olmayabilir (`security.md` "dotenvy yok"
+karari tam bu senaryo icindi); kullanici kendi kabugunda export etmisse diye alt process
+`env_remove(OPENAI_API_KEY)` ile aciliyor. stdio `null`: editor Asuna'nin log akisina
+yazamaz.
+
+**Once baslat, sonra kaydet.** `last_opened_at` yalnizca process gercekten baslatildiktan
+sonra tazeleniyor — tersi olsaydi bulunamayan bir editorde "en son acilan proje" degisir,
+yani olmayan bir olayin izi kalirdi. Test bunu ayrica olcuyor.
+
+**Cikis kodu beklenmiyor.** GUI editoru saatlerce acik kalir; `wait()` sesli oturumu
+kilitlerdi. Cikti bu yuzden "baslatildi" der, "kullanici gordu" demez.
+
+**Tanim kendi onayini istiyor** (`requiresApproval: true`), yalnizca risk 1'e guvenmiyor:
+`resolveApproval` bir tanimin talebini gevsetemez, dolayisiyla ileride risk 1'i otomatik
+geciren bir mod eklense bile bu tool sorulmaya devam eder.
+
+### ACIK — orchestrator/kullanici aksiyonu
+
+`ASUNA_EDITOR_COMMAND` **zorunlu anahtar** olarak eklendi (`ALL_KEYS`; `.env.example`
+guncel, bos deger = `code`). Repo kokundeki mevcut `.env` bu satiri **icermiyor**, yani
+eklenmeden `pnpm tauri dev` acilista `ConfigError::Missing` ile durur (ASU-033 LOW-11 ile
+ayni sinif). Tek satir: `ASUNA_EDITOR_COMMAND=code`.
 
 ---
 
 ## ASU-053: Approval UI
 
-**Scope**: frontend | **Boyut**: M | **Durum**: PENDING | **Bagimlilik**: ASU-048
+**Scope**: frontend | **Boyut**: M | **Durum**: DONE (sesli maddeler ASU-055'te; overlay penceresi backlog'da) | **Bagimlilik**: ASU-048
 
 ### Acceptance Criteria
-- [ ] `AWAITING_APPROVAL` durumunda net bir onay karti gorunuyor
-- [ ] Kart gosteriyor: tool adi, ne yapacagi (insan diliyle), risk seviyesi, redakte edilmis argumanlar
-- [ ] Onayla / Reddet butonlari; klavye ile de erisilebilir
-- [ ] Onay bekleme suresi gorunur; zaman asiminda otomatik reddediliyor
-- [ ] Asuna onay beklerken konusmaya devam edip "yaptim" demiyor
-- [ ] Reddedilen aksiyon sonrasi Asuna durumu dogru anlatiyor
+- [x] `AWAITING_APPROVAL` durumunda net bir onay karti gorunuyor
+      (`tool-approval-card.tsx`; durum rozeti de "Onay bekliyor" der)
+- [x] Kart gosteriyor: tool adi, ne yapacagi (insan diliyle), risk seviyesi, redakte edilmis argumanlar
+- [x] Onayla / Reddet butonlari; klavye ile de erisilebilir (odak "Reddet"e gelir,
+      Esc = reddet; **onaylayan kisayol yok** — bkz. Gate 3 M1)
+- [x] Onay bekleme suresi gorunur; zaman asiminda otomatik reddediliyor
+      (geri sayim UI'da, **reddetme serviste** — ASU-048)
+- [ ] Asuna onay beklerken konusmaya devam edip "yaptim" demiyor — sesli test
+- [ ] Reddedilen aksiyon sonrasi Asuna durumu dogru anlatiyor — sesli test
 - [ ] Overlay modda da onay istegi gorunuyor (ana pencere kapaliyken kaybolmuyor)
+      — **ayri overlay penceresi henuz yok**, bkz. not
+
+### Notlar (2026-08-31, frontend)
+
+`src/components/tool-approval-card.tsx` + `tool-text.ts`; `voice-panel.tsx`'ten baglandi.
+
+- **Karar `requestId` ile.** Buton ve klavye ayni `decide()` yolundan gecer, ikinci karar
+  gonderilmez (buton `disabled`). "Sonuncuyu onayla" yolu yok.
+- **UI zaman asimi tetiklemez.** Geri sayim `requestedAtMs + timeoutMs`'ten saniyede bir
+  cizilir; sure dolunca kart hicbir sey cagirmaz (`sure dolunca kendisi reddetmez` testi).
+  Iki tarafin ayri saatlerle ayni karari vermesi istenmedi.
+- **Onaylayan klavye kisayolu YOK (Gate 3 / M1).** Ilk surumde kart odagi kendine aliyor ve
+  Enter onayliyordu; kart tam kullanici Enter'a basarken acilirsa risk 1+ bir aksiyon
+  refleksle onaylanabilirdi. Simdi acilista odak **"Reddet"** butonunda, tek kisayol
+  `Esc` = reddet. Onay yalnizca kasitli bir eylemle verilir (butona tiklamak ya da butona
+  Tab'layip Enter). Kaza ile basilan tusun sonucu her zaman "calistirma" yonunde —
+  ASU-048'in varsayilani da reddetmek.
+- **Overlay:** `tauri.conf.json` tek pencere tanimliyor (`main`), ayri bir overlay penceresi
+  yok. Kart bu yuzden `document.body`'ye **portal** edilir ve `position: fixed` durur: Hafiza /
+  Projeler / Araclar / Ayarlar sekmesine gecildiginde Konusma paneli `hidden` olsa da onay
+  istegi ekranda kalir. "Ana pencere kapaliyken gorunur" maddesi overlay penceresi (Phase 6 /
+  ayri task) gelmeden karsilanamaz — kapatilmadi.
+- Karar sonrasi kart kapanir, yerinde 6 sn'lik bir durum satiri kalir (`Reddettin — araç
+  çalıştırılmadı.` / zaman asimi / oturum kapandi). Transcript'e **girmez**; oradaki tool
+  satiri ASU-054'un isi.
+- Testler: `tool-approval-card.spec.tsx` (15) + `voice-panel.spec.tsx`'e 4 test
+  (kart gorunumu, portal hedefi, onay/red kimligi, `TOOL_PENDING` rozeti).
 
 ---
 
 ## ASU-054: Tool Call Gorunurlugu
 
-**Scope**: frontend | **Boyut**: M | **Durum**: PENDING | **Bagimlilik**: ASU-047, ASU-050
+**Scope**: frontend | **Boyut**: M | **Durum**: DONE (uctan uca dogrulama ASU-055'te) | **Bagimlilik**: ASU-047, ASU-050
 
 ### Aciklama
 PROJECT.md Bolum 19: "The user should never wonder whether the agent is silently modifying the computer."
 
 ### Acceptance Criteria
-- [ ] Tool calisirken `TOOL_PENDING` durumu ve tool adi gorunuyor
-- [ ] Tool sonucu (basari/hata + kisa ozet) transcript akisinda gorunuyor
-- [ ] Tools sekmesi: etkin tool listesi, risk seviyeleri, onay politikasi
-- [ ] Tool audit gecmisi goruntulenebiliyor (oturuma gore filtreli)
-- [ ] Tool tek tek devre disi birakilabiliyor
-- [ ] Gizli/gorunmez tool calistirma yolu yok (dogrulanmis)
+- [x] Tool calisirken `TOOL_PENDING` durumu ve tool adi gorunuyor (rozet + "Aktif araç" satiri)
+- [x] Tool sonucu (basari/hata + kisa ozet) transcript akisinda gorunuyor
+      (`role: 'tool'` satiri: ad, ozet, `outcome` etiketi, risk)
+- [x] Tools sekmesi: etkin tool listesi, risk seviyeleri, onay politikasi
+- [x] Tool audit gecmisi goruntulenebiliyor (oturuma gore filtreli)
+- [x] Tool tek tek devre disi birakilabiliyor (paylasilan `ToolToggleStore`)
+- [ ] Gizli/gorunmez tool calistirma yolu yok (dogrulanmis) — UI tarafi dogrulandi
+      (defterde silme/duzenleme yolu yok), uctan uca dogrulama ASU-055
+
+### Backend sozlesmesi (ASU-051 ile birlikte yazildi)
+
+`useAsunaSession()` **ek olarak** sunlari dondurur:
+
+| Alan | Tip | Anlam |
+|---|---|---|
+| `tools` | `readonly ToolSummary[]` | Registry'den turetilir. `approval` alani ASU-048 matrisinin **ayni** fonksiyonundan (`resolveApproval`) gelir — ekranda yazan politika ile cagri aninda uygulanan politika ayrisamaz. `ASUNA_TOOL_APPROVAL_MODE` okunana kadar **en siki** mod (`always`) varsayilir. |
+| `setToolEnabled(name, enabled)` | `void` | Oturum-yerel (bellekte; kalici ayar degil). |
+
+`TranscriptLine` artik bir **birlesim**: `SpokenTranscriptLine` (`user`/`assistant`, alanlar
+degismedi) + `ToolTranscriptLine` (`role: 'tool'`, `toolName`, `text`, `status: 'completed'`,
+`interrupted: false`, `outcome`, `risk`, `approvalState`). `text`/`status`/`interrupted` her iki
+varyantta da var, yani `role` ayrimini yapmayan mevcut tuketiciler kirilmaz.
+
+**Kapatmanin iki katmani** ("gizli calistirma yolu yok" kriterinin kod karsiligi):
+
+1. Kapali tool **modele verilen listeden dusurulur** — `AsunaRealtimeService` `connect()`
+   sirasinda suzer.
+2. `executeTool` **her cagrida** `isEnabled`i yeniden sorar. Ikincisi sart: SDK'ya verilen tool
+   seti oturum boyunca **sabit**, yani acik bir oturumun ortasinda kapatilan tool'u model yine
+   cagirabilir. O cagri calismaz (`errorKind: 'disabled'`) ve `tool_events`'e `not_run` olarak
+   **yazilir**.
+
+Sonuc: **acik oturumda** kapatma → "cagri reddedilir"; **sonraki oturumda** → "tool hic gorunmez".
+Canli oturumun tool listesini guncelleyen bir `session.update` yolu **kullanilmadi** —
+`RealtimeSessionPort` boyle bir yuzey acmiyor ve acmak SDK sozlesmesini genisletmek demekti.
+
+**Gate 3 bulgusu C1/H1 — dikis kopmustu, tamir edildi + testle cakildi.** Zincirin iki ucu
+(`App → ToolToggleStore → use-asuna-session → toolRuntime` ve `executeTool` icindeki kapi)
+ayri ayri test edilmisti; **aradaki tek satir** eksikti: `toSdkTool` icindeki `executeTool`
+cagrisi `runtime.isToolEnabled` ve `runtime.onToolResult`'i gecirmiyordu. `ToolRuntimeBindings`
+alanlarinin hepsi opsiyonel oldugu icin derleyici bunu yakalayamaz ve sessiz sonuc tam olarak
+sozun tersiydi: kapali tool acik oturumda **calisiyordu** (risk 0'da onay da yok, audit'e
+`succeeded` dusuyordu) ve basarili hicbir cagri transcript'e **hic** dusmuyordu — `tool_result`
+yalnizca onay reddi/timeout yolundan cikiyordu.
+
+Ders kayda geciyor: "uclari test et" yetmiyor, **dikisi** test etmek gerek. Yeni
+`toSdkTool — calisma zamani kancalarinin dikisi` bloku (7 test) tool'u uretimdeki yoldan
+cagiriyor — SDK `execute`'umuzu `invoke` adiyla acar ve ham JSON arguman metni verir, yani
+test parse + sema + kapi + audit + sonuc kancasi zincirinin tamamindan geciyor. Ikisi ucdan
+uca: `AsunaRealtimeService`'in urettigi gercek `toolRuntime` ile. Dikis yeniden koparilirsa
+bu blokta 5 test duser (dogrulandi).
+
+**Transcript'e icerik girmez.** `tool_result` event'inin `summary` alani
+`ToolResult.auditSummary` (yoksa `summary`) degeridir — "README.md okundu (2.1 KB, kirpildi)".
+Dosya icerigi ne ekrana dokulur ne bellekte ikinci bir kopya olarak durur. Tool satirlari
+**kalici dokume yazilmaz** (`transcript_lines` yalnizca `user`/`assistant` tanir); tool
+cagrilarinin kalici kaydi `tool_events`.
+
+### Notlar (2026-08-31, frontend)
+
+`src/components/tools-view.tsx` + `app.tsx` "Araçlar" sekmesi; metinler `tool-text.ts`'te.
+
+- **Sekme yalnizca acikken monte olur** (Hafiza/Ayarlar ile ayni kural): kapali sekme denetim
+  defterini sorgulamaz. Onay karti bundan bagimsiz — ses panelinden portal edildigi icin bu
+  sekme acikken de gorunur.
+- **Audit salt okunur.** Ekranda silme/duzenleme dugmesi yok ve olmayacak; `tools-view.spec.tsx`
+  bunu dugme etiketlerini tarayarak assert eder. "Salt okunurdur" cumlesi ekranda yazili.
+- **Oturum filtresi sunucuya gider** (`listToolEvents({ limit, sessionId })`); istemcide
+  kirpma yok — tavanli bir sayfayi istemcide filtrelemek kayit gizlerdi. Secenekler gorunen
+  kayitlarin `sessionId` kumesinden turer; ayri bir "oturumlari listele" cagrisi yapilmaz.
+- **`outcome` (migration 005) `null` olabilir** — kolon eklenmeden yazilmis satirlar.
+  Etiket o zaman **basilmaz**; "başarılı" varsayilmaz. Dolu oldugunda `başarılı` / `hata` /
+  `çalışmadı` etiketi ve `data-outcome` rengi cikar.
+- **Tanim listesi VE anahtar seti kabukta kurulur (Gate 3 / M2).** `App` ikisini de bir kez
+  olusturur ve **ayni ornekleri** hem `useAsunaSession` secenegine (`options.tools`,
+  `options.toolToggles`) hem `ToolsView`'e (`definitions`, `toggles` — ikisi de **zorunlu**
+  prop) verir. Iki ayri kaynak iki ayri yalan uretirdi: ayri store → ekranda "Kapalı" gorunen
+  tool calismaya devam eder; ayri liste (sekme `asunaToolRegistry`'yi kendi okusa) → oturuma
+  daraltilmis bir liste verildigi anda sekme modele **acik olmayan** tool'lari "Açık"
+  gosterir. `ToolsViewPort` bu yuzden yalnizca audit okumasi tasir; tool listesi porttan
+  gelmez.
+- **Liste `buildToolSummaries` ile turer** — `useAsunaSession().tools` ile ayni fonksiyon ve
+  ayni girdiler, yani ekrandaki politika ile cagri aninda uygulanan politika ayrisamaz. Onay
+  modu config'ten okunana kadar **en siki** mod (`always`) varsayilir. Tanim listesi bossa
+  ekran durustce "Modele açık bir araç yok." der.
+- **Transcript tool satiri** artik hook'un `ToolTranscriptLine` varyantiyla tiplenir;
+  `ROLE_LABELS` yeniden `Record<TranscriptLine['role'], string>` (yeni bir rol eklenirse
+  derleme hatasi verir, etiketsiz satir degil).
+- Testler: `tools-view.spec.tsx` (12), `tool-approval-card.spec.tsx` (16),
+  `transcript-view.spec.tsx`'e 4 tool satiri testi, `voice-panel.spec.tsx`'e 4 test,
+  `app.spec.tsx`'e sekme testi. Toplam paket: 51 dosya / 886 test yesil.
 
 ---
 
@@ -363,7 +575,8 @@ PROJECT.md Bolum 19: "The user should never wonder whether the agent is silently
 - [ ] Editor komutu kasitli bozulunca durust hata mesaji geliyor
 - [ ] Sandbox unit test seti yesil (min. 15 kotu yol vakasi)
 - [ ] Approval policy matris testi yesil
-- [ ] Manuel senaryo `asuna-config/testing.md`'ye eklenmis
+- [x] Manuel senaryo `asuna-config/testing.md`'ye eklenmis
+      (→ "M4 kabul senaryosu — Phase 5 tool'lari", A1..A11 + on kosullar)
 
 ### Notlar
 Bu, guvenlik modelinin ilk gercek sinavi. Bir madde bile gecmezse Phase 6'ya gecilmez —

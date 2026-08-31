@@ -63,7 +63,7 @@ Katman mimarileri: `docs/architecture/{voice,memory,tools,security}.md`.
   rapor edilir) — ses dongusu bozuk bir UI yolu yuzunden olmez (PROJECT.md Bolum 30). Hicbir gecersiz
   gecis sessizce yutulmaz. Ayni-duruma gecis de gecersizdir (log'a sahte gecis dusmesin).
 
-### Phase 5 kararlari (2026-08-25)
+### Phase 5 kararlari (2026-08-25 + Wave C / Gate 3, 2026-08-31)
 
 - **ADR-005 sapmasi — `tool_events` icin dar bir renderer append yolu** (ASU-050): ADR
   "renderer'in tool_events'e yazma yolu yoktur" diyordu; tool runner renderer'da yasadigi
@@ -78,6 +78,25 @@ Katman mimarileri: `docs/architecture/{voice,memory,tools,security}.md`.
   acilmiyor (mecburi); runtime anahtari icin de ayni davranis secildi — o durumda tool
   gorunurlugu canli UI'a (ASU-054) kalir. Kalici audit istegi memory anahtarindan bagimsiz
   olacaksa ayri karar gerekir (bilincli olarak baglandi: "hicbir sey yazma" sozu audit'i de kapsar).
+
+- **Onay kartinda onaylayan klavye kisayolu YOK** (ASU-053 / Gate 3 M1, 2026-08-31): kart
+  acilista odagi **"Reddet"** butonuna verir ve tek kisayol `Esc` = reddet. Gerekce: kart
+  asenkron acilir; kullanici tam o anda Enter'a basiyorsa (sohbet/editor refleksi) risk 1+ bir
+  aksiyon **kasit olmadan** onaylanabilir ve ASU-048'in "varsayilan reddet" ilkesi kagit uzerinde
+  kalir. Degerlendirilen alternatifler: (a) Enter = onayla, odak "Onayla"da — ilk surumdu, kazara
+  onay yolu acikti; (b) Enter = onayla ama karti 500 ms "olu" tut — gecikme kasitli kullaniciyi
+  da cezalandirir ve esigi tahmine dayanir; (c) `Cmd+Enter` gibi cift tuslu onay — ogrenilmesi
+  gereken gizli bir yol, kesfedilebilirligi dusuk. Secilen yol: onay yalnizca kasitli bir eylemle
+  (butona tiklamak veya Tab'layip Enter). Kaza ile basilan tusun sonucu **her zaman**
+  "calistirma" yonunde.
+- **Tool kapatma iki katmanli, canli `session.update` yok** (ASU-054, 2026-08-31): kapali tool hem
+  `connect()` sirasinda modele verilen listeden dusurulur hem de `executeTool` her cagrida
+  `isEnabled`i yeniden sorar (`errorKind: 'disabled'` → audit `not_run`). Ikinci katman sart:
+  SDK'ya verilen tool seti oturum boyunca **sabit**, yani acik bir oturumun ortasinda kapatilan
+  tool'u model yine cagirabilir. Degerlendirilen alternatif: canli oturumun tool listesini
+  gunceleyen bir `session.update` yolu — `RealtimeSessionPort` boyle bir yuzey acmiyor ve acmak
+  SDK sozlesmesini genisletmek demekti. Sonuc: **acik oturumda** kapatma = "cagri reddedilir",
+  **sonraki oturumda** = "tool hic gorunmez".
 
 ### Phase 3 kararlari (Gate 3 review, 2026-08-25)
 
