@@ -331,3 +331,7 @@ kesildi — RUNBOOK'a islendi/islenecek.
 2. Dev mikrofon izni kalici cozumu (stabil imza / RUNBOOK adimi).
 3. M3+M4 sesli kabullerin tek seansta bitirilmesi (testing.md A1..A18 hazir).
 4. ASU-066 (Cmd+Q finalize yarisi), pricing cached_tokens kalemi, Gate 3 L3/L4/L5.
+
+> Guncelleme: Chat Shell pivotu **09692b2** ile main'e indi (ASU-072..079; 760 Rust + 1102 TS
+> yesil; ADR-008). Kalan kullanici adimlari: proje devam ederse ASU-079 (M6 kabul) + core.v3.
+> `.env`'e ASUNA_CHAT_MODEL=gpt-4o-mini bu oturumda EKLENDI (yapilacak is degil).
