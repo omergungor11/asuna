@@ -63,7 +63,7 @@ Katman mimarileri: `docs/architecture/{voice,memory,tools,security}.md`.
   rapor edilir) — ses dongusu bozuk bir UI yolu yuzunden olmez (PROJECT.md Bolum 30). Hicbir gecersiz
   gecis sessizce yutulmaz. Ayni-duruma gecis de gecersizdir (log'a sahte gecis dusmesin).
 
-### Phase 5 kararlari (2026-08-25 + Wave C / Gate 3, 2026-08-31)
+### Phase 5 kararlari (2026-08-25 + Wave C ve Wave D Gate 3 review'lari, 2026-08-31)
 
 - **ADR-005 sapmasi — `tool_events` icin dar bir renderer append yolu** (ASU-050): ADR
   "renderer'in tool_events'e yazma yolu yoktur" diyordu; tool runner renderer'da yasadigi
@@ -97,6 +97,46 @@ Katman mimarileri: `docs/architecture/{voice,memory,tools,security}.md`.
   gunceleyen bir `session.update` yolu — `RealtimeSessionPort` boyle bir yuzey acmiyor ve acmak
   SDK sozlesmesini genisletmek demekti. Sonuc: **acik oturumda** kapatma = "cagri reddedilir",
   **sonraki oturumda** = "tool hic gorunmez".
+
+- **`register_project` risk 1 degil risk 2** (ASU-069 / Wave D Gate 3 M3, 2026-08-31): tool
+  hicbir dosyayi degistirmiyor ve islem geri alinabilir (Projeler sekmesinden kayit kaldirilir),
+  yani "etkiye gore" risk 1 savunulabilirdi. Yine de risk 2 secildi cunku risk seviyesi bu
+  repoda bir **etiket degil, iki mekanizmanin girdisi**: (a) `ToolRegistry.register` risk 2+ bir
+  tanimi `requiresApproval` olmadan kayit **etmez** — risk 1'de o koruma yok, biri
+  `requiresApproval: true` satirini silse tool sessizce onaysiz calisir hale gelirdi; (b) onay
+  karti ve `tool_events` risk seviyesini yaziyor ve "risk 1 — geri alinabilir dusuk risk",
+  Asuna'nin **okuyabildigi alani kalici olarak genisleten** bir islem icin dogru cumle degil.
+  Degerlendirilen alternatifler: (i) risk 1 + `requiresApproval: true` birakmak (ilk hali) —
+  bugun ayni davranis, ama koruma **ayara** bagli kaliyor; (ii) risk 3 — geri alinamaz/yikici
+  islemler icin ayrilmis seviye, kayit her ikisi de degil. Bugun davranis farki yok (ikisi de her
+  modda onay ister); degisen sey korumanin tanima baglanmasi. `set_current_project` risk 1 kaldi:
+  hedefi degistiriyor ama okunabilir alani buyutmuyor. `registry.spec.ts` risk 2 kumesinin tam
+  olarak `['register_project']` oldugunu kilitliyor; risk 3 hala yok.
+- **Kok kayit dogrulama kurallari: ata reddi + on-ek listesi + firmlink normalizasyonu**
+  (ASU-069 / Wave D Gate 3 C1, 2026-08-31): `refuse_unsuitable_root` ilk halinde "ev dizininin
+  kendisi" ve sistem dizinleri **tam eslesme** ile yaziliydi ve iki yoldan atlatilabiliyordu —
+  bir **ata** dizin (`/Users`) ev dizininin kendisi degildir ama ondan genistir, ve macOS
+  **firmlink**'i (`/System/Volumes/Data/Users/<ad>/Library`) ayni dizinin ikinci kanonik yolu
+  oldugu icin `~/Library` oneki tutmuyordu. Kayitli kok = Asuna'nin okuyabildigi alan oldugundan
+  bu, blocklist'in **ada gore yakalamadigi** seyleri (`~/.config/gh/hosts.yml` token'i,
+  `~/Library/Application Support`, `.zsh_history`) aciyordu. Karar uc parcali:
+  (a) **ata reddi** — `home.starts_with(candidate)` ise reddet; bu, tam eslesmenin yalnizca bir
+  uyesi oldugu kuralin dogru genellemesi ve `/Users`, `/`, `/System/Volumes/Data`'yi tek satirda
+  kapatiyor; (b) **on-ek reddi** (`REFUSED_SYSTEM_SUBTREES`: `/System`, `/Library`,
+  `/Applications`, `/Network`) — bu agaclarin hicbir alt dizini kullanicinin projesi degil;
+  (c) **firmlink normalizasyonu** (`strip_data_volume`) — `/System/Volumes/Data` oneki butun
+  karsilastirmalardan **once** soyulur, yani her kural iki kez yazilmiyor (ve biri unutulmuyor).
+  **`/private` ve `/var` bilincli olarak tam eslesme kaldi**: macOS'ta `canonicalize` bircok yolu
+  `/private/...` altina tasiyor (gecici dizinler dahil) ve kullanicinin gercek projeleri
+  `/Volumes/<disk>/...` ya da `/usr/local/src/...` altinda olabiliyor — bunlari on ek yapmak
+  testleri degil **gercek kullanimi** kirardi; `/System` icin ayni gerekce gecerli degil, o yuzden
+  o on ek. `/Users` ve `/home` ayrica tam eslesme listesinde: `HOME` cozulemedigi durumda da
+  kapali kalsinlar. Degerlendirilen alternatifler: (i) her seyi on ek yapmak — mesru kokleri
+  reddeder; (ii) firmlink'i ayri bir kural olarak yazmak — her kuralin iki kanonik bicimde
+  tekrarlanmasi, birini unutmak icin acik davetiye; (iii) dogrulamayi renderer/UI tarafinda
+  yapmak — reddedildi, kural `project_add`in **butun** cagiranlarini kapsamali (tool + UI).
+  Kanit: 5 birim testi + gercek `$HOME` uzerinde kosan bir test + `acl_regression.rs` icinde
+  IPC uzerinden `/Users` ve firmlink'li `~/Library` deneyen regresyon testi.
 
 ### Phase 3 kararlari (Gate 3 review, 2026-08-25)
 

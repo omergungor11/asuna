@@ -160,3 +160,90 @@ testliydi, aradaki tek satir eksikti ve derleyici yakalayamadi (tum binding alan
 - **API key rotasyonu** onerisi duruyor — anahtar gelistirme boyunca `.env`'de dolasti
   (RUNBOOK → Incident).
 - **Overlay penceresi yok** → onay istegi ana pencere kapaliyken gorunmuyor (backlog).
+
+## 2026-08-31 — Session 2 devami (Phase 5 Wave D)
+
+### Yapilanlar
+
+**Phase 5 Wave D — ASU-067..070 DONE** (opus agent dalgasi + guvenlik odakli Gate 3 + duzeltmeler)
+
+Cikis noktasi tasarim tahmini degil, **M4 canli testinde gorulen gercek bosluklardi**: kullanici
+UI'dan proje ekledi ama Asuna'nin registry'ye bakacak hicbir tool'u yoktu
+(`get_current_project` yalnizca **tek** projeyi gorur), ve "freelancer klasorunde ne var?"
+cevaplanamadi cunku `read_project_file` dosya **adini** bilmek zorunda.
+
+- [x] **ASU-067 `list_projects`** (risk 0): mevcut `project_list` komutu sarildi, yeni Rust
+      yuzeyi yok. "Guncel proje" TS tarafinda `registry::current` SQL'inin aynasi olan saf bir
+      fonksiyonla turetiliyor. Deftere yol degil **sayi** yazilir.
+- [x] **ASU-068 `list_project_files`** (risk 0) + `list_project_dir` komutu: tek seviye listeleme
+      (ozyineleme YOK), kendi capability'si (`asuna-project-dir-list`) — dosya okumadan ayri.
+      Iki tavan ayri raporlanir: 200 girdi cikti (`truncated`) ve 5000 girdi tarama
+      (`scanCapped`). Bloklu girdiler **gorunur ama isaretli** ve boyutsuz; dosya icerigi hicbir
+      kosulda donmez. `sandbox::resolve_project_root` eklendi (kok'un kendisi dizin hedefi icin).
+- [x] **ASU-069 `register_project`** (**risk 2**, her modda onay): `project_add` sarildi, sema tek
+      alanli (`path`) — model proje adi uyduramaz.
+- [x] **ASU-070 `set_current_project`** (risk 1, onayli): model **ad** verir, tool kimligi cozer
+      (tam eslesme + Turkce yerel kucultme); belirsizlikte **secim yapmaz**.
+- [x] Kayitlar: `task-index` (dashboard 52/72, ASU-067..071 eklendi), `CHANGELOG` Wave D bloklari,
+      `DECISIONS` iki yeni karar, `testing.md` A12..A18, `MEMORY.md` firmlink gotcha'si.
+
+### Gate 3 review (opus reviewer, guvenlik odakli)
+
+1 CRITICAL + 1 HIGH + 3 MEDIUM + 2 LOW; hepsi kapatildi.
+
+- **C1 (CRITICAL) — kok kayit dogrulamasi atlatilabiliyordu.** `refuse_unsuitable_root` "ev
+  dizininin kendisi"ni ve sistem dizinlerini **tam eslesme** ile kontrol ediyordu. Iki bypass:
+  (a) bir **ata** dizin (`/Users`, `/`, `/System/Volumes/Data`) tek kayitla butun kullanici
+  agacini okunabilir alana sokuyordu; (b) macOS **firmlink**'i
+  (`/System/Volumes/Data/Users/<ad>/Library`) ayni dizinin ikinci kanonik yolu oldugu icin
+  `~/Library` oneki tutmuyordu — arkasinda `~/.config/gh/hosts.yml` token'i, Application Support,
+  `.zsh_history`, yani blocklist'in **ada gore yakalamadigi** seyler. Duzeltme uc parcali: ata
+  reddi + `/System|/Library|/Applications|/Network` on-ek reddi + firmlink normalizasyonu
+  (`strip_data_volume`, butun karsilastirmalardan once). `/private` ve `/var` bilincli olarak tam
+  eslesme kaldi (gecici dizinler + mesru `/Volumes` kokleri). Gerekce DECISIONS'ta.
+- **H1** — `matchProjects` kimlik eslesmesinde belirsizligi yutuyordu (kimlikler adlarin slug'i,
+  yani ayri isim uzayi degil). Artik iki kume birlestiriliyor → `ambiguous_project`.
+- **M1** — onay karti yolu 64 karakterde **sonundan** kesiyordu; yol gibi gorunen degerler icin
+  ayri tavan (160) + **ortadan** kirpma. C1 ile birlesince denetlenecek tek ucu gizliyordu.
+- **M2** — `read_dir` sinirsiz tuketiliyordu (`MAX_SCANNED_ENTRIES = 5 000` + `scanCapped`).
+- **M3 (orchestrator karari)** — `register_project` risk 1 → **risk 2**: kalici yetki genisletmesi
+  "dusuk risk" etiketi tasiyamaz, ayrica risk 2+ tanimlar `requiresApproval` olmadan **kayit
+  edilemiyor** (koruma ayara degil tanima baglandi).
+- **L1/L2** kapandi (bloklu girdide boyut donmuyor; yaniltici yorum duzeltildi).
+
+**Wave D oncesine ait acik da bu incelemede bulundu:** `project_add` ev dizinini ve `~/.ssh`'i
+**kabul ediyordu**. UI akisinda daha az onemliydi; tool yuzeyi acildigi anda kritik. Ret Rust
+tarafinda ve `project_add`in butun cagiranlarini (UI dahil) kapsiyor — renderer'a guvenilmedi.
+
+**Durum:** clippy temiz, **730 Rust + 834 TS (scoped)** testi yesil. Commit'ler: `df16a11`
+(Wave D), `56ebd69` (asagidaki sizinti duzeltmesi).
+
+### Paralel oturum koordinasyonu — chat kabugu
+
+Repoda ayni anda ikinci bir oturum (**chat kabugu**) calisti. Anlasma: dosya sinirlari —
+`asuna-plans/plan-chat-shell.md`, `src/app`, `src/components`, `src/shared/chat.ts`,
+`src-tauri/src/chat.rs` ve db dosyalari o oturuma ait; Wave D bunlara dokunmadi ve **chat-shell
+task'lari task-index'e islenmedi** (o oturum kendi kaydini yapar).
+
+- **Sizinti + duzeltme:** `df16a11` paralel oturumun commit'lenmemis `pub mod chat` satirini
+  yanlislikla icerdi; `chat.rs` commit'te olmadigi icin `main` derlenmiyordu. `56ebd69` satiri
+  geri aldi — chat kabugu kendi commit'iyle yeniden ekleyecek. **Ders:** paralel oturumda
+  `git add -A` degil, dosya listesiyle stage.
+- **Acik sozlesme kirilmasi:** `ProjectDirectoryView` artik `scanCapped` tasiyor;
+  `src/components/composer.spec.tsx:36` fixture'ina `scanCapped: false` satiri eklenmeli.
+  Dosya oteki oturuma ait oldugu icin **dokunulmadi** → `pnpm typecheck` o tek hatayla kirmizi.
+  Chat kabugu commit'i ile kapanmali.
+
+### Kullaniciyi bekleyenler (guncel kuyruk, tek seansta `pnpm tauri dev`)
+
+- [ ] **ASU-071** — Wave D sesli maddeleri: `asuna-config/testing.md` → M4 senaryosu **A12..A18**
+      ("hangi projelerim var", "su klasoru ekle" onay kartiyla + red, `/Users` kaydettirme reddi,
+      "icinde ne var", belirsiz ad, olmayan proje). En az iki kayitli proje gerekiyor; A17 icin
+      ikisinin adi buyuk/kucuk harf disinda ayni olmali.
+- [ ] **ASU-055** (A1..A11), **ASU-038** (M3 restart), **ASU-046** (Phase 4) — onceki kuyruk
+      duruyor; ayni seansta kapatilabilir.
+- [ ] **Gate 3 H2** — `.env`'e `ASUNA_EDITOR_COMMAND=code` satiri (hala acik, yoksa acilista durur).
+- [ ] **KWS gercek mikrofon testi (~30 dk)** — `spike/asu-008b-kws`. **Phase 2 kilidi**.
+
+**Uygulama KAPALI** — chat kabugu oturumu commit'ini atip `composer.spec.tsx` fixture'ini
+duzeltince acilacak (o ana kadar typecheck kirmizi).

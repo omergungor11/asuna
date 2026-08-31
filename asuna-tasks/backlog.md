@@ -98,6 +98,14 @@
       (aktif uygulama, pencere, belki ekran icerigi) bilme. Buyuk gizlilik/tasarim karari; proje
       farkindaligi (Wave D toollari) bunun guvenli ilk dilimi. (2026-08-31)
 
+- [ ] **Wave D Gate 3 dusuk-oncelik bulgulari (L3/L4/L5)** — (L3) koku diskten silinmis projede
+      `read_project_file("../..")` kacis sinyali `traversal` yerine `root_missing` donuyor
+      (`escape_attempt: false` — sinyal kalitesi, guvenlik acigi degil); (L4) gecerli symlink
+      girdileri listelemede `Other` kovasina dusuyor (lstat semantigi), dokuman/test uyumsuz;
+      (L5) tur-oncelikli siralama + 200 kirpma bilesimi >200 dizinli kokte hicbir dosyayi
+      gostermiyor (`truncated` durustce soyluyor ama model "test dosyasi yok" diyebilir).
+      Kaynak: Wave D Gate 3 review (2026-08-31). (2026-08-31)
+
 ## Rejected (nedeniyle)
 
 <!-- - [Fikir] — [neden reddedildi, tarih] -->

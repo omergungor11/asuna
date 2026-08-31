@@ -13,11 +13,27 @@
 | 2 | Wake Word | 8 | 1 | 0 | 0 | 7 | 0 |
 | 3 | Memory | 12 | 10 | 0 | 0 | 2 | 0 |
 | 4 | Project Context | 8 | 7 | 0 | 0 | 1 | 0 |
-| 5 | One Useful Action (Tools) | 9 | 8 | 0 | 0 | 1 | 0 |
+| 5 | One Useful Action (Tools) | 14 | 12 | 0 | 0 | 2 | 0 |
 | 6 | Focus Recovery (MVP) | 8 | 0 | 0 | 0 | 8 | 0 |
-| **Total** | | **67** | **48** | **0** | **0** | **19** | **0** |
+| **Total** | | **72** | **52** | **0** | **0** | **20** | **0** |
 
-**Progress**: 48/67 (72%)
+**Progress**: 52/72 (72%)
+
+> **Phase 5 Wave D kapandi (2026-08-31): ASU-067..070 DONE.** M4 canli testinde gorulen gercek
+> bosluklar icin dort proje farkindaligi tool'u: `list_projects` (risk 0), `list_project_files`
+> (risk 0; 200 girdi cikti tavani + 5000 tarama tavani `scanCapped` ile ayri ayri raporlanir,
+> bloklu girdiler gorunur ama isaretli ve boyutsuz), `register_project` (**risk 2**, her modda
+> onay), `set_current_project` (risk 1, onayli; ad/id belirsizliginde secim yapmaz). Registry:
+> dort risk 0, iki risk 1, bir risk 2 — risk 3 yok.
+> Gate 3 review (opus reviewer): 1 CRITICAL + 1 HIGH + 3 MEDIUM + 2 LOW, hepsi kapatildi.
+> **C1**: kok kayit dogrulamasi tam-eslesme ile yazilmisti; `/Users` gibi bir **ata** dizin ve
+> `/System/Volumes/Data/...` firmlink'i korumayi atlatiyordu — ata reddi + `/System|/Library|
+> /Applications|/Network` on-ek reddi + firmlink normalizasyonu ile kapandi. Ayni incelemede
+> Wave D **oncesine** ait bir acik da bulundu: `project_add` ev dizinini ve `~/.ssh`'i kabul
+> ediyordu; ret artik Rust tarafinda ve UI yolunu da kapsiyor.
+> Kararlar: `asuna-docs/DECISIONS.md` → "Phase 5 kararlari" (register_project risk 2, kok kayit
+> dogrulama kurallari). Acik: **ASU-071** (Wave D sesli kabul testi — kullanicida).
+> 730 Rust + 834 TS (scoped) testi yesil, clippy temiz.
 
 > **Phase 5 Wave C kapandi (2026-08-31): ASU-051..054 DONE.** Iki yeni tool acildi —
 > `read_project_file` (risk 0, ASU-049 sandbox'i + blocklist, once redaksiyon sonra 6000 karakter
@@ -57,7 +73,7 @@
 | M1 | **Sesli konusma calisiyor** — butona bas, Turkce konus, Asuna cevap versin, sozunu kesebil, transcript gor, temiz kapat | 0-1 | ASU-020 | **DONE (2026-08-24)** — canli test: Turkce anlasildi, barge-in sorunsuz, temiz kapanis. Gecikme iyilestirmesi ASU-064 ile kapandi (turn detection env'den ayarlanabilir) |
 | M2 | **"Hey Asuna" ile uyaniyor** — idle'da bulut'a ses gitmiyor, wake word ile oturum aciliyor, timeout ile kapaniyor | 2 | ASU-028 | PENDING |
 | M3 | **Hatiriyor** — oturum kapanir, uygulama yeniden baslar, onceki oturumun karari hatirlanir | 3 | ASU-038 | PENDING |
-| M4 | **Projeleri taniyor + ilk tool** — hangi projede oldugunu soyleyebiliyor, onayli tool calistiriyor, audit'e yaziyor | 4-5 | ASU-046 + ASU-055 | PENDING |
+| M4 | **Projeleri taniyor + ilk tool** — hangi projede oldugunu soyleyebiliyor, onayli tool calistiriyor, audit'e yaziyor | 4-5 | ASU-046 + ASU-055 + ASU-071 | PENDING |
 | M5 | **"Beni toparla" calisiyor (MVP)** — gercek proje state'inden tek somut sonraki adim uretiliyor | 6 | ASU-062 (PROJECT.md Bolum 33 checklist) | PENDING |
 
 ## Risks
@@ -147,6 +163,11 @@
 | ASU-064 | Realtime gecikme ayari — turn detection konfigurasyonu + olcum | 1 | S | backend | COMPLETED |
 | ASU-065 | Oturum ozeti + transcript temizligi — silme aksiyonu (M3 blokaji, one cekildi) | 3 | M | full-stack | COMPLETED |
 | ASU-066 | Cmd+Q finalize yarisi — cikista `session_finalize` tamamlanmadan process olebilir | 3 | M | backend | PENDING |
+| ASU-067 | `list_projects` tool (risk 0) | 5 | S | backend | DONE |
+| ASU-068 | `list_project_files` tool (risk 0) + `list_project_dir` komutu | 5 | M | backend | DONE |
+| ASU-069 | `register_project` tool (risk 2, her modda onay) | 5 | M | backend | DONE |
+| ASU-070 | `set_current_project` tool (risk 1, onayli) | 5 | S | backend | DONE |
+| ASU-071 | **Wave D sesli kabul testi** — proje farkindaligi tool'lari | 5 | S | test | PENDING |
 
 ---
 

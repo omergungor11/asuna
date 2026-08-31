@@ -19,9 +19,16 @@
 - **Phase 3 (memory) kod TAMAM** (ASU-029..037 + ASU-065) — M3 sesli kabul (ASU-038) bekliyor.
   Acik: **ASU-066** (Cmd+Q finalize yarisi).
 - **Phase 4 (project context) kod TAMAM** (ASU-039..045) — ASU-046 sesli kabul bekliyor.
-- **Phase 5 (tools) kod TAMAM** (ASU-047..054, 2026-08-31): registry + approval matrisi + path
-  sandbox + `tool_events` audit + `read_project_file` / `open_project` + onay karti + Araclar
-  sekmesi. **ASU-055** (M4 sesli kabul) bekliyor; senaryo `asuna-config/testing.md`'de.
+- **Phase 5 (tools) kod TAMAM** (ASU-047..054 + Wave D ASU-067..070, 2026-08-31): registry +
+  approval matrisi + path sandbox + `tool_events` audit + onay karti + Araclar sekmesi; **yedi
+  tool** — `get_current_project`, `list_projects`, `read_project_file`, `list_project_files`
+  (risk 0); `open_project`, `set_current_project` (risk 1); `register_project` (**risk 2**).
+  Risk 3 yok. **ASU-055** (M4) ve **ASU-071** (Wave D) sesli kabul bekliyor; senaryolar
+  `asuna-config/testing.md` → "M4 kabul senaryosu" (A1..A18).
+- **Paralel oturum uyarisi (2026-08-31):** repoda ayrica bir **chat kabugu** oturumu calisiyor —
+  `asuna-plans/plan-chat-shell.md`, `src/app`, `src/components`, `src/shared/chat.ts`,
+  `src-tauri/src/chat.rs` ve db dosyalari o oturuma ait. Bu dosyalara dokunma, task-index'e
+  chat-shell task'i ekleme.
 - Katman mimarileri: `docs/architecture/{voice,memory,tools,security}.md`.
 
 ## Important Patterns
@@ -67,6 +74,11 @@
 - **Uclari degil dikisi test et** (Phase 5 Gate 3 / C1): zincirin iki ucu ayri ayri testliydi,
   aradaki tek satir (`toSdkTool` → `executeTool` kanca gecisi) eksikti ve tum binding alanlari
   opsiyonel oldugu icin derleyici yakalamadi. Sessiz sonuc: kapali tool calisiyordu.
+- **macOS firmlink: `/System/Volumes/Data`** (Phase 5 Wave D / Gate 3 C1) — ayni dizinin **iki**
+  kanonik yolu var: `~/Library` ile `/System/Volumes/Data/Users/<ad>/Library`. `canonicalize`
+  ikincisini dondurebilir, yani **normalize etmeden on-ek kurali yazma** — yazarsan koruma
+  sessizce atlatilir. Ayni aile: bir **ata** dizin (`/Users`) tam-eslesme kontrolune takilmaz
+  ama korunan agacin tamamini acar; ata reddi ayrica gerekiyor.
 - **Kullanicinin makinesinde Cloudflare WARP acik** — WebRTC gecikmesinin suphelisi;
   ASU-064 olcumunde once WARP kapali/acik karsilastirilir.
 - Wake word icin API anahtari/ucret yok (sherpa-onnx, Apache-2.0). KWS model dosyalari indirilir;

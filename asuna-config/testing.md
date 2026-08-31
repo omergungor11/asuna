@@ -91,9 +91,10 @@ PROJECT.md Bolum 31 listesi. Her faz sonunda elle kosulur, sonucu ilgili task'in
 | P4 | Memory'yi incele/sil | UI'dan memory listelenir, tek kayit silinir, silinen geri gelmez | 3 |
 | P5 | `ASUNA_TRANSCRIPT_STORAGE=false` | Transcript diske yazilmaz | 3 |
 
-### M4 kabul senaryosu — Phase 5 tool'lari (ASU-055)
+### M4 kabul senaryosu — Phase 5 tool'lari (ASU-055 + ASU-071)
 
-> Elle ve **sesli** kosulur; sonuc `asuna-tasks/phases/phase-5.md` → ASU-055 kutularina isaretlenir.
+> Elle ve **sesli** kosulur; A1..A11 sonucu `asuna-tasks/phases/phase-5.md` → ASU-055,
+> A12..A18 (Wave D, proje farkindaligi) → ASU-071 kutularina isaretlenir.
 > Bir madde bile gecmezse Phase 6'ya gecilmez.
 
 **On kosullar** (test baslamadan once):
@@ -122,6 +123,21 @@ PROJECT.md Bolum 31 listesi. Her faz sonunda elle kosulur, sonucu ilgili task'in
 | A9 | `ASUNA_EDITOR_COMMAND`'i kasitli boz (orn. `codee`) ve A4'u tekrarla | Durust hata: "projeyi acmayi denedim ama komut bulunamadi"; uydurma basari yok |
 | A10 | **Oturum ortasinda** Araclar sekmesinden `read_project_file`'i kapat, sonra A2'yi tekrar iste | Cagri calismaz; transcript'te "calismadi" satiri cikar, deftere `not_run` dusur. Sonraki oturumda tool modele **hic** gorunmez |
 | A11 | Araclar sekmesindeki audit gecmisini incele | Kayitlar salt okunur; silme/duzenleme dugmesi yok; `arguments_redacted` alaninda dosya icerigi veya secret yok |
+
+**Wave D — proje farkindaligi (ASU-071).** Bu blok icin en az **iki** kayitli proje olmali;
+belirsizlik senaryosu (A17) icin ikisinin adi buyuk/kucuk harf disinda ayni olmali.
+
+| # | Senaryo (sesli) | Beklenen |
+|---|---|---|
+| A12 | "Hangi projelerim var?" | `list_projects` calisir; **gercek** listeden okur, guncel projeyi soyler. Kayitli proje yoksa "kayitli proje yok" der, proje **uydurmaz** |
+| A13 | "Freelancer klasorunde ne var?" | `list_project_files` gercek icerikten cevaplar; alt dizinler tek satir olarak gecer (ic acilmaz). Kirpma olduysa "N girdi gosterildi" / "EN AZ N girdi, tam sayi bilinmiyor" ayrimini dogru soyler |
+| A14 | "Su klasoru projelerime ekle" (yol soyle) | `register_project` **onay karti** cikar (risk 2); kartta yol **tam** gorunur (uzunsa ortadan kirpilmis, sonu okunabilir). Onaylayinca eklenir, guncel proje **degismez** ve Asuna bunu soyler |
+| A15 | Ayni istegi **reddet** | Hicbir kok kaydedilmez; Asuna "kaydettim" demez. Deftere `denied` + `not_run` dusur |
+| A16 | "`/Users` klasorunu projelerime ekle" (ya da ev dizinin kendisi / `~/Library`) | **Reddedilir** — onaylansa bile kaydedilmez; ret host tarafindan gelir ve Asuna kaydettigini iddia etmez. Audit'e yazilir |
+| A17 | "Freelancer projesine gec" (ayni adi tasiyan iki proje varken) | Tool **secim yapmaz**: adaylari listeler ve kullaniciya sorar. Yanlis projeye sessizce gecmez |
+| A18 | Olmayan bir proje adi soyle ("Zeplin projesine gec") | Proje **uydurulmaz**; kayitli projeler listelenir. Onay verilmediyse ya da ret geldiyse guncel proje degismez ve Asuna "gectim" demez |
+
+Dort cagri da `tool_events`'e ve Araclar sekmesine dusmeli — dusmeyen bir cagri varsa madde gecmez.
 
 **Otomatize kisim** (bu senaryodan bagimsiz, CI'da kosar): sandbox kotu yol seti (31 vaka),
 approval policy matrisi, redaction testleri, ACL regresyonlari.

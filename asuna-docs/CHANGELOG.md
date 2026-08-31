@@ -17,6 +17,61 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added (2026-08-31 — Phase 5: Tools, Wave D — proje farkindaligi; ASU-071 sesli kabul bekliyor)
+
+- `list_projects` tool (risk 0): kayitli projeleri ad/kimlik/yol/durum ile listeler, guncel
+  projeyi isaretler; bos listede "kayitli proje yok" der ve proje uydurmayi yasaklar. Yeni Rust
+  yuzeyi acilmadi — mevcut `project_list` komutu sarildi. Deftere yol degil **sayi** yazilir (ASU-067)
+- `list_project_files` tool (risk 0) + `list_project_dir` komutu: guncel proje koku icinde **tek
+  seviye** dizin listeleme (ozyineleme yok), ASU-049 sandbox'i; bos `path` = proje koku, dosya
+  hedefi `not_a_directory` olarak `not_found`'dan ayri doner. Dosya **icerigi** hicbir kosulda
+  donmez. Iki ayri tavan ayri ayri raporlanir: 200 girdi cikti tavani (`truncated`) ve
+  5000 girdi tarama tavani (`scanCapped` — toplam bilinmiyor, model "yaklasik su kadar" diyemez).
+  Kendi capability'si var (`asuna-project-dir-list`), dosya okumadan ayri (ASU-068)
+- `register_project` tool (**risk 2**, her modda onay): mevcut `project_add` komutunu sarar, tek
+  alanli sema (`path`) — proje adini model uyduramaz, host dizin adini kullanir. Kayit guncel
+  projeyi degistirmez ve ozet bunu soyler; reddedilince hicbir kok kaydedilmez (ASU-069)
+- `set_current_project` tool (risk 1, onayli): model **ad** verebilir, tool once kimligi cozer
+  (tam eslesme, Turkce yerel kucultme; kismi eslesme yok). Birden cok aday → tipli
+  `ambiguous_project` + aday listesi, tool **secim yapmaz**; bilinmeyen adda kayitli projeler
+  listelenir (ASU-070)
+
+### Security (2026-08-31 — Phase 5 Wave D / Gate 3 review)
+
+- **Kok kayit dogrulamasi sertlestirildi** (ASU-069 / Gate 3 C1, CRITICAL): "ev dizininin
+  kendisi" ve sistem dizini korumalari tam-eslesme ile yaziliydi ve iki yoldan atlatilabiliyordu —
+  (a) bir **ata** dizin (`/Users`, `/`, `/System/Volumes/Data`) tek kayitla butun kullanici
+  agacini okunabilir alana sokuyordu; (b) macOS **firmlink**'i (`/System/Volumes/Data/Users/
+  <ad>/Library`) ayni dizinin ikinci kanonik yolu oldugu icin `~/Library` oneki tutmuyordu.
+  Uc duzeltme birlikte: **ata reddi** (`home.starts_with(candidate)`), **on-ek reddi**
+  (`/System`, `/Library`, `/Applications`, `/Network`) ve **firmlink normalizasyonu** —
+  `/System/Volumes/Data` oneki butun karsilastirmalardan once soyulur. `/private` ve `/var`
+  bilincli olarak tam-eslesme kaldi (macOS gecici dizinleri `/private/var/...` altinda yasiyor,
+  mesru projeler `/Volumes/...` ve `/usr/local/src/...` altinda olabiliyor).
+- **Wave D oncesine ait acik kapandi**: `project_add` ev dizinini, `~/Library`yi, sistem
+  dizinlerini ve blok listesindeki dizinleri (`~/.ssh`, cloud/secrets) **kabul ediyordu**. UI
+  akisinda daha az onemliydi; tool yuzeyi acildigi anda kritik hale geldi cunku kayitli kok =
+  Asuna'nin okuyabildigi alan. Ret `refuse_unsuitable_root` icinde **Rust tarafinda** ve
+  `project_add`in butun cagiranlarini (UI dahil) kapsiyor — renderer'a guvenilmedi (ASU-069)
+- **`register_project` risk 1 → risk 2** (Gate 3 M3, orchestrator karari): `ToolRegistry.register`
+  risk 2+ bir tanimi `requiresApproval` olmadan kayit **etmez**; risk 1'de o koruma yoktu.
+  Bugun davranis farki yok (ikisi de her modda onay ister), degisen sey korumanin ayara degil
+  **tanima** baglanmasi. `registry.spec.ts` risk 2 kumesinin tam olarak `['register_project']`
+  oldugunu kilitliyor — ikincisi sessizce eklenemez.
+- **Belirsizlik yutulmuyor** (ASU-070 / Gate 3 H1): kimlikler adlarin slug'i olarak uretildigi
+  icin ad ve kimlik ayri isim uzayi degil; `{id:'freelancer'}` ile `{name:'Freelancer'}` ayni
+  anda eslesebiliyordu ve kimlik eslesmesi tek aday dondurup belirsizligi **yutuyordu**. Artik
+  iki kume de hesaplaniyor, birlestiriliyor ve cagiran taraf `ambiguous_project` goruyor.
+- **Onay kartinda yol artik kirpilmiyor** (Gate 3 M1): `MAX_PREVIEW_VALUE_CHARS = 64` uzun bir
+  proje yolunu tam da **sonundan** kesiyordu, yani kullanici ne onayladigini goremiyordu. Yol
+  gibi gorunen degerler (`/` veya `~/` ile baslayan) icin ayri tavan (160) ve **ortadan** kirpma.
+- **`read_dir` sinirsiz tuketilmiyor** (Gate 3 M2): 200 girdi tavani yalnizca **ciktiyi**
+  koruyordu, **isi** degil — `node_modules/.pnpm` gibi bir dizinde binlerce `canonicalize`
+  cagriliyordu ve TS tarafi timeout donse bile Rust durmuyor. `MAX_SCANNED_ENTRIES = 5 000` ile
+  iterator orada birakiliyor; kalan girdiler icin `metadata`/`canonicalize` **hic** cagrilmiyor.
+- Bloklu girdilerde `size_bytes` artik **donmuyor** (Gate 3 L1): `.env`in kac bayt oldugu kucuk
+  ama gereksiz bir sizinti ve okunamayan bir dosyanin olcusu modelin isine yaramiyor.
+
 ### Added (2026-08-31 — Phase 5: Tools, Wave A+B+C; M4 kabul testi bekliyor)
 
 - `AsunaToolDefinition` + tool registry: sozlesme kayit aninda zorlanir (snake_case ad,

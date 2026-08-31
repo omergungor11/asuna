@@ -593,12 +593,13 @@ reviewer agent + `asuna-config/security.md` checklist'i ile acik kapatilir.
 > cevaplanamadi: `read_project_file` dosya **adini** bilmek zorunda, model de ad
 > uyduramaz.
 >
-> **Ilke degismedi:** once salt okuma. Wave D iki risk 0 ve iki risk 1 tool
-> ekliyor; risk 2+ hala **yok**.
+> **Ilke degismedi:** once salt okuma. Wave D iki risk 0 tool ekliyor; kalan
+> ikisi onayli aksiyon. Risk 3 hala **yok**.
 
 Wave D sonrasi registry: **yedi tool** — `get_current_project`, `list_projects`,
 `read_project_file`, `list_project_files` (risk 0); `open_project`,
-`register_project`, `set_current_project` (risk 1, hepsi onayli).
+`set_current_project` (risk 1); `register_project` (**risk 2** — Gate 3 M3,
+asagida). Onaya tabi ucu de her modda sorulur.
 
 ---
 
@@ -693,7 +694,7 @@ Yarim bir liste "bu dizinde bunlar var" diye sunulurdu ve eksigi gorunmezdi.
 
 ---
 
-## ASU-069: `register_project` Tool (Risk 1, HER modda onay)
+## ASU-069: `register_project` Tool (Risk 2, HER modda onay)
 
 **Scope**: backend | **Boyut**: M | **Durum**: DONE (sesli madde ASU-071'de) | **Bagimlilik**: ASU-048, ASU-040
 
@@ -753,10 +754,14 @@ Alan adinin `path` olmasi ayrica onay kartini dogru dolduruyor —
 `toApprovalArgumentsPreview` girdiyi `path=<yol>` olarak yaziyor (test bunu
 kilitliyor).
 
-**Risk 1, risk 2 degil.** Hicbir dosya degismiyor ve islem geri alinabilir
-(Projeler sekmesinden kayit kaldirilir). Ama onay **kosulsuz**
-(`requiresApproval: true`): diger risk 1 tool'u bir pencere aciyor, bu ise
-sandbox'in yuzeyini kalici olarak genisletiyor.
+**Risk 2 (Gate 3 M3 ile revize edildi; ilk hali risk 1'di).** Hicbir dosya
+degismiyor ve islem geri alinabilir (Projeler sekmesinden kayit kaldirilir) —
+etkiye bakarak risk 1 savunulabilirdi. Ama bu tool sandbox'in yuzeyini **kalici
+olarak** genisletiyor ve risk seviyesi bu repoda bir etiket degil, iki
+mekanizmanin girdisi: risk 2+ tanimlar `requiresApproval` olmadan kayit
+**edilemiyor** (koruma ayara degil tanima bagli), ve onay karti / `tool_events`
+seviyeyi kullaniciya yaziyor. Gerekce ve alternatifler: asagidaki M3 bolumu +
+`asuna-docs/DECISIONS.md` → "Phase 5 kararlari".
 
 ---
 
